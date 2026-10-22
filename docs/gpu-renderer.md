@@ -210,6 +210,34 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Installs: the New 3DS (192.168.1.133) runs the dev build too; `./build_3ds.sh --install 192.168.1.133` works there
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS).
 
+## Stereo depth by layer band (feat/layer-depth, 2026-10-23)
+
+- `layer->parallaxFactor` is the **vertical** factor of an HSCROLL / BASIC layer (horizontal only for VSCROLL and
+  rotozoom); the horizontal parallax lives in `scrollInfo[i].parallaxFactor`, one per band of lines
+  (`layer->lineScroll[row]` -> index). The old depth used the vertical factor, so most backgrounds came out flat.
+- `ParallaxDepth(f)`: disparity = (1 - f/0x100) * `stereoFar` (0x100 on the screen plane, 0 the farthest); factors
+  over 0x100 (foregrounds faster than the camera) in front, at most half the scale. `EmitLayerHScroll` splits bands
+  where the depth changes and gives each its own; other layer kinds take their nearest scroll info.
+- Sprites drawn after a background layer and before the frame's last playfield layer (depth 0) take that background
+  layer's nearest band (`sBehind`, `sPlayfieldEnd` from a pass over the commands): background objects sit in the
+  background, not on Sonic's plane. Only behind depths propagate (a foreground layer does not pull sprites out).
+- The title screen (scene folder `Title`) has its own table (`TitleDepth`, the camera never moves): clouds far,
+  island and its 3D trees halfway, mountains / reflection (group 1) far, logo + Sonic + menu text (group 4) out at
+  -2/3 of the scale.
+- Title island and clouds (rotozoom layers 3 and 2): a depth per line as the Special Stage floor, against the
+  island's nearest line (screen line 239 on the screen plane, the horizon ~5/6 of the scale). The island's trees
+  (`Title3DSprite`, group 2, unscaled frames picked by distance) take the depth of the island line at their foot
+  (line 152 + i, depth 1 - i / 87; scaled ones from scale / 9.6).
+- **DEPTH TINT** (DEBUG tab button, `SITE SET depthtint 1`, not saved): every 2D batch one flat blue by its depth, as in
+  `../zelda-tmc-3ds` (dark far behind, bright in front; the playfield mid blue), with the slider down too (depths are
+  worked out whenever it is on). Fills and rectangles keep their colours; 3D models are not tinted.
+- `SITE HIDE <ObjectName>` (e.g. `HIDE TitleLogo`): one class not drawn, to see what it covers; `SITE HIDE` undoes it.
+- `SITE SET stereofar N` (0-16, default 6, saved; also scales the Special Stage). `SITE DEPTHS`: the last 3D frame's
+  layer depth ranges and sprites put behind; also writes `debug/depths.txt` with every layer's type, group and factors.
+- Green Hill on the New 3DS: clouds 6 px of disparity, mountains and water 4, the playfield 0; 60 fps, cmdbuf 14-17 %.
+- A crash in `_free_r` while loading Mania Mode scene 12 during a sweep (scene requests over FTP back to back, New 3DS);
+  not reproduced in Azahar, no sign it involves this change (it only reads layer data). Watch for it.
+
 ## 3D scenes as GPU model instances (perf/special-stage, 2026-10-22: works, off by default until merged)
 
 - Why: in the Special Stage the CPU spends ~30 ms a frame on the engine's 3D (vertex transforms in AddModelToScene,
@@ -289,7 +317,7 @@ Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); 
    bottom screen and options in production builds.
 5. Sweep every zone in GPU mode (Azahar for pictures and `SITE REFUSED`, the 2DS for timings) and fix by frequency.
 6. Sprite atlas: evict least used entries instead of emptying it (retries are rare since the shelf fallback).
-7. Stereo elsewhere: zones use layer parallax and draw groups only (playfield on the screen plane); tune STEREO_FAR
+7. Stereo elsewhere: per-band depths done (feat/layer-depth); tune `stereofar` with the owner on the New 3DS
    (6 px) with the owner on the New 3DS.
 
 ## Lessons (read before touching this)

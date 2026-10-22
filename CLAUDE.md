@@ -90,6 +90,10 @@ tools/site.sh REFUSED                       # the last command the GPU refused, 
 tools/site.sh "GOTO DDWrecker"              # move the player next to an object (the camera does not follow: he may die)
 tools/site.sh "SET force3d 1"               # draw both eyes as if the 3D slider were up (cost on a 2DS); also tab/fps/hud/lock30
 tools/site.sh "SET depthmode N"             # renderer debug bits (docs/gpu-renderer.md: depth convention, mask views)
+tools/site.sh "SET stereofar N"             # stereo depth scale (px of disparity for the farthest layers, default 6, saved)
+tools/site.sh DEPTHS                        # last 3D frame's layer depths; debug/depths.txt has every layer's parallax factors
+tools/site.sh "SET depthtint 1"             # debug: paint every 2D batch by its stereo depth (DEPTH TINT button), slider down too
+tools/site.sh "HIDE TitleLogo"              # debug: stop drawing one object class ("HIDE" alone undoes it)
 tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU drew too; right = right eye in 3D)
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
 ```

@@ -105,12 +105,33 @@ bool ScissorFor(const int16 *clip)
 
 // Stereoscopic 3D: the frame is drawn once per eye, each batch shifted by half its depth the eye's way.
 bool sStereo;  // this frame is drawn for both eyes (the 3D slider is up, or DEBUG FORCE 3D)
+bool sDepths;  // this frame works out depths: stereo, or DEPTH TINT (which shows them with the slider down too)
 bool sUfoStage; // a Special Stage (scene folder UFO*): depths of its own
+bool sTitleScene; // the title screen (scene folder Title): depths of its own (TitleDepth)
 float sSlider; // 0..1
 int8 sDepth;   // depth of the command being emitted (0 when not stereo: no extra batches)
 float sEyeShift; // the eye being drawn: half the full disparity, signed (- left eye), times the slider (0: no 3D)
 // Stereo depth scale: pixels of disparity at the full slider for the farthest things (a far background, the horizon).
-enum { STEREO_FAR = 6 };
+// SITE SET stereofar N (saved).
+#define STEREO_FAR ((int)GpuRender::stereoFar)
+int8 sBehind;         // depth sprites take now: the nearest band of the last background layer drawn (0 on the playfield)
+unsigned sPlayfieldEnd; // command index of the last playfield layer (depth 0) of the frame: sprites before it may sit behind
+int8 sLayerNear, sLayerFar; // the depth range of the layer being emitted (its bands)
+char sDepthCur[512], sDepthLast[512]; // SITE DEPTHS: each layer's depth range and the sprites' depths of the last 3D frame
+unsigned sDepthLen;
+unsigned sBehindSprites; // sprites given a background depth this frame (SITE DEPTHS)
+
+// Stereo depth of a horizontal parallax factor (0x100: moves with the camera, the playfield, on the screen plane; 0:
+// still, the farthest). Disparity grows as 1 - factor, as for things at distance Z with factor Zscreen / Z. Factors over
+// 0x100 (a foreground nearer than the playfield) come out in front, at most half the scale.
+int8 ParallaxDepth(int32 f)
+{
+    if (f < 0)
+        f = 0;
+    const int d    = (int)roundf((0x100 - f) * STEREO_FAR / 256.0f);
+    const int front = -(STEREO_FAR / 2);
+    return (int8)(d < front ? front : d);
+}
 // The Special Stage's 3D scenes: the player's model is at Z ~ 41000 (SITE CMDS); things there sit on the screen plane.
 const float STEREO_ZC = 41000.0f;
 bool sRotoSoft; // this attempt draws rotozoom layers in software (the tile runs ran out of quads)
@@ -1842,8 +1863,12 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     const unsigned first0 = sQuadCount;
     // Stereo: each line's depth from its distance (the walk's step grows with it), the lines at the player's feet
     // (line 200, the Special Stage camera's) on the screen plane, the horizon the farthest.
+    // The title screen's island and clouds: the island's nearest line (screen line 239, TitleBG_Scanline_Island's
+    // i = 87, a step of 2 * 0xA00000 / (8 * 87)) on the screen plane, both layers measured against it.
     float feet = 0;
-    if (sStereo) {
+    if (sTitleScene)
+        feet = 2.0f * (float)(0xA00000 / (8 * 87));
+    else if (sDepths) {
         const int fy = 200 < y1 ? y1 : 200 >= y2 ? y2 - 1 : 200;
         feet         = sqrtf((float)first[fy - y1].deform.x * first[fy - y1].deform.x + (float)first[fy - y1].deform.y * first[fy - y1].deform.y);
     }
@@ -1865,7 +1890,7 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
         const unsigned bank   = sLineBuf[y];
         const int32 dx = s.deform.x, dy = s.deform.y;
         const int hx = dx >> 12, hy = dy >> 12; // half a pixel step in 1/32 texel
-        if (sStereo && feet > 0) {
+        if (sDepths && feet > 0) {
             const float d = sqrtf((float)dx * dx + (float)dy * dy);
             float f       = d > 0 ? 1.0f - feet / d : 1.0f;
             f             = f < -0.5f ? -0.5f : f > 1.0f ? 1.0f : f;
@@ -1966,6 +1991,15 @@ bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     // screens[0], not currentScreen: the draw loop has moved that on to screen 1 (never set up on the 3DS, pitch 0,
     // which left every tile run empty).
     const int pitch = screens[0].pitch;
+    // Stereo: each band of lines takes the depth of its own scroll info's horizontal parallax (a background's clouds,
+    // mountains and water at their own distances), not one depth for the whole layer.
+    const int pixelHeight = TILE_SIZE * layer->ysize;
+    const bool bands      = sDepths && !sUfoStage && !sTitleScene && layer->lineScroll && layer->scrollInfoCount;
+    auto bandDepth        = [&](int yPix) -> int8 {
+        if ((unsigned)yPix >= (unsigned)pixelHeight || layer->lineScroll[yPix] >= layer->scrollInfoCount)
+            return sDepth;
+        return ParallaxDepth(layer->scrollInfo[layer->lineScroll[yPix]].parallaxFactor);
+    };
     int line        = y1;
     while (line < y2) {
         // A band: consecutive lines with the same x whose layer row advances by one pixel each.
@@ -1981,7 +2015,14 @@ bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
             const ScanlineInfo &n = sl[end - y1];
             if (n.position.x != sl[line - y1].position.x || FROM_FIXED(n.position.y) != yPix + (end - line))
                 break;
+            if (bands && bandDepth(yPix + (end - line)) != bandDepth(yPix))
+                break;
             ++end;
+        }
+        if (bands) {
+            sDepth = bandDepth(yPix);
+            sLayerNear = sDepth < sLayerNear ? sDepth : sLayerNear;
+            sLayerFar  = sDepth > sLayerFar ? sDepth : sLayerFar;
         }
         // Split the band at tile-row boundaries.
         int ly = yPix, dy = line;
@@ -2057,6 +2098,9 @@ void ResetTexEnv()
 }
 
 unsigned GpuRender::depthMode = 0;
+int GpuRender::stereoFar       = 6;
+bool GpuRender::depthTint      = false;
+const char *GpuRender::DepthSummary() { return sDepthLast[0] ? sDepthLast : "- (no 3D frame yet: slider up or SET force3d 1)"; }
 
 const GpuRender::Stats &GpuRender::GetStats() { return sStats; }
 const char *GpuRender::LastRefusal() { return sRefusal[0] ? sRefusal : "-"; }
@@ -2088,25 +2132,68 @@ const char *GpuRender::ReasonName()
     return "?";
 }
 
-// Stereoscopic depth of a command, in pixels of disparity at the full slider: tile layers by their parallax (the
-// playfield, factor 1.0, on the screen plane; a far background up to 6 pixels behind it), the HUD's draw groups
-// (12 and up) 2 pixels in front, everything else on the screen plane.
+// Stereoscopic depth of a command, in pixels of disparity at the full slider: tile layers by their horizontal
+// parallax (the playfield, factor 1.0, on the screen plane; a far background up to STEREO_FAR pixels behind it; a
+// foreground faster than the camera in front), the HUD's draw groups (12 and up) 2 pixels in front, sprites drawn
+// among the background layers (before the playfield) at the depth of the layer under them, everything else on the
+// screen plane. An HSCROLL layer's bands get their own depths when it is emitted (EmitLayerHScroll).
 static int8 UfoSpriteDepth(const Cmd &c, float k);
 
-static int8 CmdDepth(const Cmd &c)
+// The title screen: the camera never moves, so parallax says nothing. By what the title draws: the clouds (layer 2)
+// at the horizon, the island (layer 3, a perspective plane) and its 3D trees (draw group 2) halfway, the mountains
+// and the water's reflection (group 1) far, the logo with Sonic and the menu text (group 4) out of the screen.
+static int8 TitleDepth(const Cmd &c)
 {
+    if (c.type == CMD_LAYER) {
+        const TileLayer *layer = (const TileLayer *)(uintptr_t)c.p[0];
+        const int index        = (int)(layer - tileLayers);
+        return index == 2 ? STEREO_FAR : index == 3 ? STEREO_FAR / 2 : 0;
+    }
+    switch (c.group) {
+        case 1: return STEREO_FAR;
+        case 2: {
+            // The island's 3D sprites (Title3DSprite): standing on the island at Z, ground at screen line
+            // 152 + i with i = 0x90 * 0x2800 / Z, scaled 0x18000 * 0x90 / Z, so i = scale / 9.6. The island's line i
+            // is at depth 1 - i / 87 (EmitLayerRotozoom). Unscaled ones (the scale clamps at 0x200) by their foot.
+            float i = c.type == CMD_ROTO && c.p[8] > 0 ? (float)c.p[8] / 9.6f
+                      : c.type == CMD_SPRITE           ? (float)(c.p[1] + c.p[3] - 152)
+                                                       : 43.0f;
+            i       = i < 0 ? 0 : i > 87 ? 87 : i;
+            return (int8)roundf((1.0f - i / 87.0f) * STEREO_FAR);
+        }
+        case 4: return -(STEREO_FAR * 2 / 3);
+        default: return 0; // the fade (group 12) covers the whole screen: shifted, it would leave a column bare
+    }
+}
+
+static int8 CmdDepth(const Cmd &c, unsigned index)
+{
+    if (sTitleScene)
+        return TitleDepth(c);
     if (c.type == CMD_LAYER) {
         const TileLayer *layer = (const TileLayer *)(uintptr_t)c.p[0];
         // The Special Stage: the sky layers scroll by deformation (parallax 1.0) but are the farthest thing; the floor
         // (rotozoom) gets a depth per line (EmitLayerRotozoom).
         if (sUfoStage && c.kind != LAYER_ROTOZOOM)
             return STEREO_FAR;
-        int32 f = layer->parallaxFactor;
-        f       = f < 0 ? 0 : f > 0x100 ? 0x100 : f;
-        return (int8)((0x100 - f) * 6 / 0x100);
+        // The horizontal factor: the layer's own for VSCROLL and rotozoom layers, the scroll infos' (per band of
+        // lines) for HSCROLL and BASIC ones, here the nearest of them (a layer drawn in one piece).
+        if ((c.kind == LAYER_HSCROLL || c.kind == LAYER_BASIC) && layer->scrollInfoCount) {
+            int8 d = 127;
+            for (unsigned s = 0; s < layer->scrollInfoCount; ++s) {
+                const int8 sd = ParallaxDepth(layer->scrollInfo[s].parallaxFactor);
+                d             = sd < d ? sd : d;
+            }
+            return d;
+        }
+        return ParallaxDepth(layer->parallaxFactor);
     }
     if (c.group >= 12)
         return -2;
+    if (!sUfoStage && (c.type == CMD_SPRITE || c.type == CMD_ROTO) && index < sPlayfieldEnd && sBehind > 0) {
+        ++sBehindSprites;
+        return sBehind;
+    }
     // The Special Stage's track objects (rings, spheres, UFOs) are sprites the game scales by distance: scale =
     // 0x1000000 / Z, with the same projection as the 3D models (projectionX 8), so they get the models' depth.
     if (sUfoStage && c.type == CMD_ROTO && c.p[8] > 0)
@@ -2141,7 +2228,7 @@ static void UfoDepths(const Stream &stream)
         else if (c.type == CMD_LINE && c.group < 12)
             sCmdDepth[i] = next;
         else
-            sCmdDepth[i] = CmdDepth(c);
+            sCmdDepth[i] = CmdDepth(c, i);
         if (c.type == CMD_ROTO)
             next = sCmdDepth[i];
     }
@@ -2195,9 +2282,16 @@ bool GpuRender::Render(const Stream &stream)
     if (DEV_SW_FORCE3D)
         sSlider = 1.0f;
     sStereo = sSlider > 0.0f && C3DPresent::TargetRight();
-    sUfoStage = sStereo && sceneInfo.listData && !strncmp(sceneInfo.listData[sceneInfo.listPos].folder, "UFO", 3);
+    sDepths   = sStereo || GpuRender::depthTint;
+    sUfoStage = sDepths && sceneInfo.listData && !strncmp(sceneInfo.listData[sceneInfo.listPos].folder, "UFO", 3);
+    sTitleScene = sDepths && sceneInfo.listData && !strcmp(sceneInfo.listData[sceneInfo.listPos].folder, "Title");
     if (sUfoStage)
         UfoDepths(stream);
+    sPlayfieldEnd = 0;
+    if (sDepths && !sUfoStage && !sTitleScene)
+        for (unsigned k = 0; k < stream.count; ++k)
+            if (stream.cmds[k].type == CMD_LAYER && CmdDepth(stream.cmds[k], k) <= 0)
+                sPlayfieldEnd = k;
     bool ok;
     unsigned i = 0;
     for (int attempt = 0;; ++attempt) {
@@ -2218,10 +2312,14 @@ bool GpuRender::Render(const Stream &stream)
     sVirtUsed     = 0;
     sScissor      = 0;
     sScissorCount = 1;
+    sBehind       = 0;
+    sBehindSprites = 0;
+    sDepthLen     = 0;
+    sDepthCur[0]  = 0;
 
     for (i = 0; i < stream.count && ok; ++i) {
         const Cmd &c = stream.cmds[i];
-        sDepth = !sStereo ? 0 : (sUfoStage && i < 8192) ? sCmdDepth[i] : CmdDepth(c);
+        sDepth = !sDepths ? 0 : (sUfoStage && i < 8192) ? sCmdDepth[i] : CmdDepth(c, i);
         if (GpuRender::depthMode & 1024) { // debug: everything scissored to the top-left quarter (checks the mapping)
             static const int16 kQuarter[4] = { 0, 0, 200, 120 };
             ScissorFor(kQuarter);
@@ -2260,6 +2358,8 @@ bool GpuRender::Render(const Stream &stream)
                 ++sStats.layerCmds;
                 if (!layer->xsize || !layer->ysize)
                     break;
+                sLayerNear = c.kind == LAYER_HSCROLL ? 127 : sDepth;
+                sLayerFar  = c.kind == LAYER_HSCROLL ? -128 : sDepth;
                 if (c.kind == LAYER_BASIC)
                     ok = EmitLayerBasic(c, layer, sl);
                 else if (c.kind == LAYER_HSCROLL)
@@ -2273,6 +2373,14 @@ bool GpuRender::Render(const Stream &stream)
                 }
                 else
                     ok = EmitSoftLayer(c, layer, sl, c.kind);
+                if (sDepths && !sUfoStage) {
+                    if (sLayerNear > sLayerFar) // no band emitted
+                        sLayerNear = sLayerFar = sDepth;
+                    sBehind = sLayerNear > 0 ? sLayerNear : 0;
+                    if (sDepthLen + 24 < sizeof(sDepthCur))
+                        sDepthLen += (unsigned)snprintf(sDepthCur + sDepthLen, sizeof(sDepthCur) - sDepthLen, "L%d g%d %d..%d | ",
+                                                        (int)(layer - tileLayers), c.group, sLayerNear, sLayerFar);
+                }
                 break;
             }
             default: ok = Refuse(REASON_UNSUPPORTED, c.type); break;
@@ -2301,6 +2409,11 @@ bool GpuRender::Render(const Stream &stream)
     }
     }
     sRotoSoft = false;
+    if (ok && sDepths && !sUfoStage) {
+        snprintf(sDepthCur + sDepthLen, sizeof(sDepthCur) - sDepthLen, "far %d playfield #%u sprites behind %u", STEREO_FAR,
+                 sPlayfieldEnd, sBehindSprites);
+        memcpy(sDepthLast, sDepthCur, sizeof(sDepthLast));
+    }
     if (!ok) {
         // What was refused, for SITE STATE: the command and its parameters.
         if (i > 0) {
@@ -2410,6 +2523,7 @@ bool GpuRender::Render(const Stream &stream)
     bind2D();
 
     int curBlend = -1, curTex = -1, curDepth = 0; // bind2D sets the projection of depth 0
+    int curTint = -1000;                          // DEPTH TINT: the depth the texture combiner paints now
     int curScissor = 0;
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     for (unsigned b = 0; b < sBatchCount; ++b) {
@@ -2430,6 +2544,7 @@ bool GpuRender::Render(const Stream &stream)
             bind2D(); // the 2D state again, textures and blending set anew
             curBlend = curTex = -1;
             curDepth = 0;
+            curTint  = -1000;
             continue;
         }
         if (bt.depth != curDepth) {
@@ -2450,8 +2565,34 @@ bool GpuRender::Render(const Stream &stream)
             C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / w, -1.0f / h, 0.0f, 0.0f);
             curTex = bt.tex;
         }
-        if (curBlend != bt.blend || bt.blend == BLEND_FILL) {
-            switch (bt.blend) {
+        // DEPTH TINT (debug): every batch one flat colour by its depth, keeping its silhouette; inks drawn as plain
+        // alpha so a dim or additive picture does not read as a far plane. As in ../zelda-tmc-3ds: blue, dark far
+        // behind the screen, bright in front of it. Rectangles and fills (fades) keep their colours.
+        const bool tinted = GpuRender::depthTint && bt.blend != BLEND_FILL;
+        auto applyTint = [&]() {
+            float t = (float)(STEREO_FAR > 0 ? STEREO_FAR : 1) - bt.depth; // 0 farthest .. STEREO_FAR the screen plane
+            t       = t < 0 ? 0 : t;
+            const float k = 12.0f / (float)(STEREO_FAR > 0 ? STEREO_FAR * 1.5f : 1.5f); // the front (-far/2) at 12
+            float v       = t * k;
+            v             = v > 12.0f ? 12.0f : v;
+            const unsigned r = (unsigned)(v * 5.0f), g = (unsigned)(v * 10.0f), bl = 40u + (unsigned)(v * 17.0f);
+            C3D_TexEnv *env = C3D_GetTexEnv(0);
+            C3D_TexEnvInit(env);
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+            C3D_TexEnvColor(env, 0xFF000000u | (bl << 16) | (g << 8) | r);
+            curTint = bt.depth;
+        };
+        if (tinted && curTint != bt.depth)
+            applyTint();
+        else if (!tinted && curTint != -1000) {
+            ResetTexEnv();
+            curTint = -1000;
+        }
+        const int blend = tinted && bt.blend != BLEND_MASKED && bt.blend != BLEND_UNMASKED ? BLEND_NORMAL : bt.blend;
+        if (curBlend != blend || blend == BLEND_FILL) {
+            switch (blend) {
                 case BLEND_FILL:
                     C3D_BlendingColor(bt.constant);
                     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_COLOR, GPU_ONE_MINUS_CONSTANT_COLOR, GPU_CONSTANT_ALPHA, GPU_ONE_MINUS_CONSTANT_ALPHA);
@@ -2460,7 +2601,7 @@ bool GpuRender::Render(const Stream &stream)
                 case BLEND_SUB: C3D_AlphaBlend(GPU_BLEND_REVERSE_SUBTRACT, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE, GPU_SRC_ALPHA, GPU_ONE); break;
                 default: C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA); break;
             }
-            curBlend = bt.blend;
+            curBlend = blend;
         }
         if (maskFrame) {
             switch (bt.blend) {
@@ -2507,6 +2648,7 @@ bool GpuRender::Render(const Stream &stream)
             C3D_DrawElements(GPU_TRIANGLES, (int)(count * 6), C3D_UNSIGNED_SHORT, sIdx + first * 6);
             ResetTexEnv();
             curBlend = -1; // the debug view may have changed the blending
+            curTint  = -1000;
             C3D_AlphaTest(true, GPU_GREATER, 0);
             C3D_DepthTest(true, GPU_ALWAYS, GPU_WRITE_COLOR);
         };
@@ -2514,6 +2656,8 @@ bool GpuRender::Render(const Stream &stream)
             // Quad by quad: inside one draw call a later quad would see the stencil an earlier one changed (1 -> 2)
             // before the second pass settled it, and draw nothing.
             for (unsigned q = 0; q < bt.count; ++q) {
+                if (tinted && curTint != bt.depth) // the second pass reset the combiner
+                    applyTint();
                 C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
                 C3D_StencilTest(true, GPU_EQUAL, 1, 0xFF, 0xFF);
                 C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_INCR);

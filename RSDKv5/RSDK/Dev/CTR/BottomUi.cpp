@@ -12,6 +12,7 @@
 #include <sys/iosupport.h>
 
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
+#include "RSDK/Graphics/CTR/GpuRender.hpp"
 #include "RSDK/Dev/CTR/GameInfo.h"
 #include "RSDK/Dev/CTR/UiFont.hpp"
 #include <time.h>
@@ -57,11 +58,13 @@ static void ValGpu3D(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTo
 static void TapGpu3D() { DevTools::swGpu3D = !DevTools::swGpu3D; }
 static void ValForce3D(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::swForce3D ? "2 EYES" : "OFF"); *on = DevTools::swForce3D; }
 static void TapForce3D() { DevTools::swForce3D = !DevTools::swForce3D; }
+static void ValDepthTint(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", GpuRender::depthTint ? "ON" : "OFF"); *on = GpuRender::depthTint; }
+static void TapDepthTint() { GpuRender::depthTint = !GpuRender::depthTint; }
 
 static const Button kButtons[] = {
     { "RENDERER", TapRenderer, ValRenderer }, { "FRAME SKIP", TapFrameSkip, ValFrameSkip }, { "MAX SKIP", TapMaxSkip, ValMaxSkip },
     { "LOG MARK", TapMark, ValMark },         { "DRAW LISTS", TapDraw, ValDraw },            { "FLIP COPY", TapFlip, ValFlip },
-    { "3D SCENES", TapGpu3D, ValGpu3D },      { "FORCE 3D", TapForce3D, ValForce3D },
+    { "3D SCENES", TapGpu3D, ValGpu3D },      { "FORCE 3D", TapForce3D, ValForce3D },    { "DEPTH TINT", TapDepthTint, ValDepthTint },
 };
 
 // Tabs, in the bar at the top (icons as in the owner's other ports). Values are saved: append only.

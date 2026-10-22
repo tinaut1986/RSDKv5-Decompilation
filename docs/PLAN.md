@@ -9,7 +9,10 @@
   title, menu and the Special Stages all on the GPU (Special Stage 1 48-60 fps turning, `gpu3d` on by default and
   saved). Water lines, LINE, PALETTE, scissored rotated sprites on the GPU. Bottom screen with tabs (GAME, OPTIONS,
   DEBUG), top FPS counter, loading box. Stereoscopic 3D works (checked on the owner's New 3DS: Special Stage with depth
-  for the models, floor, sky, track sprites and item boxes; elsewhere layer parallax and the HUD). Still CPU: INK TINT
+  for the models, floor, sky, track sprites and item boxes; elsewhere layer parallax and the HUD). **2026-10-23,
+  session 4 (`feat/layer-depth`, merged):** zones get a stereo depth per band of lines from the horizontal parallax
+  (backgrounds in several planes), background sprites sit with their layer, the title screen has its own depths (logo
+  out of the screen, island and trees by line), `stereofar` scale, DEPTH TINT debug view, `SITE HIDE`, `SITE DEPTHS`. Still CPU: INK TINT
   (the pause menu). **Pending work lives in the GitHub issues** (#1 save states, #2 in-game updates, #3 language,
   #4 bottom-screen themes, #5 INK TINT, #6 water line (done: close after the owner's check), #7 Special Stage 60 fps
   turning / with 3D and the floor's quads, #8 options in production builds). Technical record:
@@ -28,6 +31,7 @@
 |---|---|
 | `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
 | `release/v0.1.0` | Holds, merged: build/docs, dev tools, GPU presentation, bottom UI, clock pacing + frame skip, persistent switches, draw-order tooling; `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage`; `perf/special-stage` (3D scenes as GPU instances, masked inks, rotozoom tile runs, tile eviction) and `feat/bottom-tabs` (tabs, FPS counter, loading box, stereo 3D, LINE / PALETTE / water line on the GPU, scissor, HOME-exit fix), merged 2026-10-23 after the owner checked them on the 2DS and the New 3DS. |
+| `feat/layer-depth` | stereo depth by layer band, title depths, DEPTH TINT; merged into the release (2026-10-23). |
 | `perf/special-stage`, `feat/bottom-tabs` | merged into the release (2026-10-23); may be deleted. |
 | `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage` | merged into the release; may be deleted. |
 | `feat/loading-screen` | bottom-screen loading indicator; **not confirmed by the owner, not merged**; conflicts in spirit with `BottomUi` (text console). |
@@ -93,7 +97,7 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   Next: build the GPU frame on core 1 while core 0 runs the next frame (the frame is a recorded list already).
 - [x] R1.6b (2026-10-22, measured by Claude on the 2DS) Special Stage floor on the GPU as tile runs: 48-60 fps (gpu-renderer.md "Rotozoom layers as tile runs"). 3D scenes as GPU instances done on `perf/special-stage` (`gpu3d`).
 - [ ] R1.7 Measure on the 2DS with `tools/perf-sweep.sh` against the software numbers below; keep the software path as fallback.
-- [ ] R1.8 Stereoscopic 3D (needs layers as separate draws).
+- [x] R1.8 Stereoscopic 3D: layers by parallax band, sprites, HUD, Special Stage models, title screen (tune `stereofar` with the owner).
 
 ### U1 Bottom screen / menu
 - [x] U1.1 v1 (`BottomUi`, citro2d): fps, update/draw/flip bar, six touch switches that persist
