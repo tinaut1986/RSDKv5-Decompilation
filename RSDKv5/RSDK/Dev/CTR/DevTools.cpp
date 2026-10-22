@@ -76,6 +76,9 @@ static volatile int sPendingCategory = -1, sPendingScene = -1;
 static char sOrderCur[400], sOrderLast[400];
 static volatile bool sGoto; // SITE GOTO: move the player at the end of the frame
 static int32 sGotoX, sGotoY;
+// SITE HIDE <ObjectName>: one class not drawn (to see what it covers); SITE HIDE alone shows it again. Not saved.
+static uint32 sHideHash[4];
+static volatile bool sHideSet;
 static volatile int sShotRequest; // 1 top screen, 2 bottom screen, 3 top screen's right eye
 
 struct Session {
@@ -723,6 +726,10 @@ static void HandleSession(int ctrl)
                     DevTools::swLock30 = v != 0;
                 else if (!strncmp(path, "force3d", 7))
                     DevTools::swForce3D = v != 0;
+                else if (!strncmp(path, "depthtint", 9))
+                    GpuRender::depthTint = v != 0;
+                else if (!strncmp(path, "stereofar", 9))
+                    GpuRender::stereoFar = v < 0 ? 0 : v > 16 ? 16 : v;
                 else
                     ok = false;
                 if (ok) {
@@ -730,7 +737,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
@@ -794,6 +801,37 @@ static void HandleSession(int ctrl)
                 }
                 else
                     Reply(s, "550 cannot write debug/layers.bin");
+            }
+            else if (!strcmp(sub, "HIDE")) {
+                char name[48] = "";
+                if (path)
+                    sscanf(path, "%47s", name);
+                sHideSet = false;
+                if (name[0]) {
+                    GEN_HASH_MD5(name, sHideHash);
+                    sHideSet = true;
+                }
+                Reply(s, "200 hide %s", name[0] ? name : "-");
+            }
+            else if (!strcmp(sub, "DEPTHS")) {
+                // The last 3D frame's depths; also debug/depths.txt: every layer's type, draw group and parallax
+                // factors (vertical, then each scroll info's), to tune the stereo depths.
+                FILE *f = fopen("sdmc:/3ds/Sonic Mania 3DS/debug/depths.txt", "w");
+                if (f) {
+                    fprintf(f, "%s\n", GpuRender::DepthSummary());
+                    for (int l = 0; l < LAYER_COUNT; ++l) {
+                        const TileLayer &tl = tileLayers[l];
+                        if (!tl.layout || !tl.xsize)
+                            continue;
+                        fprintf(f, "L%d type %d group %d size %dx%d callback %d factor %d scroll", l, tl.type, tl.drawGroup[0], tl.xsize,
+                                tl.ysize, tl.scanlineCallback != NULL, tl.parallaxFactor);
+                        for (int i = 0; i < tl.scrollInfoCount; ++i)
+                            fprintf(f, " %d", tl.scrollInfo[i].parallaxFactor);
+                        fprintf(f, "\n");
+                    }
+                    fclose(f);
+                }
+                Reply(s, "200 %s", GpuRender::DepthSummary());
             }
             else if (!strcmp(sub, "ORDER")) {
                 Reply(s, "200 %s", sOrderLast);
@@ -1073,6 +1111,8 @@ bool DevTools::swForce3D      = false;
 
 bool DevTools::HideEntityClass(uint16 classID)
 {
+    if (sHideSet && HASH_MATCH_MD5(objectClassList[stageObjectIDs[classID]].hash, sHideHash))
+        return true;
     if (optHud == 0 || (optHud == 1 && uiTab != 0)) // tab 0: GAME, which shows what the HUD shows
         return false;
     // The HUD's stage class ID, looked up again when the stage's class list changes.
@@ -1347,8 +1387,9 @@ void DevTools::SaveSettings()
     FILE *f = fopen(kSettingsPath, "w");
     if (!f)
         return;
-    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpumode=%d\nsyncdraw=%d\nvblank=%d\nlock30=%d\nfps=%d\nhud=%d\ntab=%d\ngpu3d=%d\n", (int)swFrameSkip, swMaxSkip,
-            (int)swFlipCopy, (int)GpuMode(), (int)swSyncDraw, (int)swVblankWait, (int)swLock30, optFps, optHud, uiTab, (int)swGpu3D);
+    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpumode=%d\nsyncdraw=%d\nvblank=%d\nlock30=%d\nfps=%d\nhud=%d\ntab=%d\ngpu3d=%d\nstereofar=%d\n", (int)swFrameSkip,
+            swMaxSkip, (int)swFlipCopy, (int)GpuMode(), (int)swSyncDraw, (int)swVblankWait, (int)swLock30, optFps, optHud, uiTab, (int)swGpu3D,
+            GpuRender::stereoFar);
     fclose(f);
 }
 
@@ -1380,6 +1421,8 @@ static void LoadSettings()
             DevTools::optHud = v < 0 || v > 2 ? 1 : v;
         else if (!strcmp(key, "gpu3d"))
             DevTools::swGpu3D = v != 0;
+        else if (!strcmp(key, "stereofar"))
+            GpuRender::stereoFar = v < 0 ? 0 : v > 16 ? 16 : v;
         else if (!strcmp(key, "tab"))
             DevTools::uiTab = v < 0 || v > 2 ? 0 : v;
     }

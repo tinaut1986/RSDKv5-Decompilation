@@ -54,6 +54,12 @@ const char *LastRefusal();
 // The depth set-up of the 3D scenes, to find the PICA's convention on the console: bit 0 nearer = lower z/w, bit 1
 // GPU_GREATER instead of GPU_LESS, bit 2 clear the depth buffer to 0 instead of the maximum. SITE SET depthmode N.
 extern unsigned depthMode;
+// Stereo depth scale: pixels of disparity at the full slider for the farthest layers (SITE SET stereofar N, saved).
+extern int stereoFar;
+// DEPTH TINT (debug, not saved): every 2D batch painted one flat blue by its stereo depth, slider down too.
+extern bool depthTint;
+// The last 3D frame's depths ("L<layer> g<group> near..far | ... far N playfield #i sprites behind n"), SITE DEPTHS.
+const char *DepthSummary();
 
 } // namespace GpuRender
 } // namespace RSDK
