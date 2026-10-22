@@ -56,6 +56,7 @@ static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
 
 // Requests from the FTP thread, applied by the main thread in FrameEnd.
 static volatile int sPendingCategory = -1, sPendingScene = -1;
+static volatile int sShotRequest;
 
 struct Session {
     int ctrl;
@@ -655,6 +656,11 @@ static void HandleSession(int ctrl)
                     }
                 }
             }
+            else if (!strcmp(sub, "SHOT")) {
+                // The top screen's framebuffer as debug/shot-NNNN.raw (tools/shot.sh converts it).
+                sShotRequest = 1;
+                Reply(s, "200 shot queued");
+            }
             else if (!strcmp(sub, "INPUT")) {
                 // SITE INPUT <hex mask of 3DS keys, e.g. 10 = A, 10 = KEY_A bit>: held until set to 0.
                 DevTools::injectKeys = path ? (uint32)strtoul(path, NULL, 16) : 0;
@@ -938,6 +944,24 @@ void DevTools::Init()
 
 bool DevTools::FrameEnd()
 {
+    if (sShotRequest) {
+        sShotRequest = 0;
+        static unsigned shotNumber;
+        u16 w = 0, h = 0;
+        // The back buffer holds the frame before the one just shown: complete, which is all a snapshot needs.
+        const u8 *fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
+        char path[160];
+        snprintf(path, sizeof(path), "%s/shot-%04u.raw", kDir, ++shotNumber);
+        FILE *f = fopen(path, "wb");
+        if (f && fb) {
+            // Header: width, height (the framebuffer is column-major), bytes per pixel.
+            const u32 head[3] = { w, h, (u32)(gfxGetScreenFormat(GFX_TOP) == GSP_RGB565_OES ? 2 : 3) };
+            fwrite(head, sizeof(head), 1, f);
+            fwrite(fb, head[2], (size_t)w * h, f);
+        }
+        if (f)
+            fclose(f);
+    }
     if (sPendingScene >= 0) {
         const SceneListInfo *l   = &sceneInfo.listCategory[sPendingCategory];
         sceneInfo.activeCategory = (uint8)sPendingCategory;
