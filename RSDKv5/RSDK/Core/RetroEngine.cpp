@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/DevTools.hpp"
 
 using namespace RSDK;
 
@@ -107,6 +108,9 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
 
     InitCache(ENABLE_STATIC_CACHE);
     RenderDevice::InitFPSCap();
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+    DevTools::Init();
+#endif
 
 #if RETRO_PLATFORM == RETRO_3DS
     while (aptMainLoop() && RenderDevice::isRunning) {
@@ -322,7 +326,14 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
             if ((engine.focusState & 1) || engine.inFocus == 1)
                 RenderDevice::ProcessDimming();
 
-            RenderDevice::FlipScreen();
+            {
+                DEV_STAGE(STAGE_FLIP);
+                RenderDevice::FlipScreen();
+            }
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+            if (DevTools::FrameEnd())
+                RenderDevice::isRunning = false;
+#endif
         }
     }
 

@@ -27,6 +27,7 @@ set(RETRO_FILES
     RSDKv5/RSDK/Core/ModAPI.cpp
     RSDKv5/RSDK/Cache/Cache.cpp
     RSDKv5/RSDK/Dev/Debug.cpp
+    RSDKv5/RSDK/Dev/CTR/DevTools.cpp
     RSDKv5/RSDK/Storage/Storage.cpp
     RSDKv5/RSDK/Storage/Text.cpp
     RSDKv5/RSDK/Graphics/Drawing.cpp
