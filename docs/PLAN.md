@@ -64,10 +64,11 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
 ### R1 GPU renderer (see `docs/gpu-renderer.md`)
 - [x] R1.1 GPU presentation of the software picture through citro3d (`C3DPresent`), default on.
 - [x] R1.2 Frame command recorder with software replay and hazards (`GpuFrame`, P0), verified on the console.
-- [ ] R1.3 GPU executor for tile layers (BASIC, HSCROLL), sprites (4 flips; inks NONE/BLEND/ALPHA/ADD/SUB), rectangles,
+- [x] R1.3 (2026-10-22, owner checked Green Hill 1 on the 2DS) GPU executor for tile layers (BASIC, HSCROLL), sprites (4 flips; inks NONE/BLEND/ALPHA/ADD/SUB), rectangles,
   `FillScreen` (`GpuRender`, P1): **written, layers emit nothing, not verified**. Needs the readback + GPU CHECK tool first.
 - [x] R1.3b (2026-10-22) One RENDERER GPU/CPU switch (CPU = everything in software, as originally) and GPU/CPU frame
   counters with the reason of every CPU frame (bottom screen, `SITE STATE`, CSV, log). Not yet checked on the console.
+- [x] R1.3c Rotozoom sprites on the GPU (free quads). Palette tracking per group of 8 colours; animated tiles invalidated.
 - [ ] R1.4 Readback of the render target (`SITE SHOT` is blind in GPU mode) and a GPU CHECK (diff against the software replay).
 - [ ] R1.5 Water / per-line palette banks, VScroll/rotozoom layers, `INK_TINT/MASKED/UNMASKED`, `DrawAniTile` (cell invalidation),
   rotozoom and deformed sprites, faces, circles, lines.

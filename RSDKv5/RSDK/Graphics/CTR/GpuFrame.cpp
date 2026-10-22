@@ -5,12 +5,15 @@
 
 #if RETRO_PLATFORM == RETRO_3DS
 
+#include <stdio.h>
 #include <string.h>
 
 #include "RSDK/Dev/CTR/DevTools.hpp"
 
 using namespace RSDK;
 
+volatile bool GpuFrame::dumpRequest;
+const char *GpuFrame::dumpPath;
 bool GpuFrame::active;
 bool GpuFrame::pending;
 unsigned GpuFrame::paletteVersion;
@@ -214,8 +217,30 @@ void GpuFrame::Flush()
     sCount = sArenaUsed = 0;
 }
 
+static void DumpCommands()
+{
+    static const char *const kName[] = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE_OUTLINE", "FACE", "BLENDED_FACE", "SPRITE", "ROTO", "LAYER", "LINEBUF" };
+    FILE *f = fopen(dumpPath, "w");
+    if (!f)
+        return;
+    fprintf(f, "# %u commands; clip x1 y1 x2 y2; screen pos; params\n", sCount);
+    for (unsigned i = 0; i < sCount; ++i) {
+        const Cmd &c = sCmds[i];
+        fprintf(f, "%3u %-14s k%u clip %d %d %d %d pos %ld %ld |", i, c.type < sizeof(kName) / sizeof(kName[0]) ? kName[c.type] : "?", c.kind, c.clip[0], c.clip[1],
+                c.clip[2], c.clip[3], (long)c.pos[0], (long)c.pos[1]);
+        for (int k = 0; k < 15; ++k)
+            fprintf(f, " %ld", (long)c.p[k]);
+        fprintf(f, "\n");
+    }
+    fclose(f);
+}
+
 bool GpuFrame::Present()
 {
+    if (dumpRequest && pending) {
+        dumpRequest = false;
+        DumpCommands();
+    }
     const bool gpuMode = DEV_SW_GPUPRESENT && DEV_SW_GPURENDER;
     if (!gpuMode)
         sLastWhy = "CPU MODE";
@@ -245,6 +270,16 @@ bool GpuFrame::Present()
 const char *GpuFrame::LastWhy() { return sLastWhy; }
 
 void GpuFrame::InvalidateContent() { ++contentVersion; }
+
+uint32 GpuFrame::tileDirty[TILE_COUNT / 32];
+bool GpuFrame::tileDirtyAny;
+
+void GpuFrame::TilesChanged(unsigned first, unsigned count)
+{
+    for (unsigned t = first; t < first + count && t < TILE_COUNT; ++t)
+        tileDirty[t >> 5] |= 1u << (t & 31);
+    tileDirtyAny = true;
+}
 
 // ---------------------------------------------------------------- recording
 

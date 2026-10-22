@@ -4332,6 +4332,9 @@ void RSDK::DrawAniTile(uint16 sheetID, uint16 tileIndex, uint16 srcX, uint16 src
                 tilePixels += (TILE_SIZE * 2);
             }
         }
+#if RETRO_PLATFORM == RETRO_3DS
+        GpuFrame::TilesChanged(tileIndex, (unsigned)cnt);
+#endif
     }
 }
 

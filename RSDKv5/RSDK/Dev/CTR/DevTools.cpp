@@ -718,6 +718,12 @@ static void HandleSession(int ctrl)
                 else
                     Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|bottomui|syncdraw|vblank <value>");
             }
+            else if (!strcmp(sub, "CMDS")) {
+                // The next recorded frame's command list, written to debug/cmds.txt (needs the GPU mode or SET record 1)
+                GpuFrame::dumpPath    = "sdmc:/3ds/Sonic Mania 3DS/debug/cmds.txt";
+                GpuFrame::dumpRequest = true;
+                Reply(s, "200 next frame's commands go to debug/cmds.txt");
+            }
             else if (!strcmp(sub, "ORDER")) {
                 Reply(s, "200 %s", sOrderLast);
             }

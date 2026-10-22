@@ -33,7 +33,14 @@ bool Present();
 // Why the frame Present just handled was not drawn by the GPU ("CPU MODE", "PALETTE", "FACE"...); NULL when it
 // was. A static string.
 const char *LastWhy();
+// SITE CMDS: the next frame's command list is written to `path` before it is executed (one line per command).
+extern volatile bool dumpRequest;
+extern const char *dumpPath;
 void InvalidateContent(); // a scene (tileset, sprite sheets) was loaded: textures made from the old ones are stale
+// DrawAniTile rewrote tiles [first, first + count) of the tileset (all four flip variants): the GPU's copies are stale.
+void TilesChanged(unsigned first, unsigned count);
+extern uint32 tileDirty[TILE_COUNT / 32]; // bit per base tile, cleared by GpuRender when it drops its copies
+extern bool tileDirtyAny;
 
 // Recording entry points: true when the call was taken (the caller returns).
 bool RecFill(uint32 color, int32 alphaR, int32 alphaG, int32 alphaB);

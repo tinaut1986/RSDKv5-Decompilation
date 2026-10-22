@@ -848,6 +848,21 @@ bool GpuRender::Render(const Stream &stream)
         ResetCaches();
     }
     TrackPalette();
+    if (tileDirtyAny) {
+        // Animated tiles rewritten since the last GPU frame: their copies (every bank, every flip variant) go stale.
+        tileDirtyAny = false;
+        for (unsigned w = 0; w < TILE_COUNT / 32; ++w) {
+            uint32 bits  = tileDirty[w];
+            tileDirty[w] = 0;
+            while (bits) {
+                const unsigned t = w * 32 + (unsigned)__builtin_ctz(bits);
+                bits &= bits - 1;
+                for (unsigned b = 0; b < BANKS; ++b)
+                    for (unsigned v = 0; v < 4; ++v)
+                        sTileStamp[b][t + v * TILE_COUNT] = 0;
+            }
+        }
+    }
 
     sCur        = (sCur + 1) & 1;
     sQuadCount  = 0;

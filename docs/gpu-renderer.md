@@ -96,6 +96,11 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - A refused frame drops its queued conversions: their stamps go back to 0 (unconverted), or the cells keep stale content
   (seen: white/blue blocks where the title card's `FACE` frames had been refused).
 - Still ~80 tiles a frame are reconverted in Green Hill (a group changing every frame): per-colour tracking would cut it.
+- Animated tiles: `DrawAniTile` copies new frames into `tilesetPixels` (Green Hill's flowers) outside the draw lists, so no
+  hazard sees it: it now marks the tiles (`GpuFrame::TilesChanged`) and the executor drops their copies at the next frame.
+  Before, the flowers showed a stale animation frame next to fresh tiles (pieces missing).
+- Sprite cache key: sprX and sprY overlapped in `SprKey` (sprites drawn from the wrong part of the sheet). Fixed.
+- `SITE CMDS` writes the next recorded frame's command list to `debug/cmds.txt` (type, clip, screen position, params).
 
 ## Renderer mode and frame accounting (2026-10-22)
 
