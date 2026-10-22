@@ -34,6 +34,7 @@ extern bool swFrameSkip; // skip drawing + flip when the logic is more than a ti
 extern int swMaxSkip;    // most passes skipped in a row
 extern bool swDraw;      // run the draw lists (off isolates the cost of the logic)
 extern bool swFlipCopy;  // copy the frame into the screen (off isolates the cost of the flip)
+extern uint32 injectKeys; // 3DS key mask held on top of the real buttons (SITE INPUT)
 extern unsigned skipCount; // passes whose drawing was skipped since the last second
 
 // Appends one line to sdmc:/3ds/Sonic Mania 3DS/debug/log.txt (flushed at once, so it survives a

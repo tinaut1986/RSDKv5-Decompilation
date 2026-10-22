@@ -52,6 +52,11 @@ static volatile int sPhase; // 1 receiving, 2 installing, 3 restart countdown
 static volatile unsigned long long sAllo, sRecvDone, sRecvTotal, sCiaDone, sCiaTotal;
 static volatile unsigned long long sRelaunchAt; // osGetTime() the countdown ends at
 
+static float sLastFps, sLastFrameMs, sLastStageMs[3];
+
+// Requests from the FTP thread, applied by the main thread in FrameEnd.
+static volatile int sPendingCategory = -1, sPendingScene = -1;
+
 struct Session {
     int ctrl;
     int pasv;
@@ -613,6 +618,52 @@ static void HandleSession(int ctrl)
             }
             else if (!strcmp(sub, "INSTALL"))
                 Reply(s, "501 SITE INSTALL <path to a .cia of this game>");
+            else if (!strcmp(sub, "SCENES")) {
+                // "0 Presentation(3) 1 Mania Mode(42) ...": category index, name and scene count.
+                char list[FTP_LINE_MAX - 8];
+                unsigned n = 0;
+                for (int c = 0; c < sceneInfo.categoryCount && n + 40 < sizeof(list); ++c)
+                    n += (unsigned)snprintf(list + n, sizeof(list) - n, "%d %s(%d) ", c, sceneInfo.listCategory[c].name,
+                                            (int)sceneInfo.listCategory[c].sceneCount);
+                list[n] = 0;
+                Reply(s, "200 %s", list);
+            }
+            else if (!strcmp(sub, "SCENE") && path && *path) {
+                // SITE SCENE <category> <index in category>; with no index, the category's scenes by name.
+                int cat = atoi(path);
+                char *idx = strchr(path, ' ');
+                if (cat < 0 || cat >= sceneInfo.categoryCount)
+                    Reply(s, "501 category 0..%d", (int)sceneInfo.categoryCount - 1);
+                else if (!idx) {
+                    const SceneListInfo *l = &sceneInfo.listCategory[cat];
+                    char list[FTP_LINE_MAX - 8];
+                    unsigned n = 0;
+                    for (int i = 0; i < l->sceneCount && n + 40 < sizeof(list); ++i)
+                        n += (unsigned)snprintf(list + n, sizeof(list) - n, "%d %s(%s) ", i, sceneInfo.listData[l->sceneOffsetStart + i].name,
+                                                sceneInfo.listData[l->sceneOffsetStart + i].id);
+                    list[n] = 0;
+                    Reply(s, "200 %s", list);
+                }
+                else {
+                    int scene = atoi(idx + 1);
+                    if (scene < 0 || scene >= sceneInfo.listCategory[cat].sceneCount)
+                        Reply(s, "501 scene 0..%d", (int)sceneInfo.listCategory[cat].sceneCount - 1);
+                    else {
+                        sPendingScene    = scene;
+                        sPendingCategory = cat;
+                        Reply(s, "200 loading category %d scene %d", cat, scene);
+                    }
+                }
+            }
+            else if (!strcmp(sub, "INPUT")) {
+                // SITE INPUT <hex mask of 3DS keys, e.g. 10 = A, 10 = KEY_A bit>: held until set to 0.
+                DevTools::injectKeys = path ? (uint32)strtoul(path, NULL, 16) : 0;
+                Reply(s, "200 keys %08lx", (unsigned long)DevTools::injectKeys);
+            }
+            else if (!strcmp(sub, "STATE")) {
+                Reply(s, "200 category %d scene %d state %d fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f", (int)sceneInfo.activeCategory,
+                      (int)sceneInfo.listPos, (int)sceneInfo.state, sLastFps, sLastFrameMs, sLastStageMs[0], sLastStageMs[1], sLastStageMs[2]);
+            }
             else
                 Reply(s, "504 Unknown SITE command.");
         }
@@ -701,7 +752,6 @@ static uint64 sStageTicks[DevTools::STAGE_COUNT];
 static uint64 sFrameTicksSum, sFrameTicksMax, sLastFrameTick, sSecondStart;
 static unsigned sFrames;
 static FILE *sCsv;
-static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
 static unsigned sLastSkipped;
 
 DevTools::StageScope::StageScope(Stage s) : stage(s), start(svcGetSystemTick()) {}
@@ -760,6 +810,7 @@ int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
 unsigned DevTools::skipCount = 0;
+uint32 DevTools::injectKeys  = 0;
 
 static unsigned sMarks;
 static bool sMenuDirty = true;
@@ -796,14 +847,23 @@ static const Cell kCells[] = {
     { "MAX SKIPPED IN A ROW", TapMaxSkip, ValMaxSkip },
     { "DRAW LISTS", TapDraw, ValDraw },
     { "FLIP COPY", TapFlip, ValFlip },
-    { "LOG MARK", TapMark, ValMark },
     { "FTP SERVER", NULL, ValFtp },
+    { "LOG MARK", TapMark, ValMark },
 };
-enum { CELL_COUNT = sizeof(kCells) / sizeof(kCells[0]), CELL_FIRST_ROW = 10 };
+enum { CELL_COUNT = sizeof(kCells) / sizeof(kCells[0]), CELL_FIRST_ROW = 8, CELL_ROWS = 4 };
 
 static void PrintRow(int row, const char *text)
 {
-    printf("\x1b[%d;1H%-40.40s", row + 1, text);
+    // The console is slow to paint: only rows whose text changed are written.
+    static char shown[32][41];
+    if (row < 0 || row >= 32)
+        return;
+    char padded[41];
+    snprintf(padded, sizeof(padded), "%-40.40s", text);
+    if (!strcmp(shown[row], padded))
+        return;
+    memcpy(shown[row], padded, sizeof(padded));
+    printf("\x1b[%d;1H%s", row + 1, padded);
 }
 
 static void DrawStatus()
@@ -827,9 +887,9 @@ static void DrawStatus()
         val[0] = 0;
         kCells[i].value(val, sizeof(val));
         snprintf(line, sizeof(line), "[%s%s] %-21.21s %s", kCells[i].tap ? "*" : " ", "", kCells[i].label, val);
-        PrintRow(CELL_FIRST_ROW + i, line);
+        PrintRow(CELL_FIRST_ROW + i * CELL_ROWS, line);
     }
-    PrintRow(CELL_FIRST_ROW + CELL_COUNT + 1, "Tap a [*] row to change it.");
+
     if (sNotice) {
         snprintf(line, sizeof(line), "%s", sNotice);
         if (sPhase == 1 && sRecvTotal)
@@ -840,10 +900,10 @@ static void DrawStatus()
             u64 now = osGetTime(), at = sRelaunchAt;
             snprintf(line + strlen(line), sizeof(line) - strlen(line), " %us", (unsigned)(now >= at ? 0 : (at - now + 999) / 1000));
         }
-        PrintRow(CELL_FIRST_ROW + CELL_COUNT + 3, line);
+        PrintRow(CELL_FIRST_ROW + CELL_COUNT * CELL_ROWS, line);
     }
     else
-        PrintRow(CELL_FIRST_ROW + CELL_COUNT + 3, "");
+        PrintRow(CELL_FIRST_ROW + CELL_COUNT * CELL_ROWS, "");
     fflush(stdout);
     sMenuDirty = false;
 }
@@ -855,9 +915,11 @@ static void PollTouch()
         return;
     touchPosition t;
     hidTouchRead(&t);
+    // Each cell is a block of four text rows; only its first two react, so a stray touch between two
+    // cells does nothing.
     const int row = t.py / 8 - CELL_FIRST_ROW;
-    if (row >= 0 && row < CELL_COUNT && kCells[row].tap) {
-        kCells[row].tap();
+    if (row >= 0 && row / CELL_ROWS < CELL_COUNT && row % CELL_ROWS < 2 && kCells[row / CELL_ROWS].tap) {
+        kCells[row / CELL_ROWS].tap();
         sMenuDirty = true;
     }
 }
@@ -872,6 +934,14 @@ void DevTools::Init()
 
 bool DevTools::FrameEnd()
 {
+    if (sPendingScene >= 0) {
+        const SceneListInfo *l   = &sceneInfo.listCategory[sPendingCategory];
+        sceneInfo.activeCategory = (uint8)sPendingCategory;
+        sceneInfo.listPos        = (uint16)(l->sceneOffsetStart + sPendingScene);
+        sceneInfo.state          = ENGINESTATE_LOAD;
+        DevTools::Log("scene request: category %d scene %d", sPendingCategory, sPendingScene);
+        sPendingScene = sPendingCategory = -1;
+    }
     const uint64 now = svcGetSystemTick();
     const uint64 dt  = now - sLastFrameTick;
     sLastFrameTick   = now;
@@ -891,7 +961,8 @@ bool DevTools::FrameEnd()
             static unsigned second;
             fprintf(sCsv, "%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d\n", ++second, sLastFps, sLastFrameMs, sFrameTicksMax * toMs, sLastStageMs[0],
                     sLastStageMs[1], sLastStageMs[2], (int)sceneInfo.listPos);
-            fflush(sCsv);
+            if (second % 5 == 0)
+                fflush(sCsv);
         }
         DrawStatus();
         sLastSkipped = skipCount;

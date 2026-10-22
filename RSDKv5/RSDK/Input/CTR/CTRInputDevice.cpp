@@ -26,6 +26,14 @@ void RSDK::SKU::InputDeviceCTR::UpdateInput()
 
   u32 kDown = hidKeysDown();
   u32 kHeld = hidKeysHeld();
+#if MANIA_DEV_TOOLS
+  // Keys injected over FTP (SITE INPUT) count as held; a newly set one also counts as pressed.
+  static u32 prevInject;
+  const u32 inject = RSDK::DevTools::injectKeys;
+  kHeld |= inject;
+  kDown |= inject & ~prevInject;
+  prevInject = inject;
+#endif
 
   if (kDown || kHeld)
     this->anyPress = 1;
