@@ -1134,12 +1134,14 @@ void Draw3DSceneGpu(unsigned k)
     C3D_BindProgram(&s3Prog);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s3Loc.proj, (C3D_Mtx *)C3DPresent::Projection());
     C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, (float)(1 << h->projX), -(float)(1 << h->projY), (float)h->centerX, (float)h->centerY);
+    // z / w linear in Z inside the scene's band (1/Z left the near and far sides of a model a few 16-bit steps apart
+    // and the last triangle drawn won); later scenes in nearer bands. A 24-bit depth buffer: 2^24 / 64 steps a band.
     const unsigned mode = GpuRender::depthMode;
-    const float bandK   = (float)k / MAX_DRAW3D;
-    if (mode & 1)
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.band, -bandK, -256.0f / MAX_DRAW3D, 0, 0);
-    else
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.band, -1.0f + bandK, 256.0f / MAX_DRAW3D, 0, 0);
+    const float width = 1.0f / MAX_DRAW3D, zmax = 65536.0f;
+    if (mode & 1) // nearer = lower z / w
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.band, -(float)(k + 1) * width, width / zmax, zmax, 0);
+    else // nearer = higher z / w
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.band, -1.0f + (float)(k + 1) * width, -width / zmax, zmax, 0);
     const float alpha = h->ink == INK_NONE ? 255.0f : h->ink == INK_BLEND ? 128.0f : (float)(h->alpha > 0xFF ? 0xFF : h->alpha < 0 ? 0 : h->alpha);
     if (shaded) {
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.lit, 1.0f / 1024, 0, 0, alpha);

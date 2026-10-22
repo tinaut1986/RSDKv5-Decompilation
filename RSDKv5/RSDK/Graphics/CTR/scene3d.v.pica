@@ -8,7 +8,7 @@
 .fvec nrow      ; normal matrix row 1 / 256, times 4 (the normals are stored / 4)
 .fvec lerp      ; (t, 1 - t, 0, 0)
 .fvec scr       ; (2^projectionX, -2^projectionY, screen centre x, screen centre y)
-.fvec band      ; (offset, scale, 0, 0): z / w = offset + scale / Z, the scene's slice of the depth range
+.fvec band      ; (base, slope, Zmax, 0): z / w = base + slope * min(Z, Zmax), the scene's slice of the depth range
 .fvec lit       ; (diffuse factor of the normal: 1 / 1024 or 0, 0, 0, alpha 0..255)
 .fvec dif       ; diffuse colour (rgb)
 .fvec difs      ; 2^-diffuse intensity (rgb)
@@ -50,8 +50,10 @@
     dp4 outpos.y, projection[1], r7
     dp4 outpos.w, projection[3], r7
     mov r9, band
-    mul r8.z, r9.xxxx, r4.zzzz
-    add outpos.z, r9.yyyy, r8.zzzz
+    min r8.w, r9.zzzz, r4.zzzz
+    mul r8.w, r9.yyyy, r8.wwww
+    add r8.w, r9.xxxx, r8.wwww
+    mul outpos.z, r8.wwww, r4.zzzz
 
     ; lighting: n = the transformed normal's y
     dp3 r5.x, nrow, r2

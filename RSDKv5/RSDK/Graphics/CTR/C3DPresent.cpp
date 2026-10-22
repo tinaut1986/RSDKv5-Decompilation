@@ -51,10 +51,11 @@ bool C3DPresent::InitCore()
     if (sCoreFailed)
         return false;
     sCoreFailed = true;
-    // A small command buffer: the app's linear heap holds the screens' buffers too. Every glyph of the bottom
-    // screen is a 2D object; past the limit citro2d reuses its vertex buffer mid-frame and only the last
+    // The GPU command buffer: 128 KB. The GPU renderer's 3D scenes set uniforms and buffers per model instance and
+    // overflowed 32 KB in the Special Stage (GPUCMD_AddInternal panics: svcBreak, a frozen console). Every glyph of
+    // the bottom screen is a 2D object; past the limit citro2d reuses its vertex buffer mid-frame and only the last
     // objects show (256 left the bottom screen blank). 768 objects are ~150 KB of linear memory.
-    if (!C3D_Init(0x8000))
+    if (!C3D_Init(0x20000))
         return false;
     if (!C2D_Init(768))
         return false;
@@ -75,8 +76,8 @@ bool C3DPresent::Init()
     if (!InitCore())
         return false;
 
-    // With a depth buffer for the GPU renderer's 3D scenes (192 KB of VRAM).
-    sTarget = C3D_RenderTargetCreate(SCREEN_H, SCREEN_W, GPU_RB_RGB565, GPU_RB_DEPTH16);
+    // With a depth buffer for the GPU renderer's 3D scenes (24 bit: 16 left too few steps per scene; 384 KB of VRAM).
+    sTarget = C3D_RenderTargetCreate(SCREEN_H, SCREEN_W, GPU_RB_RGB565, GPU_RB_DEPTH24_STENCIL8);
     if (!sTarget)
         return false;
     C3D_RenderTargetSetOutput(sTarget, GFX_TOP, GFX_LEFT,

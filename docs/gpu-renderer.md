@@ -124,10 +124,23 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   and the shader interpolates, transforms, projects (X * 2^projX / Z + centre, homogeneous w = Z) and lights as the
   software does. Depth buffer (GPU_RB_DEPTH16 on the top target) instead of the sort; each scene its own 1/64 of the
   depth range. A refused frame replays the same engine calls (GpuScene3D::Replay).
-- First try on the 2DS: the console **froze** on entering the Special Stage (no ping: a hard hang, needs a power cycle).
-  Suspect: the VRAM copy (`C3D_SyncTextureCopy` with the size as line width); now dims 0 / flags 8 as citro3d's
-  C3D_TexLoadImage. The path is **off by default**: `SITE SET gpu3d 1` turns it on. `SITE SET depthmode 0..7` picks the
-  depth convention (bit 0 nearer = lower z/w, bit 1 GREATER, bit 2 clear to 0) until the right one is seen.
+- First try on the 2DS froze the console. Reproduced in Azahar (see below): libctru panicked in `GPUCMD_AddInternal`,
+  the GPU command buffer (`C3D_Init(0x8000)`, 32 KB) overflowed with the per-instance uniforms. Now 128 KB.
+- Depth: 1/Z inside a scene's band left a model's near and far sides a few 16-bit steps apart (Sonic seen from the
+  front). Now z/w linear in min(Z, 65536) inside the band, and a 24-bit depth buffer. `depthmode 0` (default) is right
+  (checked in Azahar: Sonic's back, as the software draws him); `SITE SET depthmode 0..7` stays for experiments.
+- Checked in Azahar: the Special Stage draws its 3D scenes from instances (`faces 0`, `3d 0.0` ms), every frame on the
+  GPU, matching the software picture. Still **off by default** until seen on the 2DS: `SITE SET gpu3d 1`.
+
+## Testing in Azahar (when the console is not at hand)
+
+- The build runs in the owner's Azahar (Flatpak): `Data.rsdk` and `RSDKv5U.3dsx` in the emulator's
+  `sdmc/3ds/Sonic Mania 3DS/`; the dev tools' FTP server listens on the host's port 5000, so `tools/site.sh -i 127.0.0.1`
+  and `tools/shot.sh -i 127.0.0.1` work as with the console. Timings mean nothing there; crashes, hangs and pictures do.
+- OpenGL fails when Azahar is started from a non-interactive shell ("shared contexts not supported"): its renderer was
+  switched to Vulkan in `qt-config.ini` (backup `qt-config.ini.claude-backup` next to it; restore it afterwards).
+- A panic shows in Azahar's log (`~/.var/app/org.azahar_emu.Azahar/data/azahar-emu/log/azahar_log.txt`) with PC/LR:
+  resolve them with addr2line against `bin/3DS/CTR/RSDKv5U.elf`.
 - `SITE MODELS` lists the loaded models (vertices x frames, flags, position and normal ranges).
 
 ## Renderer mode and frame accounting (2026-10-22)
