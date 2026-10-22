@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/DevTools.hpp"
 
 using namespace RSDK;
 
@@ -395,6 +396,7 @@ void RSDK::InitObjects()
 }
 void RSDK::ProcessObjects()
 {
+    DEV_STAGE(STAGE_UPDATE);
     for (int32 i = 0; i < DRAWGROUP_COUNT; ++i) drawGroups[i].entityCount = 0;
 
     for (int32 o = 0; o < sceneInfo.classCount; ++o) {
@@ -772,6 +774,7 @@ void RSDK::ProcessFrozenObjects()
 }
 void RSDK::ProcessObjectDrawLists()
 {
+    DEV_STAGE(STAGE_DRAW);
 #if RETRO_PLATFORM == RETRO_3DS
     if (RenderDevice::CheckForFrameSkip())
       return;

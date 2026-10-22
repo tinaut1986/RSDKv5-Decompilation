@@ -266,3 +266,4 @@ android/local.properties
 *.rsdk
 *.romfs
 .3ds_ftp_ip
+*.map
