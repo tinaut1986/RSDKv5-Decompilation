@@ -38,11 +38,12 @@ struct Vtx {
 };
 
 enum Tex { TEX_TILE, TEX_SPRITE };
-enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB };
+enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL };
 
 struct Batch {
     uint8 tex, blend;
     unsigned first, count; // quads
+    uint32 constant;       // BLEND_FILL: the per-channel alpha (R, G, B in the low bytes)
 };
 
 struct SprSlot {
@@ -371,14 +372,14 @@ void ConvertSprite(const Pending &p)
 // ---------------------------------------------------------------- geometry
 
 bool AddQuad(uint8 tex, uint8 blend, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, unsigned atlasW, unsigned atlasH,
-             uint8 r, uint8 g, uint8 b, uint8 a)
+             uint8 r, uint8 g, uint8 b, uint8 a, uint32 constant = 0)
 {
     if (sQuadCount >= MAX_QUADS)
         return false;
-    if (!sBatchCount || sBatches[sBatchCount - 1].tex != tex || sBatches[sBatchCount - 1].blend != blend) {
+    if (!sBatchCount || sBatches[sBatchCount - 1].tex != tex || sBatches[sBatchCount - 1].blend != blend || blend == BLEND_FILL) {
         if (sBatchCount >= MAX_BATCHES)
             return false;
-        sBatches[sBatchCount++] = { tex, blend, sQuadCount, 0 };
+        sBatches[sBatchCount++] = { tex, blend, sQuadCount, 0, constant };
     }
     ++sBatches[sBatchCount - 1].count;
     Vtx *v = &sVbo[sCur][sQuadCount * 4];
@@ -485,6 +486,23 @@ bool EmitSprite(const Cmd &c)
     return true;
 }
 
+// FillScreen: every channel blended towards the colour with its own alpha (fades and flashes). The GPU's
+// constant-colour blend factor is per channel too: dst * (1 - alpha) + colour * alpha.
+bool EmitFill(const Cmd &c)
+{
+    const uint32 color = (uint32)c.p[0];
+    const int32 aR = CLAMP(c.p[1], 0, 0xFF), aG = CLAMP(c.p[2], 0, 0xFF), aB = CLAMP(c.p[3], 0, 0xFF);
+    if (aR + aG + aB == 0)
+        return true;
+    const uint16 rr = rgb32To16_B[(color >> 0x10) & 0xFF], gg = rgb32To16_B[(color >> 0x08) & 0xFF], bb = rgb32To16_B[(color >> 0x00) & 0xFF];
+    // rgb32To16_B gives a 5-bit value for each channel (the software uses it for all three).
+    const uint8 r = (uint8)((rr << 3) | (rr >> 2)), g = (uint8)((gg << 3) | (gg >> 2)), b = (uint8)((bb << 3) | (bb >> 2));
+    if (!AddQuad(TEX_SPRITE, BLEND_FILL, 0.0f, 0.0f, (float)currentScreen->size.x, (float)currentScreen->size.y, 4.0f, 4.0f, 4.0f, 4.0f, SPR_ATLAS_W, SPR_ATLAS_H,
+                 r, g, b, 255, (uint32)aR | ((uint32)aG << 8) | ((uint32)aB << 16) | (0xFFu << 24)))
+        return Refuse(GpuRender::REASON_QUAD_LIMIT);
+    return true;
+}
+
 bool EmitRect(const Cmd &c)
 {
     const int32 *p = c.p;
@@ -549,8 +567,10 @@ bool EmitRect(const Cmd &c)
 // it, with the layer's pixel column of screen column dx0 being `px`; screen columns [dx0, dx1).
 bool EmitTileRun(TileLayer *layer, unsigned bank, int row, int srcY, int dy, int n, int dx0, int dx1, int px)
 {
-    if (row < 0 || row >= layer->ysize)
-        return true; // outside the layout: nothing is drawn (the software reads garbage; this is the sane reading)
+    if (row < 0 || row >= layer->ysize) {
+        ++sStats.rowsOut;
+        return true;
+    } // outside the layout: nothing is drawn (the software reads garbage; this is the sane reading)
     int sx = dx0;
     while (sx < dx1) {
         const int X     = sx + px;
@@ -558,7 +578,10 @@ bool EmitTileRun(TileLayer *layer, unsigned bank, int row, int srcY, int dy, int
         const int inX   = X & 15;
         const int w     = (16 - inX) < (dx1 - sx) ? (16 - inX) : (dx1 - sx);
         const uint16 t  = layer->layout[col + (row << layer->widthShift)];
+        if (t >= 0xFFFF)
+            ++sStats.emptyTiles;
         if (t < 0xFFFF) {
+            ++sStats.tileQuads;
             const int cell = EnsureTile(t & 0xFFF, bank);
             if (cell == -2)
                 return Refuse(GpuRender::REASON_ATLAS_FULL);
@@ -641,6 +664,7 @@ const GpuRender::Stats &GpuRender::GetStats() { return sStats; }
 bool GpuRender::Render(const Stream &stream)
 {
     sStats.reason = REASON_OK;
+    sStats.layerCmds = sStats.tileQuads = sStats.emptyTiles = sStats.rowsOut = 0;
     if (!Setup()) {
         sStats.reason = REASON_NO_GPU;
         return false;
@@ -667,9 +691,11 @@ bool GpuRender::Render(const Stream &stream)
             case CMD_LINEBUF: memcpy(sLineBuf, stream.arena + c.arena, sizeof(sLineBuf)); break;
             case CMD_SPRITE: ok = EmitSprite(c); break;
             case CMD_RECT: ok = EmitRect(c); break;
+            case CMD_FILL: ok = EmitFill(c); break;
             case CMD_LAYER: {
                 TileLayer *layer = (TileLayer *)(uintptr_t)c.p[0];
                 const ScanlineInfo *sl = (const ScanlineInfo *)(stream.arena + c.arena);
+                ++sStats.layerCmds;
                 if (!layer->xsize || !layer->ysize)
                     break;
                 if (c.kind == LAYER_BASIC)
@@ -741,8 +767,12 @@ bool GpuRender::Render(const Stream &stream)
             C3D_TexBind(0, bt.tex == TEX_TILE ? &sTileTex : &sSprTex);
             curTex = bt.tex;
         }
-        if (curBlend != bt.blend) {
+        if (curBlend != bt.blend || bt.blend == BLEND_FILL) {
             switch (bt.blend) {
+                case BLEND_FILL:
+                    C3D_BlendingColor(bt.constant);
+                    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_COLOR, GPU_ONE_MINUS_CONSTANT_COLOR, GPU_CONSTANT_ALPHA, GPU_ONE_MINUS_CONSTANT_ALPHA);
+                    break;
                 case BLEND_ADD: C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE, GPU_SRC_ALPHA, GPU_ONE); break;
                 case BLEND_SUB: C3D_AlphaBlend(GPU_BLEND_REVERSE_SUBTRACT, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE, GPU_SRC_ALPHA, GPU_ONE); break;
                 default: C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA); break;

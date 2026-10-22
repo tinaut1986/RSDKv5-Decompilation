@@ -33,6 +33,7 @@ bool Render(const GpuFrame::Stream &stream);
 
 struct Stats {
     unsigned quads, tileConversions, spriteConversions, atlasFlushes;
+    unsigned layerCmds, tileQuads, emptyTiles, rowsOut; // diagnostics
     unsigned reason, unsupportedCmd;
 };
 const Stats &GetStats();

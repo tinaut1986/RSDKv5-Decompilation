@@ -63,8 +63,38 @@ goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`).
     After every tag rename the release branch to the next patch.
   - Never commit directly on `main` or `release/*`. Commit only when the owner asks.
 - `master` is the fork's GitHub default branch (SaturnSH2x2's history); we do not use it.
-- Releases/CI/version script are not set up yet: see PLAN (B0.3).
+- Releases/CI/version script are not set up yet: see PLAN (B0.3). Nothing has been pushed to `origin` yet (B0.4).
+- Commit only when the owner asks; the owner asked for commits at the end of each long task.
+
+## The console in the loop (dev-tools builds)
+
+The game runs an FTP server on port 5000 (address on the bottom screen) with a remote control. Everything is
+`curl`-based; see `RSDKv5/RSDK/Dev/CTR/DevTools.cpp` (commands) and `docs/gpu-renderer.md`.
+
+```sh
+./build_3ds.sh --install 192.168.1.141      # build, upload, SITE INSTALL over the running game, relaunch (10 s)
+tools/site.sh STATE                         # category/scene, fps, stage times, GPU stats
+tools/site.sh SCENES | "SCENE 1 0"          # list / jump (category, index): 1 0 = Green Hill 1, 3 0 = Special Stage 1
+tools/site.sh "INPUT 11"                    # hold keys (hex 3DS mask: 10 = right, 1 = A); "INPUT 0" releases
+tools/site.sh "SET record 1"                # switches: frameskip maxskip draw flipcopy gpu gpurender record syncdraw vblank bottomui
+tools/site.sh ORDER                         # draw order of the last frame (L layer, S sprite, F face, R roto, P shape)
+tools/site.sh SURFACES                      # sprite sheets in memory (texture-memory budget)
+tools/shot.sh top|bottom out.png            # screenshot; the top one is blind while the GPU draws (see gpu-renderer.md)
+tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
+```
+
+Files on the SD (`sdmc:/3ds/Sonic Mania 3DS/`): `Data.rsdk`, `debug/log.txt` (boot steps), `debug/perf-NNNN.csv` (one row a
+second), `dev-settings.ini` (the bottom-screen switches). Luma crash dumps are in `/luma/dumps/arm11/`; resolve the PC/LR with
+`arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
+`crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).
+
+- The owner's console is an **Old 2DS** (Old 3DS CPU). Its IP changes (DHCP): ping first.
+- Ask before installing in a session unless the owner has said otherwise for that session. A relaunch loses unsaved progress.
+- After the game freezes the console needs a manual power cycle; the first install of a build that cannot be
+  installed over FTP (a bug in the installer) is manual: upload to `/cias/` and install with FBI.
+- `DEV_TOOLS=0 ./build_3ds.sh` builds without the dev tools (production).
 
 ## Tests
 
-Test on hardware whenever performance is involved; emulators say nothing about Old 3DS timings.
+Test on hardware whenever performance is involved; emulators say nothing about Old 3DS timings. Verify rendering changes with
+a *moving* scene and screenshots (`tools/shot.sh`), never with a static one.
