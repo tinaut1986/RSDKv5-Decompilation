@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/DevTools.hpp"
 
 using namespace RSDK;
 
@@ -1293,6 +1294,7 @@ void RSDK::CopyTileLayer(uint16 dstLayerID, int32 dstStartX, int32 dstStartY, ui
 
 void RSDK::DrawLayerHScroll(TileLayer *layer)
 {
+    DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
 
@@ -1445,6 +1447,7 @@ void RSDK::DrawLayerHScroll(TileLayer *layer)
 }
 void RSDK::DrawLayerVScroll(TileLayer *layer)
 {
+    DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
 
@@ -1587,6 +1590,7 @@ void RSDK::DrawLayerVScroll(TileLayer *layer)
 }
 void RSDK::DrawLayerRotozoom(TileLayer *layer)
 {
+    DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
 
@@ -1630,6 +1634,7 @@ void RSDK::DrawLayerRotozoom(TileLayer *layer)
 }
 void RSDK::DrawLayerBasic(TileLayer *layer)
 {
+    DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
 

@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/DevTools.hpp"
 
 using namespace RSDK;
 

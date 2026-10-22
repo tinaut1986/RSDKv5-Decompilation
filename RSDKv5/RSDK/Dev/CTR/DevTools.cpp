@@ -18,8 +18,8 @@
 
 using namespace RSDK;
 
-// Own title ID (3ds/SonicMania.rsf: UniqueId 0x5A230). Installs of any other CIA are refused.
-static const u64 TITLE_ID = 0x000400000005A230ULL;
+// Own title ID: 0004000000 + UniqueId 0x05A230 (3ds/SonicMania.rsf) + variation 00. Installs of any other CIA are refused.
+static const u64 TITLE_ID = 0x0004000005A23000ULL;
 
 enum {
     FTP_PORT      = 5000,
@@ -51,6 +51,11 @@ static const char *volatile sNotice;
 static volatile int sPhase; // 1 receiving, 2 installing, 3 restart countdown
 static volatile unsigned long long sAllo, sRecvDone, sRecvTotal, sCiaDone, sCiaTotal;
 static volatile unsigned long long sRelaunchAt; // osGetTime() the countdown ends at
+
+static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
+
+// Requests from the FTP thread, applied by the main thread in FrameEnd.
+static volatile int sPendingCategory = -1, sPendingScene = -1;
 
 struct Session {
     int ctrl;
@@ -613,6 +618,54 @@ static void HandleSession(int ctrl)
             }
             else if (!strcmp(sub, "INSTALL"))
                 Reply(s, "501 SITE INSTALL <path to a .cia of this game>");
+            else if (!strcmp(sub, "SCENES")) {
+                // "0 Presentation(3) 1 Mania Mode(42) ...": category index, name and scene count.
+                char list[FTP_LINE_MAX - 8];
+                unsigned n = 0;
+                for (int c = 0; c < sceneInfo.categoryCount && n + 40 < sizeof(list); ++c)
+                    n += (unsigned)snprintf(list + n, sizeof(list) - n, "%d %s(%d) ", c, sceneInfo.listCategory[c].name,
+                                            (int)sceneInfo.listCategory[c].sceneCount);
+                list[n] = 0;
+                Reply(s, "200 %s", list);
+            }
+            else if (!strcmp(sub, "SCENE") && path && *path) {
+                // SITE SCENE <category> <index in category>; with no index, the category's scenes by name.
+                int cat = atoi(path);
+                char *idx = strchr(path, ' ');
+                if (cat < 0 || cat >= sceneInfo.categoryCount)
+                    Reply(s, "501 category 0..%d", (int)sceneInfo.categoryCount - 1);
+                else if (!idx) {
+                    const SceneListInfo *l = &sceneInfo.listCategory[cat];
+                    char list[FTP_LINE_MAX - 8];
+                    unsigned n = 0;
+                    for (int i = 0; i < l->sceneCount && n + 40 < sizeof(list); ++i)
+                        n += (unsigned)snprintf(list + n, sizeof(list) - n, "%d %s(%s) ", i, sceneInfo.listData[l->sceneOffsetStart + i].name,
+                                                sceneInfo.listData[l->sceneOffsetStart + i].id);
+                    list[n] = 0;
+                    Reply(s, "200 %s", list);
+                }
+                else {
+                    int scene = atoi(idx + 1);
+                    if (scene < 0 || scene >= sceneInfo.listCategory[cat].sceneCount)
+                        Reply(s, "501 scene 0..%d", (int)sceneInfo.listCategory[cat].sceneCount - 1);
+                    else {
+                        sPendingScene    = scene;
+                        sPendingCategory = cat;
+                        Reply(s, "200 loading category %d scene %d", cat, scene);
+                    }
+                }
+            }
+            else if (!strcmp(sub, "INPUT")) {
+                // SITE INPUT <hex mask of 3DS keys, e.g. 10 = A, 10 = KEY_A bit>: held until set to 0.
+                DevTools::injectKeys = path ? (uint32)strtoul(path, NULL, 16) : 0;
+                Reply(s, "200 keys %08lx", (unsigned long)DevTools::injectKeys);
+            }
+            else if (!strcmp(sub, "STATE")) {
+                Reply(s, "200 category %d scene %d state %d fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f",
+                      (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastFps, sLastFrameMs, sLastStageMs[0],
+                      sLastStageMs[1], sLastStageMs[2], sLastStageMs[3], sLastStageMs[4], sLastStageMs[5], sLastStageMs[6], sLastStageMs[7],
+                      sLastStageMs[8]);
+            }
             else
                 Reply(s, "504 Unknown SITE command.");
         }
@@ -694,14 +747,14 @@ static bool StartServer()
 
 // ---------------------------------------------------------------- perf timing
 
-static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip" };
+static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes" };
 static const char *kDir                              = "sdmc:/3ds/Sonic Mania 3DS/debug";
 
 static uint64 sStageTicks[DevTools::STAGE_COUNT];
 static uint64 sFrameTicksSum, sFrameTicksMax, sLastFrameTick, sSecondStart;
 static unsigned sFrames;
 static FILE *sCsv;
-static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
+static unsigned sLastSkipped;
 
 DevTools::StageScope::StageScope(Stage s) : stage(s), start(svcGetSystemTick()) {}
 DevTools::StageScope::~StageScope() { StageAdd(stage, svcGetSystemTick() - start); }
@@ -744,38 +797,135 @@ static void OpenCsv()
         if (stat(path, &st) != 0) {
             sCsv = fopen(path, "w");
             if (sCsv)
-                fprintf(sCsv, "second,fps,frame_ms_avg,frame_ms_max,update_ms,draw_ms,flip_ms,scene\n");
+                fprintf(sCsv, "second,fps,frame_ms_avg,frame_ms_max,update_ms,draw_ms,flip_ms,layers_ms,sprites_ms,roto_ms,faces_ms,d3_ms,shapes_ms,scene\n");
         }
     }
 }
 
+// ---------------------------------------------------------------- bottom-screen menu
+//
+// The bottom screen is the libctru text console (40x30). Each row below the header is a "cell":
+// tap it to flip or cycle its value, as in the DEBUG tab of the owner's other ports.
+
+bool DevTools::swFrameSkip = true;
+int DevTools::swMaxSkip    = 2;
+bool DevTools::swDraw      = true;
+bool DevTools::swFlipCopy  = true;
+unsigned DevTools::skipCount = 0;
+uint32 DevTools::injectKeys  = 0;
+
+static unsigned sMarks;
+static bool sMenuDirty = true;
+
+struct Cell {
+    const char *label;
+    void (*tap)();
+    void (*value)(char *out, unsigned cap);
+};
+
+static void ValFrameSkip(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swFrameSkip ? "ON" : "OFF"); }
+static void TapFrameSkip() { DevTools::swFrameSkip = !DevTools::swFrameSkip; }
+static void ValMaxSkip(char *o, unsigned c) { snprintf(o, c, "%d", DevTools::swMaxSkip); }
+static void TapMaxSkip() { DevTools::swMaxSkip = DevTools::swMaxSkip % 4 + 1; }
+static void ValDraw(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swDraw ? "ON" : "OFF (logic only)"); }
+static void TapDraw() { DevTools::swDraw = !DevTools::swDraw; }
+static void ValFlip(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swFlipCopy ? "ON" : "OFF (no copy)"); }
+static void TapFlip() { DevTools::swFlipCopy = !DevTools::swFlipCopy; }
+static void ValMark(char *o, unsigned c) { snprintf(o, c, "%u", sMarks); }
+static void TapMark()
+{
+    ++sMarks;
+    DevTools::Log("--- MARK %u --- scene %d, %.1f fps", sMarks, (int)sceneInfo.listPos, sLastFps);
+    if (sCsv) {
+        fprintf(sCsv, "# MARK %u\n", sMarks);
+        fflush(sCsv);
+    }
+}
+static void ValFtp(char *o, unsigned c) { snprintf(o, c, "%s", sStatus); }
+static void ValNone(char *, unsigned) {}
+
+static const Cell kCells[] = {
+    { "FRAME SKIP", TapFrameSkip, ValFrameSkip },
+    { "MAX SKIPPED IN A ROW", TapMaxSkip, ValMaxSkip },
+    { "DRAW LISTS", TapDraw, ValDraw },
+    { "FLIP COPY", TapFlip, ValFlip },
+    { "FTP SERVER", NULL, ValFtp },
+    { "LOG MARK", TapMark, ValMark },
+};
+enum { CELL_COUNT = sizeof(kCells) / sizeof(kCells[0]), CELL_FIRST_ROW = 8, CELL_ROWS = 4 };
+
+static void PrintRow(int row, const char *text)
+{
+    // The console is slow to paint: only rows whose text changed are written.
+    static char shown[32][41];
+    if (row < 0 || row >= 32)
+        return;
+    char padded[41];
+    snprintf(padded, sizeof(padded), "%-40.40s", text);
+    if (!strcmp(shown[row], padded))
+        return;
+    memcpy(shown[row], padded, sizeof(padded));
+    printf("\x1b[%d;1H%s", row + 1, padded);
+}
+
 static void DrawStatus()
 {
-    printf("\x1b[2J\x1b[1;1H");
-    printf("SONIC MANIA 3DS  dev tools\n\n");
-    printf("FTP  %s\n", sStatus);
-    {
-        extern u32 __ctru_heap_size;
-        struct mallinfo mi = mallinfo();
-        printf("heap %u/%u KB  linear free %u KB\n\n", (unsigned)(mi.uordblks >> 10), (unsigned)(__ctru_heap_size >> 10),
-               (unsigned)(linearSpaceFree() >> 10));
+    char line[96], val[48];
+    PrintRow(0, "SONIC MANIA 3DS  dev tools");
+    snprintf(line, sizeof(line), "%.1f fps  frame %.1f ms", sLastFps, sLastFrameMs);
+    PrintRow(2, line);
+    snprintf(line, sizeof(line), "upd %.1f  draw %.1f  flip %.1f", sLastStageMs[0], sLastStageMs[1], sLastStageMs[2]);
+    PrintRow(3, line);
+    snprintf(line, sizeof(line), "lay %.1f spr %.1f rot %.1f", sLastStageMs[3], sLastStageMs[4], sLastStageMs[5]);
+    PrintRow(4, line);
+    snprintf(line, sizeof(line), "face %.1f 3d %.1f shp %.1f", sLastStageMs[6], sLastStageMs[7], sLastStageMs[8]);
+    PrintRow(5, line);
+    extern u32 __ctru_heap_size;
+    struct mallinfo mi = mallinfo();
+    snprintf(line, sizeof(line), "heap %u/%u KB  lin free %u KB", (unsigned)(mi.uordblks >> 10), (unsigned)(__ctru_heap_size >> 10),
+             (unsigned)(linearSpaceFree() >> 10));
+    PrintRow(6, line);
+    snprintf(line, sizeof(line), "scene %d  skipped passes/s %u", (int)sceneInfo.listPos, sLastSkipped);
+    PrintRow(7, line);
+    for (int i = 0; i < CELL_COUNT; ++i) {
+        val[0] = 0;
+        kCells[i].value(val, sizeof(val));
+        snprintf(line, sizeof(line), "[%s%s] %-21.21s %s", kCells[i].tap ? "*" : " ", "", kCells[i].label, val);
+        PrintRow(CELL_FIRST_ROW + i * CELL_ROWS, line);
     }
-    printf("%.1f fps   frame %.1f ms\n", sLastFps, sLastFrameMs);
-    for (int i = 0; i < DevTools::STAGE_COUNT; ++i)
-        printf("  %-7s %5.1f ms\n", kStageName[i], sLastStageMs[i]);
+
     if (sNotice) {
-        printf("\n%s", sNotice);
+        snprintf(line, sizeof(line), "%s", sNotice);
         if (sPhase == 1 && sRecvTotal)
-            printf(" %u%%", (unsigned)(sRecvDone * 100 / sRecvTotal));
+            snprintf(line + strlen(line), sizeof(line) - strlen(line), " %u%%", (unsigned)(sRecvDone * 100 / sRecvTotal));
         else if (sPhase == 2 && sCiaTotal)
-            printf(" %u%%", (unsigned)(sCiaDone * 100 / sCiaTotal));
+            snprintf(line + strlen(line), sizeof(line) - strlen(line), " %u%%", (unsigned)(sCiaDone * 100 / sCiaTotal));
         else if (sPhase == 3) {
             u64 now = osGetTime(), at = sRelaunchAt;
-            printf(" %us", (unsigned)(now >= at ? 0 : (at - now + 999) / 1000));
+            snprintf(line + strlen(line), sizeof(line) - strlen(line), " %us", (unsigned)(now >= at ? 0 : (at - now + 999) / 1000));
         }
-        printf("\n");
+        PrintRow(CELL_FIRST_ROW + CELL_COUNT * CELL_ROWS, line);
     }
+    else
+        PrintRow(CELL_FIRST_ROW + CELL_COUNT * CELL_ROWS, "");
     fflush(stdout);
+    sMenuDirty = false;
+}
+
+// Taps on the console rows (8 px each) act on the cell under the finger.
+static void PollTouch()
+{
+    if (!(hidKeysDown() & KEY_TOUCH))
+        return;
+    touchPosition t;
+    hidTouchRead(&t);
+    // Each cell is a block of four text rows; only its first two react, so a stray touch between two
+    // cells does nothing.
+    const int row = t.py / 8 - CELL_FIRST_ROW;
+    if (row >= 0 && row / CELL_ROWS < CELL_COUNT && row % CELL_ROWS < 2 && kCells[row / CELL_ROWS].tap) {
+        kCells[row / CELL_ROWS].tap();
+        sMenuDirty = true;
+    }
 }
 
 void DevTools::Init()
@@ -788,6 +938,14 @@ void DevTools::Init()
 
 bool DevTools::FrameEnd()
 {
+    if (sPendingScene >= 0) {
+        const SceneListInfo *l   = &sceneInfo.listCategory[sPendingCategory];
+        sceneInfo.activeCategory = (uint8)sPendingCategory;
+        sceneInfo.listPos        = (uint16)(l->sceneOffsetStart + sPendingScene);
+        sceneInfo.state          = ENGINESTATE_LOAD;
+        DevTools::Log("scene request: category %d scene %d", sPendingCategory, sPendingScene);
+        sPendingScene = sPendingCategory = -1;
+    }
     const uint64 now = svcGetSystemTick();
     const uint64 dt  = now - sLastFrameTick;
     sLastFrameTick   = now;
@@ -805,18 +963,24 @@ bool DevTools::FrameEnd()
             sLastStageMs[i] = (float)(sStageTicks[i] * toMs / sFrames);
         if (sCsv) {
             static unsigned second;
-            fprintf(sCsv, "%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d\n", ++second, sLastFps, sLastFrameMs, sFrameTicksMax * toMs, sLastStageMs[0],
-                    sLastStageMs[1], sLastStageMs[2], (int)sceneInfo.listPos);
-            fflush(sCsv);
+            fprintf(sCsv, "%u,%.2f,%.2f,%.2f", ++second, sLastFps, sLastFrameMs, sFrameTicksMax * toMs);
+            for (int i = 0; i < STAGE_COUNT; ++i)
+                fprintf(sCsv, ",%.2f", sLastStageMs[i]);
+            fprintf(sCsv, ",%d\n", (int)sceneInfo.listPos);
+            if (second % 5 == 0)
+                fflush(sCsv);
         }
         DrawStatus();
+        sLastSkipped = skipCount;
+        skipCount    = 0;
         memset(sStageTicks, 0, sizeof(sStageTicks));
         sFrameTicksSum = sFrameTicksMax = 0;
         sFrames                         = 0;
         sSecondStart                    = now;
     }
-    else if (sPhase == 3 && (sFrames & 15) == 0)
+    else if ((sPhase == 3 && (sFrames & 15) == 0) || sMenuDirty)
         DrawStatus();
+    PollTouch();
 
     if (sPhase == 3 && osGetTime() >= sRelaunchAt) {
         // aptExit() starts this title again once the process has exited (as HOME -> close).

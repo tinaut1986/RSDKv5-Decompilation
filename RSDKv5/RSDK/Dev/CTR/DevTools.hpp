@@ -18,7 +18,19 @@ namespace RSDK
 namespace DevTools
 {
 
-enum Stage { STAGE_UPDATE, STAGE_DRAW, STAGE_FLIP, STAGE_COUNT };
+// UPDATE, DRAW and FLIP split a frame; the rest split DRAW by what is drawn (they do not nest).
+enum Stage {
+    STAGE_UPDATE,
+    STAGE_DRAW,
+    STAGE_FLIP,
+    STAGE_LAYERS,  // tile layers
+    STAGE_SPRITES, // DrawSpriteFlipped (all ordinary sprites)
+    STAGE_ROTO,    // rotozoom + deformed sprites
+    STAGE_FACES,   // DrawFace / DrawBlendedFace
+    STAGE_3D,      // Draw3DScene
+    STAGE_SHAPES,  // lines, rectangles, circles, single tiles
+    STAGE_COUNT
+};
 
 // After RenderDevice::Init(): starts the FTP server and opens the perf CSV.
 void Init();
@@ -28,6 +40,14 @@ bool FrameEnd();
 void Shutdown();
 
 void StageAdd(Stage stage, uint64 ticks);
+
+// Switches the bottom-screen menu flips at run time (in memory, on at every boot).
+extern bool swFrameSkip; // skip drawing + flip when the logic is more than a tick late
+extern int swMaxSkip;    // most passes skipped in a row
+extern bool swDraw;      // run the draw lists (off isolates the cost of the logic)
+extern bool swFlipCopy;  // copy the frame into the screen (off isolates the cost of the flip)
+extern uint32 injectKeys; // 3DS key mask held on top of the real buttons (SITE INPUT)
+extern unsigned skipCount; // passes whose drawing was skipped since the last second
 
 // Appends one line to sdmc:/3ds/Sonic Mania 3DS/debug/log.txt (flushed at once, so it survives a
 // crash or an exit to the HOME menu); also valid before Init().
@@ -51,6 +71,20 @@ struct StageScope {
 #define DEV_STAGE(stage)
 #define DEV_LOG(...)
 
+#endif
+
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+#define DEV_SW_FRAMESKIP RSDK::DevTools::swFrameSkip
+#define DEV_SW_MAXSKIP   RSDK::DevTools::swMaxSkip
+#define DEV_SW_DRAW      RSDK::DevTools::swDraw
+#define DEV_SW_FLIPCOPY  RSDK::DevTools::swFlipCopy
+#define DEV_COUNT_SKIP() (++RSDK::DevTools::skipCount)
+#else
+#define DEV_SW_FRAMESKIP true
+#define DEV_SW_MAXSKIP   2
+#define DEV_SW_DRAW      true
+#define DEV_SW_FLIPCOPY  true
+#define DEV_COUNT_SKIP() ((void)0)
 #endif
 
 #endif
