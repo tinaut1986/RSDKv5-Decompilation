@@ -56,6 +56,7 @@ static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
 
 // Requests from the FTP thread, applied by the main thread in FrameEnd.
 static volatile int sPendingCategory = -1, sPendingScene = -1;
+static volatile int sShotRequest; // 1 top screen, 2 bottom screen
 
 struct Session {
     int ctrl;
@@ -655,16 +656,41 @@ static void HandleSession(int ctrl)
                     }
                 }
             }
+            else if (!strcmp(sub, "SHOT")) {
+                // The top screen's framebuffer as debug/shot-NNNN.raw (tools/shot.sh converts it).
+                sShotRequest = (path && !strncasecmp(path, "bottom", 6)) ? 2 : 1;
+                Reply(s, "200 shot queued");
+            }
+            else if (!strcmp(sub, "GPU")) {
+                DevTools::swGpuPresent = path && atoi(path) != 0;
+                Reply(s, "200 gpu present %d", (int)DevTools::swGpuPresent);
+            }
             else if (!strcmp(sub, "INPUT")) {
                 // SITE INPUT <hex mask of 3DS keys, e.g. 10 = A, 10 = KEY_A bit>: held until set to 0.
                 DevTools::injectKeys = path ? (uint32)strtoul(path, NULL, 16) : 0;
                 Reply(s, "200 keys %08lx", (unsigned long)DevTools::injectKeys);
             }
+            else if (!strcmp(sub, "SURFACES")) {
+                // Sprite sheets and tile sheet in memory: how much GPU texture memory a scene would need.
+                char list[FTP_LINE_MAX - 8];
+                unsigned n = 0, total = 0, count = 0;
+                for (int i = 0; i < SURFACE_COUNT; ++i) {
+                    const GFXSurface &g = gfxSurface[i];
+                    if (g.scope == SCOPE_NONE || !g.pixels)
+                        continue;
+                    ++count;
+                    total += (unsigned)g.width * g.height;
+                    if (n + 24 < sizeof(list))
+                        n += (unsigned)snprintf(list + n, sizeof(list) - n, "%dx%d ", (int)g.width, (int)g.height);
+                }
+                list[n] = 0;
+                Reply(s, "200 %u sheets, %u KB at 8 bit (%u KB at 16 bit): %s", count, total >> 10, (total * 2) >> 10, list);
+            }
             else if (!strcmp(sub, "STATE")) {
-                Reply(s, "200 category %d scene %d state %d fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f",
+                Reply(s, "200 category %d scene %d state %d fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f",
                       (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastFps, sLastFrameMs, sLastStageMs[0],
                       sLastStageMs[1], sLastStageMs[2], sLastStageMs[3], sLastStageMs[4], sLastStageMs[5], sLastStageMs[6], sLastStageMs[7],
-                      sLastStageMs[8]);
+                      sLastStageMs[8], sLastStageMs[9], sLastStageMs[10], sLastStageMs[11]);
             }
             else
                 Reply(s, "504 Unknown SITE command.");
@@ -747,7 +773,7 @@ static bool StartServer()
 
 // ---------------------------------------------------------------- perf timing
 
-static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes" };
+static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes", "pcopy", "pxfer", "pframe" };
 static const char *kDir                              = "sdmc:/3ds/Sonic Mania 3DS/debug";
 
 static uint64 sStageTicks[DevTools::STAGE_COUNT];
@@ -811,6 +837,7 @@ bool DevTools::swFrameSkip = true;
 int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
+bool DevTools::swGpuPresent = false; // off at boot until it has been checked; SITE GPU 1 or the menu
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 
@@ -831,6 +858,8 @@ static void ValDraw(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swDraw
 static void TapDraw() { DevTools::swDraw = !DevTools::swDraw; }
 static void ValFlip(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swFlipCopy ? "ON" : "OFF (no copy)"); }
 static void TapFlip() { DevTools::swFlipCopy = !DevTools::swFlipCopy; }
+static void ValGpu(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swGpuPresent ? "GPU" : "CPU"); }
+static void TapGpu() { DevTools::swGpuPresent = !DevTools::swGpuPresent; }
 static void ValMark(char *o, unsigned c) { snprintf(o, c, "%u", sMarks); }
 static void TapMark()
 {
@@ -849,19 +878,28 @@ static const Cell kCells[] = {
     { "MAX SKIPPED IN A ROW", TapMaxSkip, ValMaxSkip },
     { "DRAW LISTS", TapDraw, ValDraw },
     { "FLIP COPY", TapFlip, ValFlip },
+    { "PRESENT", TapGpu, ValGpu },
     { "FTP SERVER", NULL, ValFtp },
     { "LOG MARK", TapMark, ValMark },
 };
-enum { CELL_COUNT = sizeof(kCells) / sizeof(kCells[0]), CELL_FIRST_ROW = 8, CELL_ROWS = 4 };
+enum { CELL_COUNT = sizeof(kCells) / sizeof(kCells[0]), CELL_FIRST_ROW = 8, CELL_ROWS = 3 };
+// The console has 30 rows: printing below the last one scrolls everything (that made the whole menu vanish
+// once the cells outgrew the screen), so the layout must fit: cells, then the notice row.
+static_assert(CELL_FIRST_ROW + CELL_COUNT * CELL_ROWS <= 29, "the menu does not fit the 30-row console");
 
 static void PrintRow(int row, const char *text)
 {
     // The console is slow to paint: only rows whose text changed are written.
-    static char shown[32][41];
-    if (row < 0 || row >= 32)
-        return;
+    static char shown[30][41];
+    static u64 lastFullRepaint;
+    if (svcGetSystemTick() - lastFullRepaint > 3ULL * SYSCLOCK_ARM11) {
+        memset(shown, 0, sizeof(shown)); // repaint everything now and then, whatever the screen kept
+        lastFullRepaint = svcGetSystemTick();
+    }
+    if (row < 0 || row >= 30)
+        return; // never print on or below the console's last row: it scrolls
     char padded[41];
-    snprintf(padded, sizeof(padded), "%-40.40s", text);
+    snprintf(padded, sizeof(padded), "%-39.39s", text); // 39: the 40th column would wrap, and wrapping on the last row scrolls
     if (!strcmp(shown[row], padded))
         return;
     memcpy(shown[row], padded, sizeof(padded));
@@ -904,11 +942,22 @@ static void DrawStatus()
             u64 now = osGetTime(), at = sRelaunchAt;
             snprintf(line + strlen(line), sizeof(line) - strlen(line), " %us", (unsigned)(now >= at ? 0 : (at - now + 999) / 1000));
         }
-        PrintRow(CELL_FIRST_ROW + CELL_COUNT * CELL_ROWS, line);
+        PrintRow(29, line);
     }
     else
-        PrintRow(CELL_FIRST_ROW + CELL_COUNT * CELL_ROWS, "");
+        PrintRow(29, "");
     fflush(stdout);
+    // The console writes through the CPU cache; in GPU presentation mode nothing else flushes the screens
+    // every frame (the CPU flip does), so the menu flushes what it painted.
+    gfxFlushBuffers();
+    {
+        // And the bottom framebuffer by hand, whole: only the first rows of the menu reached the screen
+        // with gfxFlushBuffers alone (the owner saw the menu cut after row 7).
+        u16 w = 0, h = 0;
+        u8 *fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+        if (fb)
+            GSPGPU_FlushDataCache(fb, (u32)w * h * (gfxGetScreenFormat(GFX_BOTTOM) == GSP_RGB565_OES ? 2 : 3));
+    }
     sMenuDirty = false;
 }
 
@@ -919,7 +968,7 @@ static void PollTouch()
         return;
     touchPosition t;
     hidTouchRead(&t);
-    // Each cell is a block of four text rows; only its first two react, so a stray touch between two
+    // Each cell is a block of three text rows; only its first two react, so a stray touch between two
     // cells does nothing.
     const int row = t.py / 8 - CELL_FIRST_ROW;
     if (row >= 0 && row / CELL_ROWS < CELL_COUNT && row % CELL_ROWS < 2 && kCells[row / CELL_ROWS].tap) {
@@ -938,6 +987,24 @@ void DevTools::Init()
 
 bool DevTools::FrameEnd()
 {
+    if (sShotRequest) {
+        const gfxScreen_t screen = sShotRequest == 2 ? GFX_BOTTOM : GFX_TOP;
+        sShotRequest             = 0;
+        u16 w = 0, h = 0;
+        // The back buffer holds the frame before the one just shown: complete, which is all a snapshot needs.
+        const u8 *fb = gfxGetFramebuffer(screen, GFX_LEFT, &w, &h);
+        char path[160];
+        snprintf(path, sizeof(path), "%s/shot-%s.raw", kDir, screen == GFX_BOTTOM ? "bottom" : "top");
+        FILE *f = fopen(path, "wb");
+        if (f && fb) {
+            // Header: width, height (the framebuffer is column-major), bytes per pixel.
+            const u32 head[3] = { w, h, (u32)(gfxGetScreenFormat(screen) == GSP_RGB565_OES ? 2 : 3) };
+            fwrite(head, sizeof(head), 1, f);
+            fwrite(fb, head[2], (size_t)w * h, f);
+        }
+        if (f)
+            fclose(f);
+    }
     if (sPendingScene >= 0) {
         const SceneListInfo *l   = &sceneInfo.listCategory[sPendingCategory];
         sceneInfo.activeCategory = (uint8)sPendingCategory;

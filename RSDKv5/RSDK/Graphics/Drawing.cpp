@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Graphics/CTR/C3DPresent.hpp"
 
 using namespace RSDK;
 

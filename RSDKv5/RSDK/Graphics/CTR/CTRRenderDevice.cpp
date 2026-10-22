@@ -11,6 +11,9 @@ bool RenderDevice::Init()
 {
   gfxInitDefault();
   consoleInit(GFX_BOTTOM, NULL);
+  // The console draws into one fixed buffer: with the bottom screen double-buffered every swap shows the
+  // other (empty) one, and in GPU presentation mode, where nothing swaps it, the text stayed half missing.
+  gfxSetDoubleBuffering(GFX_BOTTOM, false);
 
   if (printToConsole) {
     // dummy out later maybe possibly
@@ -80,7 +83,9 @@ void RenderDevice::FlipScreen()
         // image/video buffer, break
         break;
       case 1:
-        if (DEV_SW_FLIPCOPY)
+        if (DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init()))
+          C3DPresent::Present(src, screens[0].pitch);
+        else if (DEV_SW_FLIPCOPY)
           TransposeToFramebuffer(src, screens[0].pitch, dst);
         break;
 
@@ -92,8 +97,10 @@ void RenderDevice::FlipScreen()
         break;
     }
 
-    gfxFlushBuffers();
-    gfxSwapBuffers();
+    if (!(DEV_SW_GPUPRESENT && C3DPresent::Ready())) {
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+    }
     gspWaitForVBlank();
   }
 }
