@@ -132,6 +132,24 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Checked in Azahar: the Special Stage draws its 3D scenes from instances (`faces 0`, `3d 0.0` ms), every frame on the
   GPU, matching the software picture. Still **off by default** until seen on the 2DS: `SITE SET gpu3d 1`.
 
+## Masked inks (INK_MASKED / INK_UNMASKED) with the stencil (2026-10-22)
+
+- A masked pixel is drawn only where the screen already holds `maskColor`. In a frame that uses masked inks the depth
+  test is on (GPU_ALWAYS) and the alpha test drops transparent texels; every batch clears the stencil under it, then a
+  colourless second pass sets it to 1 where the fragment equals the mask colour. The comparison runs in the combiner:
+  frag (0), frag again with its alpha kept in the combiner buffer (1), ADD_SIGNED colour + (1 - mask) - 0.5 (2),
+  DOT3_RGBA x4 (3), alpha = **red** of the result + (1 - frag alpha) (4); alpha test LESS 3.
+- Learned on the 2DS: DOT3_RGBA does **not** put its result in the alpha (take it from red with GPU_TEVOP_A_SRC_R).
+  Azahar does not reproduce the stencil here (nothing is ever marked): check masked inks on the console only.
+- Masked batches are drawn quad by quad (draw where 1, raise to 2, second pass lowers to 1 where the colour drawn is the
+  mask colour): within one draw call a later quad saw the stencil an earlier one had raised and drew nothing (the menu's
+  diorama: a masked rectangle first, the scene's sprites after it). A 2 means "drawn over".
+- Debug: `SITE SET depthmode` bit 3 paints the comparison (unblended), bit 7 its alpha as grey, bit 4 draws masked inks
+  as plain sprites, bit 5 adds a red masked rectangle over the screen (shows where the stencil ends at 1), bit 6 tries
+  the reverse alpha test.
+- Big sprites are chunked on a 128 grid but each chunk is cut to the sprite's frame (a 512x32 strip takes 128x32 chunks):
+  the menu's diorama no longer fills the sprite atlas (ATLAS FULL, 7 CPU frames a second -> none).
+
 ## Testing in Azahar (when the console is not at hand)
 
 - The build runs in the owner's Azahar (Flatpak): `Data.rsdk` and `RSDKv5U.3dsx` in the emulator's

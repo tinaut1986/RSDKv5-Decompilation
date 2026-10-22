@@ -700,7 +700,7 @@ static void HandleSession(int ctrl)
                 else if (!strncmp(path, "gpu3d", 5))
                     DevTools::swGpu3D = v != 0;
                 else if (!strncmp(path, "depthmode", 9))
-                    GpuRender::depthMode = (unsigned)v & 7;
+                    GpuRender::depthMode = (unsigned)v & 255;
                 else if (!strncmp(path, "gpurender", 9))
                     DevTools::swGpuRender = v != 0;
                 else if (!strncmp(path, "gpu", 3))
