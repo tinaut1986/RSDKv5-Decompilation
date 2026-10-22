@@ -39,6 +39,7 @@ struct Stats {
     unsigned quadRetries;  // frames rebuilt with rotozoom layers in software after running out of quads
     unsigned softLayers;   // layers drawn by the software into a texture (last frame)
     unsigned faces;        // polygons emitted (last frame)
+    unsigned rotoSoftRuns, rotoSoftQuads; // rotozoom layers sent to the software: too many runs / quads (total)
     unsigned rotoUs, rotoQuads; // rotozoom layers as tile runs: build time (us) and quads (last frame)
     unsigned eyesDropped;   // right eyes not drawn because the command buffer would not hold them (total)
     unsigned cmdBufPct;     // most of the GPU command buffer a frame has used (%), since boot

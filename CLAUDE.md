@@ -65,6 +65,8 @@ goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`).
 - `master` is the fork's GitHub default branch (SaturnSH2x2's history); we do not use it.
 - Releases/CI/version script are not set up yet: see PLAN (B0.3). `main`, `release/v0.1.0` and the open feature branches are on `origin` (pushed 2026-10-22).
 - Commit only when the owner asks; the owner asked for commits at the end of each long task.
+- **Issues** are enabled on `origin` (2026-10-22): pending work, bugs and the owner's requests go there (English, label
+  `bug`/`enhancement`, sections Seen / Likely cause / To try / To check, as in sm-3ds); docs keep the technical record.
 
 ## The console in the loop (dev-tools builds)
 

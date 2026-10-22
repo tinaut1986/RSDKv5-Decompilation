@@ -832,6 +832,10 @@ static void HandleSession(int ctrl)
                 else
                     Reply(s, "550 no %s in this scene", name);
             }
+            else if (!strcmp(sub, "REFUSED")) {
+                // The last command the GPU executor refused (SITE STATE's line is cut by the FTP line limit)
+                Reply(s, "200 %s | why %s | roto to software: runs %u quads %u, soft layers %u", GpuRender::LastRefusal(), sLastWhy ? sLastWhy : "-", GpuRender::GetStats().rotoSoftRuns, GpuRender::GetStats().rotoSoftQuads, GpuRender::GetStats().softLayers);
+            }
             else if (!strcmp(sub, "FREEZE")) {
                 // SITE FREEZE 1: the scene stops (no object updates) but every frame is still drawn, so the GPU and
                 // the CPU renderers can be compared on the same picture. FREEZE 0 resumes.

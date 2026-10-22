@@ -315,8 +315,19 @@ static void DumpCommands()
             fprintf(f, " %ld", (long)c.p[k]);
         if (c.type == CMD_LAYER) {
             const TileLayer *l = (const TileLayer *)(uintptr_t)c.p[0];
-            fprintf(f, " | layer %ux%u tiles, shift %u/%u", l->xsize, l->ysize, l->widthShift, l->heightShift);
+            fprintf(f, " | layer %ux%u tiles, shift %u/%u, parallax %ld, group %u", l->xsize, l->ysize, l->widthShift, l->heightShift,
+                    (long)l->parallaxFactor, c.group);
         }
+        if (c.type == CMD_SCENE3D) {
+            // per instance: model and the world matrix's translation (X, Y, Z: Z is the depth the projection divides by)
+            const GpuScene3D::Head *h = (const GpuScene3D::Head *)(sArena + c.arena);
+            const GpuScene3D::Inst *in = (const GpuScene3D::Inst *)(h + 1);
+            fprintf(f, " | group %u, %d instances:", c.group, (int)h->count);
+            for (int32 k = 0; k < h->count && k < 12; ++k)
+                fprintf(f, " m%d(%ld,%ld,%ld)", in[k].model, (long)in[k].world[3], (long)in[k].world[7], (long)in[k].world[11]);
+        }
+        else if (c.type != CMD_LAYER)
+            fprintf(f, " | group %u", c.group);
         fprintf(f, "\n");
     }
     fclose(f);

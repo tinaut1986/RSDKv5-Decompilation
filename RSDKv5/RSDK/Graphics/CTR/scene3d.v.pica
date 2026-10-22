@@ -13,6 +13,8 @@
 .fvec dif       ; diffuse colour (rgb)
 .fvec difs      ; 2^-diffuse intensity (rgb)
 .fvec spcs      ; specular scale 1 / (1024 * 2^specular intensity) (rgb), 0 unlit
+.fvec eye       ; stereoscopic 3D: (shift in pixels at the far end for this eye, Zc, lowest, highest): the screen x moves by
+                ; shift * clamp(1 - Zc / Z, lowest, highest); Zc (the player's depth) stays on the screen plane. 0: no 3D
 .constf k(0.0, 1.0, 255.0, 0.003921569)
 .alias zero   k.xxxx
 .alias one    k.yyyy
@@ -44,6 +46,16 @@
     mul r7.y, r6.yyyy, r4.yyyy
     mul r8.xy, r6.zwzw, r4.zzzz
     add r7.xy, r7.xyxy, r8.xyxy
+    ; stereo: x' += shift * clamp(1 - Zc / Z) * Z (x' is homogeneous: the projection divides by Z)
+    mov r9, eye
+    rcp r8.z, r4.zzzz
+    mul r8.z, r9.yyyy, r8.zzzz
+    add r8.z, one, -r8.zzzz
+    max r8.z, r9.zzzz, r8.zzzz
+    min r8.z, r9.wwww, r8.zzzz
+    mul r8.z, r9.xxxx, r8.zzzz
+    mul r8.z, r8.zzzz, r4.zzzz
+    add r7.x, r7.xxxx, r8.zzzz
     mov r7.z, zero
     mov r7.w, r4.zzzz
     dp4 outpos.x, projection[0], r7

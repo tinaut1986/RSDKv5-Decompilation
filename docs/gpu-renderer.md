@@ -185,6 +185,31 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Still CPU: INK TINT (the pause menu's grey: needs a copy of the frame into a texture), WATER LINE / HSCROLL LAYER split
   by the water line (seen by the owner in a later stage).
 
+## Session 3, later (2026-10-23): water line, scissor, stereo depth in the Special Stage
+
+- **Water line**: a sprite, a big (chunked) sprite or an HScroll layer whose lines use more than one palette bank is
+  emitted once per run of lines with one bank (`PerBankRun`, the command's clip cut to the run). A rotated sprite
+  across it is scissored per run.
+- **Scissor**: batches carry a scissor rectangle (`Batch::scissor`, table `sScissors`, `ScissorFor`); rotated
+  sprites and 3D scenes under a clip smaller than the screen are scissored instead of refused. The target is turned:
+  screen (x0, y0, x1, y1) -> `C3D_SetScissor(240 - y1, 400 - x1, 240 - y0, 400 - x0)` (both axes backwards; checked
+  with `SITE SET depthmode 1024`, which scissors everything to the top-left quarter).
+- **3D scenes**: MAX_DRAW3D 64 -> 256 (the second Special Stage draws up to ~60 scenes a frame; over 64 the frame
+  went to the CPU as "3D SCENE"); MAX_BATCHES 512. `SITE REFUSED` prints the last refused command (the STATE line is
+  cut by the FTP line limit) and how often rotozoom layers went to the software.
+- **Stereo depth in the Special Stage** (scene folder UFO*): 3D models shift per vertex in `scene3d.v.pica`
+  (uniform `eye`: shift * clamp(1 - Zc / Z, -0.5, 1), Zc = 41000, the player's Z); the floor gets a depth band per line
+  from the walk's step (the lines at y 200 on the screen plane, the horizon the farthest; a batch per band); the sky
+  layers are the farthest; the track's scaled sprites (rings, spheres) take Z = 0x1000000 / scale (same projection as
+  the models); an item box's wireframe cage (lines) takes the depth of its contents sprite, which is scaled
+  0x2000000 / Z (`UfoDepths`, a pass over the frame's commands). 2D batches shift by whole pixels per eye: a fraction
+  moved the 1-pixel floor runs' samples onto the next atlas cell (stray texels only in 3D).
+- **Soft-layer texture in VRAM**: in linear memory (240 KB free once the command buffer is 256 KB) it failed to
+  allocate and every rotozoom layer sent to the software was refused (ROTOZOOM LAYER, New 3DS). The second Special
+  Stage's floor goes over 6000 quads often and takes that path (issue #7).
+- Installs: the New 3DS (192.168.1.133) runs the dev build too; `./build_3ds.sh --install 192.168.1.133` works there
+  (it rewrites `.3ds_ftp_ip`: set it back to the 2DS).
+
 ## 3D scenes as GPU model instances (perf/special-stage, 2026-10-22: works, off by default until merged)
 
 - Why: in the Special Stage the CPU spends ~30 ms a frame on the engine's 3D (vertex transforms in AddModelToScene,
