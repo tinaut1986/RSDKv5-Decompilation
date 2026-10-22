@@ -33,6 +33,25 @@ Oil Ocean 1 is 60 fps (tile layers 5 ms of a 6 ms draw) until Sonic falls into t
 draw 22-122 ms: `Draw3DScene` 12-84 ms, `DrawFace` 6-42 ms, tile layers 8-22 ms. Sprites cost 0.2-0.4 ms.
 So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** (faces + 3D scene), sprites last.
 
+### GPU findings (2026-10-22, Old 2DS)
+
+- **GPU presentation works** (`C3DPresent`, menu PRESENT / `SITE GPU 1`, off at boot): the software picture is copied to a
+  512x256 linear staging buffer, tiled into a VRAM texture by the display-transfer engine and drawn as one quad. Needed:
+  staging in *linear* memory (the CPU cannot write VRAM from an installed title: crash in memcpy), a 512-wide staging
+  buffer (equal transfer dimensions), V from 1 (memory row 0) down to 1 - 240/256. Cost today: copy ~1 ms + frame ~4 ms,
+  slower than the CPU transpose (~3 ms), so it stays off: it is infrastructure for the GPU renderer, the bottom screen and stereo.
+- **Texture memory**: a stage keeps 31-37 sheets, **6.0-6.7 MB at 8 bit (12-13 MB at 16 bit)**; Special Stage 3.2 MB. VRAM is 6 MB,
+  so sheets cannot all be resident: sprites need an on-demand atlas of frames (as the Zelda renderer does), only the tile sheet
+  (16x16384, 256 KB at 8 bit / 512 KB at 16 bit) can stay whole.
+- **Palettes**: every pixel goes through `fullPalette[lineBank][index]`, the bank chosen per screen line (`gfxLineBuffer`, water), and
+  palette entries are mutated immediately by game code (cycles, fades), also while drawing. A deferred (GPU) renderer has to
+  record palette versions with the draw commands.
+- **Design proposed for R1**: record the draw calls of a frame as a command list (with the palette version each used), then
+  execute it: on the GPU when every command is supported, otherwise replayed through the software functions in order (a frame
+  fallback, like the Zelda renderer). Supported first: tile layers, ordinary sprites, rectangles/fills; the rest falls back.
+- Linear memory is the scarce pool (153 KB free with C3D up): `SCREEN_XMAX` (1280) x 4 screens of static framebuffer can shrink
+  to 400 on the 3DS to give the linear heap room.
+
 ### R1 GPU renderer
 - [ ] R1.1 Merge `feat/render-backend`; confirm identical output to `3ds-main`.
 - [ ] R1.2 `C3DBackend` skeleton on `RenderBackend`: sprite sheets as RGBA5551 textures, per-palette cache with dirty tracking (see `../zelda-tmc-3ds` `port_ppu_gpu_3ds.c`), everything else falls back to `SoftwareBackend`.

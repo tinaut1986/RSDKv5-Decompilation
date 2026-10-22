@@ -29,6 +29,9 @@ enum Stage {
     STAGE_FACES,   // DrawFace / DrawBlendedFace
     STAGE_3D,      // Draw3DScene
     STAGE_SHAPES,  // lines, rectangles, circles, single tiles
+    STAGE_PCOPY,   // GPU presentation: copy of the picture into the staging buffer
+    STAGE_PXFER,   // ... display transfer into the texture
+    STAGE_PFRAME,  // ... citro3d frame (wait for the previous one, draw, queue)
     STAGE_COUNT
 };
 

@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "present_shbin.h"
+#include "RSDK/Dev/CTR/DevTools.hpp"
 
 using namespace RSDK;
 
@@ -108,15 +109,22 @@ void C3DPresent::Present(const unsigned short *src, int pitch)
         return;
     // The staging buffer has the texture's own size (512x256), so the display transfer is a plain tiling
     // with equal input and output dimensions; the picture is copied into its top-left corner.
-    unsigned short *dst = (unsigned short *)sStaging;
-    for (int y = 0; y < SCREEN_H; ++y)
-        memcpy(dst + y * TEX_W, src + y * pitch, SCREEN_W * 2);
-    GSPGPU_FlushDataCache(sStaging, TEX_W * TEX_H * 2);
+    {
+        DEV_STAGE(STAGE_PCOPY);
+        unsigned short *dst = (unsigned short *)sStaging;
+        for (int y = 0; y < SCREEN_H; ++y)
+            memcpy(dst + y * TEX_W, src + y * pitch, SCREEN_W * 2);
+        GSPGPU_FlushDataCache(sStaging, TEX_W * TEX_H * 2);
+    }
 
+    {
+    DEV_STAGE(STAGE_PXFER);
     C3D_SyncDisplayTransfer((u32 *)sStaging, GX_BUFFER_DIM(TEX_W, TEX_H), (u32 *)sTex.data, GX_BUFFER_DIM(TEX_W, TEX_H),
                             GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
                                 GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+    }
 
+    DEV_STAGE(STAGE_PFRAME);
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
     C3D_FrameDrawOn(sTarget);
     C3D_BindProgram(&sProgram);

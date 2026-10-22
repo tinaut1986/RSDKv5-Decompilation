@@ -670,11 +670,27 @@ static void HandleSession(int ctrl)
                 DevTools::injectKeys = path ? (uint32)strtoul(path, NULL, 16) : 0;
                 Reply(s, "200 keys %08lx", (unsigned long)DevTools::injectKeys);
             }
+            else if (!strcmp(sub, "SURFACES")) {
+                // Sprite sheets and tile sheet in memory: how much GPU texture memory a scene would need.
+                char list[FTP_LINE_MAX - 8];
+                unsigned n = 0, total = 0, count = 0;
+                for (int i = 0; i < SURFACE_COUNT; ++i) {
+                    const GFXSurface &g = gfxSurface[i];
+                    if (g.scope == SCOPE_NONE || !g.pixels)
+                        continue;
+                    ++count;
+                    total += (unsigned)g.width * g.height;
+                    if (n + 24 < sizeof(list))
+                        n += (unsigned)snprintf(list + n, sizeof(list) - n, "%dx%d ", (int)g.width, (int)g.height);
+                }
+                list[n] = 0;
+                Reply(s, "200 %u sheets, %u KB at 8 bit (%u KB at 16 bit): %s", count, total >> 10, (total * 2) >> 10, list);
+            }
             else if (!strcmp(sub, "STATE")) {
-                Reply(s, "200 category %d scene %d state %d fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f",
+                Reply(s, "200 category %d scene %d state %d fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f",
                       (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastFps, sLastFrameMs, sLastStageMs[0],
                       sLastStageMs[1], sLastStageMs[2], sLastStageMs[3], sLastStageMs[4], sLastStageMs[5], sLastStageMs[6], sLastStageMs[7],
-                      sLastStageMs[8]);
+                      sLastStageMs[8], sLastStageMs[9], sLastStageMs[10], sLastStageMs[11]);
             }
             else
                 Reply(s, "504 Unknown SITE command.");
@@ -757,7 +773,7 @@ static bool StartServer()
 
 // ---------------------------------------------------------------- perf timing
 
-static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes" };
+static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes", "pcopy", "pxfer", "pframe" };
 static const char *kDir                              = "sdmc:/3ds/Sonic Mania 3DS/debug";
 
 static uint64 sStageTicks[DevTools::STAGE_COUNT];
