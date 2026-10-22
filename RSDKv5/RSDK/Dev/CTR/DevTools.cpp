@@ -866,16 +866,19 @@ static const Cell kCells[] = {
     { "FTP SERVER", NULL, ValFtp },
     { "LOG MARK", TapMark, ValMark },
 };
-enum { CELL_COUNT = sizeof(kCells) / sizeof(kCells[0]), CELL_FIRST_ROW = 8, CELL_ROWS = 4 };
+enum { CELL_COUNT = sizeof(kCells) / sizeof(kCells[0]), CELL_FIRST_ROW = 8, CELL_ROWS = 3 };
+// The console has 30 rows: printing below the last one scrolls everything (that made the whole menu vanish
+// once the cells outgrew the screen), so the layout must fit: cells, then the notice row.
+static_assert(CELL_FIRST_ROW + CELL_COUNT * CELL_ROWS <= 29, "the menu does not fit the 30-row console");
 
 static void PrintRow(int row, const char *text)
 {
     // The console is slow to paint: only rows whose text changed are written.
-    static char shown[32][41];
-    if (row < 0 || row >= 32)
-        return;
+    static char shown[30][41];
+    if (row < 0 || row >= 30)
+        return; // never print on or below the console's last row: it scrolls
     char padded[41];
-    snprintf(padded, sizeof(padded), "%-40.40s", text);
+    snprintf(padded, sizeof(padded), "%-39.39s", text); // 39: the 40th column would wrap, and wrapping on the last row scrolls
     if (!strcmp(shown[row], padded))
         return;
     memcpy(shown[row], padded, sizeof(padded));
@@ -918,10 +921,10 @@ static void DrawStatus()
             u64 now = osGetTime(), at = sRelaunchAt;
             snprintf(line + strlen(line), sizeof(line) - strlen(line), " %us", (unsigned)(now >= at ? 0 : (at - now + 999) / 1000));
         }
-        PrintRow(CELL_FIRST_ROW + CELL_COUNT * CELL_ROWS, line);
+        PrintRow(29, line);
     }
     else
-        PrintRow(CELL_FIRST_ROW + CELL_COUNT * CELL_ROWS, "");
+        PrintRow(29, "");
     fflush(stdout);
     sMenuDirty = false;
 }
@@ -933,7 +936,7 @@ static void PollTouch()
         return;
     touchPosition t;
     hidTouchRead(&t);
-    // Each cell is a block of four text rows; only its first two react, so a stray touch between two
+    // Each cell is a block of three text rows; only its first two react, so a stray touch between two
     // cells does nothing.
     const int row = t.py / 8 - CELL_FIRST_ROW;
     if (row >= 0 && row / CELL_ROWS < CELL_COUNT && row % CELL_ROWS < 2 && kCells[row / CELL_ROWS].tap) {
