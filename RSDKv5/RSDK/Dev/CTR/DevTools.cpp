@@ -702,6 +702,7 @@ static uint64 sFrameTicksSum, sFrameTicksMax, sLastFrameTick, sSecondStart;
 static unsigned sFrames;
 static FILE *sCsv;
 static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
+static unsigned sLastSkipped;
 
 DevTools::StageScope::StageScope(Stage s) : stage(s), start(svcGetSystemTick()) {}
 DevTools::StageScope::~StageScope() { StageAdd(stage, svcGetSystemTick() - start); }
@@ -749,33 +750,116 @@ static void OpenCsv()
     }
 }
 
+// ---------------------------------------------------------------- bottom-screen menu
+//
+// The bottom screen is the libctru text console (40x30). Each row below the header is a "cell":
+// tap it to flip or cycle its value, as in the DEBUG tab of the owner's other ports.
+
+bool DevTools::swFrameSkip = true;
+int DevTools::swMaxSkip    = 2;
+bool DevTools::swDraw      = true;
+bool DevTools::swFlipCopy  = true;
+unsigned DevTools::skipCount = 0;
+
+static unsigned sMarks;
+static bool sMenuDirty = true;
+
+struct Cell {
+    const char *label;
+    void (*tap)();
+    void (*value)(char *out, unsigned cap);
+};
+
+static void ValFrameSkip(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swFrameSkip ? "ON" : "OFF"); }
+static void TapFrameSkip() { DevTools::swFrameSkip = !DevTools::swFrameSkip; }
+static void ValMaxSkip(char *o, unsigned c) { snprintf(o, c, "%d", DevTools::swMaxSkip); }
+static void TapMaxSkip() { DevTools::swMaxSkip = DevTools::swMaxSkip % 4 + 1; }
+static void ValDraw(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swDraw ? "ON" : "OFF (logic only)"); }
+static void TapDraw() { DevTools::swDraw = !DevTools::swDraw; }
+static void ValFlip(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swFlipCopy ? "ON" : "OFF (no copy)"); }
+static void TapFlip() { DevTools::swFlipCopy = !DevTools::swFlipCopy; }
+static void ValMark(char *o, unsigned c) { snprintf(o, c, "%u", sMarks); }
+static void TapMark()
+{
+    ++sMarks;
+    DevTools::Log("--- MARK %u --- scene %d, %.1f fps", sMarks, (int)sceneInfo.listPos, sLastFps);
+    if (sCsv) {
+        fprintf(sCsv, "# MARK %u\n", sMarks);
+        fflush(sCsv);
+    }
+}
+static void ValFtp(char *o, unsigned c) { snprintf(o, c, "%s", sStatus); }
+static void ValNone(char *, unsigned) {}
+
+static const Cell kCells[] = {
+    { "FRAME SKIP", TapFrameSkip, ValFrameSkip },
+    { "MAX SKIPPED IN A ROW", TapMaxSkip, ValMaxSkip },
+    { "DRAW LISTS", TapDraw, ValDraw },
+    { "FLIP COPY", TapFlip, ValFlip },
+    { "LOG MARK", TapMark, ValMark },
+    { "FTP SERVER", NULL, ValFtp },
+};
+enum { CELL_COUNT = sizeof(kCells) / sizeof(kCells[0]), CELL_FIRST_ROW = 10 };
+
+static void PrintRow(int row, const char *text)
+{
+    printf("\x1b[%d;1H%-40.40s", row + 1, text);
+}
+
 static void DrawStatus()
 {
-    printf("\x1b[2J\x1b[1;1H");
-    printf("SONIC MANIA 3DS  dev tools\n\n");
-    printf("FTP  %s\n", sStatus);
-    {
-        extern u32 __ctru_heap_size;
-        struct mallinfo mi = mallinfo();
-        printf("heap %u/%u KB  linear free %u KB\n\n", (unsigned)(mi.uordblks >> 10), (unsigned)(__ctru_heap_size >> 10),
-               (unsigned)(linearSpaceFree() >> 10));
+    char line[96], val[48];
+    PrintRow(0, "SONIC MANIA 3DS  dev tools");
+    snprintf(line, sizeof(line), "%.1f fps  frame %.1f ms", sLastFps, sLastFrameMs);
+    PrintRow(2, line);
+    for (int i = 0; i < DevTools::STAGE_COUNT; ++i) {
+        snprintf(line, sizeof(line), "  %-7s %5.1f ms", kStageName[i], sLastStageMs[i]);
+        PrintRow(3 + i, line);
     }
-    printf("%.1f fps   frame %.1f ms\n", sLastFps, sLastFrameMs);
-    for (int i = 0; i < DevTools::STAGE_COUNT; ++i)
-        printf("  %-7s %5.1f ms\n", kStageName[i], sLastStageMs[i]);
+    extern u32 __ctru_heap_size;
+    struct mallinfo mi = mallinfo();
+    snprintf(line, sizeof(line), "heap %u/%u KB  lin free %u KB", (unsigned)(mi.uordblks >> 10), (unsigned)(__ctru_heap_size >> 10),
+             (unsigned)(linearSpaceFree() >> 10));
+    PrintRow(6, line);
+    snprintf(line, sizeof(line), "scene %d  skipped passes/s %u", (int)sceneInfo.listPos, sLastSkipped);
+    PrintRow(7, line);
+    for (int i = 0; i < CELL_COUNT; ++i) {
+        val[0] = 0;
+        kCells[i].value(val, sizeof(val));
+        snprintf(line, sizeof(line), "[%s%s] %-21.21s %s", kCells[i].tap ? "*" : " ", "", kCells[i].label, val);
+        PrintRow(CELL_FIRST_ROW + i, line);
+    }
+    PrintRow(CELL_FIRST_ROW + CELL_COUNT + 1, "Tap a [*] row to change it.");
     if (sNotice) {
-        printf("\n%s", sNotice);
+        snprintf(line, sizeof(line), "%s", sNotice);
         if (sPhase == 1 && sRecvTotal)
-            printf(" %u%%", (unsigned)(sRecvDone * 100 / sRecvTotal));
+            snprintf(line + strlen(line), sizeof(line) - strlen(line), " %u%%", (unsigned)(sRecvDone * 100 / sRecvTotal));
         else if (sPhase == 2 && sCiaTotal)
-            printf(" %u%%", (unsigned)(sCiaDone * 100 / sCiaTotal));
+            snprintf(line + strlen(line), sizeof(line) - strlen(line), " %u%%", (unsigned)(sCiaDone * 100 / sCiaTotal));
         else if (sPhase == 3) {
             u64 now = osGetTime(), at = sRelaunchAt;
-            printf(" %us", (unsigned)(now >= at ? 0 : (at - now + 999) / 1000));
+            snprintf(line + strlen(line), sizeof(line) - strlen(line), " %us", (unsigned)(now >= at ? 0 : (at - now + 999) / 1000));
         }
-        printf("\n");
+        PrintRow(CELL_FIRST_ROW + CELL_COUNT + 3, line);
     }
+    else
+        PrintRow(CELL_FIRST_ROW + CELL_COUNT + 3, "");
     fflush(stdout);
+    sMenuDirty = false;
+}
+
+// Taps on the console rows (8 px each) act on the cell under the finger.
+static void PollTouch()
+{
+    if (!(hidKeysDown() & KEY_TOUCH))
+        return;
+    touchPosition t;
+    hidTouchRead(&t);
+    const int row = t.py / 8 - CELL_FIRST_ROW;
+    if (row >= 0 && row < CELL_COUNT && kCells[row].tap) {
+        kCells[row].tap();
+        sMenuDirty = true;
+    }
 }
 
 void DevTools::Init()
@@ -810,13 +894,16 @@ bool DevTools::FrameEnd()
             fflush(sCsv);
         }
         DrawStatus();
+        sLastSkipped = skipCount;
+        skipCount    = 0;
         memset(sStageTicks, 0, sizeof(sStageTicks));
         sFrameTicksSum = sFrameTicksMax = 0;
         sFrames                         = 0;
         sSecondStart                    = now;
     }
-    else if (sPhase == 3 && (sFrames & 15) == 0)
+    else if ((sPhase == 3 && (sFrames & 15) == 0) || sMenuDirty)
         DrawStatus();
+    PollTouch();
 
     if (sPhase == 3 && osGetTime() >= sRelaunchAt) {
         // aptExit() starts this title again once the process has exited (as HOME -> close).

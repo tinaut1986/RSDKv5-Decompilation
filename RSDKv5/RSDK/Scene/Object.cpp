@@ -776,7 +776,7 @@ void RSDK::ProcessObjectDrawLists()
 {
     DEV_STAGE(STAGE_DRAW);
 #if RETRO_PLATFORM == RETRO_3DS
-    if (RenderDevice::CheckForFrameSkip())
+    if (RenderDevice::CheckForFrameSkip() || !DEV_SW_DRAW)
       return;
 #endif
 

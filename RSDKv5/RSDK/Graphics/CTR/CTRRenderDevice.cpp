@@ -80,7 +80,8 @@ void RenderDevice::FlipScreen()
         // image/video buffer, break
         break;
       case 1:
-        TransposeToFramebuffer(src, screens[0].pitch, dst);
+        if (DEV_SW_FLIPCOPY)
+          TransposeToFramebuffer(src, screens[0].pitch, dst);
         break;
 
       // the separate screens used for competition mode will likely 
@@ -170,8 +171,10 @@ void RenderDevice::UpdateFPSCap()
     sSkipRun = 0;
   }
   const u64 late = now > sNextTick ? now - sNextTick : 0;
-  sSkipThisPass = late > TICKS_PER_FRAME && sSkipRun < 2;
+  sSkipThisPass = DEV_SW_FRAMESKIP && late > TICKS_PER_FRAME && sSkipRun < DEV_SW_MAXSKIP;
   sSkipRun = sSkipThisPass ? sSkipRun + 1 : 0;
+  if (sSkipThisPass)
+    DEV_COUNT_SKIP();
   sNextTick += TICKS_PER_FRAME;
 }
 
