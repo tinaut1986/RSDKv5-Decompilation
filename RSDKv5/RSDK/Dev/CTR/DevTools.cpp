@@ -729,7 +729,13 @@ static void DrawStatus()
 {
     printf("\x1b[2J\x1b[1;1H");
     printf("SONIC MANIA 3DS  dev tools\n\n");
-    printf("FTP  %s\n\n", sStatus);
+    printf("FTP  %s\n", sStatus);
+    {
+        extern u32 __ctru_heap_size;
+        struct mallinfo mi = mallinfo();
+        printf("heap %u/%u KB  linear free %u KB\n\n", (unsigned)(mi.uordblks >> 10), (unsigned)(__ctru_heap_size >> 10),
+               (unsigned)(linearSpaceFree() >> 10));
+    }
     printf("%.1f fps   frame %.1f ms\n", sLastFps, sLastFrameMs);
     for (int i = 0; i < DevTools::STAGE_COUNT; ++i)
         printf("  %-7s %5.1f ms\n", kStageName[i], sLastStageMs[i]);
