@@ -300,6 +300,7 @@ void RSDK::LoadSceneAssets()
 
     if (screens[0].size.y > 0)
         memset(gfxLineBuffer, 0, screens[0].size.y * sizeof(uint8));
+    GPUFRAME_LINEBUF_CHANGED();
 
     memset(tileLayers, 0, LAYER_COUNT * sizeof(TileLayer));
 

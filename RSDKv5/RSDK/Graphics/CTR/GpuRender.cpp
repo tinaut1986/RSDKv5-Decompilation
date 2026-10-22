@@ -5,6 +5,7 @@
 
 #include <3ds.h>
 #include <citro3d.h>
+#include <math.h>
 #include <string.h>
 
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
@@ -35,16 +36,20 @@ enum {
     SPR_ATLAS_H  = 512,
     SPR_SLOTS    = 4096,
     SPR_MAX_PIXELS = 256 * 256,
-    MAX_QUADS    = 4096,
+    MAX_QUADS    = 8192,
     MAX_BATCHES  = 64,
     MAX_PENDING  = 2048,
     BANKS        = PALETTE_BANK_COUNT,
 };
 
+// 12 bytes: position in quarter pixels and texel coordinates as 16-bit integers (gpu.v.pica scales them), so the
+// linear heap holds twice the quads it held with floats (the Special Stage draws thousands of faces).
 struct Vtx {
-    float x, y, u, v;
+    int16 x, y, u, v;
     uint8 r, g, b, a;
 };
+
+inline int16 Quarter(float p) { return (int16)(p >= 0 ? p * 4.0f + 0.5f : p * 4.0f - 0.5f); }
 
 enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT };
 
@@ -85,7 +90,7 @@ SoftJob sSoftJobs[SOFT_JOBS];
 unsigned sSoftJobCount, sSoftRows;
 DVLB_s *sDvlb;
 shaderProgram_s sProgram;
-int sProjLoc;
+int sProjLoc, sUvLoc;
 C3D_AttrInfo sAttr;
 C3D_BufInfo sBufInfo;
 Vtx *sVbo[2];
@@ -245,9 +250,10 @@ bool Setup()
     shaderProgramInit(&sProgram);
     shaderProgramSetVsh(&sProgram, &sDvlb->DVLE[0]);
     sProjLoc = shaderInstanceGetUniformLocation(sProgram.vertexShader, "projection");
+    sUvLoc   = shaderInstanceGetUniformLocation(sProgram.vertexShader, "uvscale");
 
     AttrInfo_Init(&sAttr);
-    AttrInfo_AddLoader(&sAttr, 0, GPU_FLOAT, 4);         // x, y, u, v
+    AttrInfo_AddLoader(&sAttr, 0, GPU_SHORT, 4);         // x, y (quarter pixels), u, v (texels)
     AttrInfo_AddLoader(&sAttr, 1, GPU_UNSIGNED_BYTE, 4); // r, g, b, a
 
     ResetCaches();
@@ -505,15 +511,13 @@ bool AddQuad(uint8 tex, uint8 blend, float x0, float y0, float x1, float y1, flo
     ++sBatches[sBatchCount - 1].count;
     Vtx *v = &sVbo[sCur][sQuadCount * 4];
     ++sQuadCount;
-    // The atlas sizes are powers of two known here: no division per quad (the ARM11's VFP divides slowly).
-    const float iu = atlasW == 512 ? 1.0f / 512 : atlasW == 1024 ? 1.0f / 1024 : 1.0f / atlasW;
-    const float iv = atlasH == 512 ? 1.0f / 512 : atlasH == 256 ? 1.0f / 256 : 1.0f / atlasH;
-    // Texels are rows from the top; the PICA samples memory row 0 at v = 1.
-    const float U0 = u0 * iu, U1 = u1 * iu, V0 = 1.0f - v0 * iv, V1 = 1.0f - v1 * iv;
-    v[0] = { x0, y0, U0, V0, r, g, b, a };
-    v[1] = { x1, y0, U1, V0, r, g, b, a };
-    v[2] = { x1, y1, U1, V1, r, g, b, a };
-    v[3] = { x0, y1, U0, V1, r, g, b, a };
+    (void)atlasW, (void)atlasH; // the shader's uvscale, set per texture, normalises the texel coordinates
+    const int16 X0 = Quarter(x0), X1 = Quarter(x1), Y0 = Quarter(y0), Y1 = Quarter(y1);
+    const int16 U0 = (int16)u0, U1 = (int16)u1, V0 = (int16)v0, V1 = (int16)v1;
+    v[0] = { X0, Y0, U0, V0, r, g, b, a };
+    v[1] = { X1, Y0, U1, V0, r, g, b, a };
+    v[2] = { X1, Y1, U1, V1, r, g, b, a };
+    v[3] = { X0, Y1, U0, V1, r, g, b, a };
     return true;
 }
 
@@ -523,10 +527,9 @@ bool AddQuadFree(uint8 tex, uint8 blend, const float *px, const float *py, const
 {
     if (!AddQuad(tex, blend, 0, 0, 0, 0, 0, 0, 0, 0, atlasW, atlasH, r, g, b, a))
         return false;
-    Vtx *v         = &sVbo[sCur][(sQuadCount - 1) * 4];
-    const float iu = 1.0f / atlasW, iv = 1.0f / atlasH;
+    Vtx *v = &sVbo[sCur][(sQuadCount - 1) * 4];
     for (int i = 0; i < 4; ++i)
-        v[i] = { px[i], py[i], tu[i] * iu, 1.0f - tv[i] * iv, r, g, b, a };
+        v[i] = { Quarter(px[i]), Quarter(py[i]), (int16)tu[i], (int16)tv[i], r, g, b, a };
     return true;
 }
 
@@ -787,37 +790,103 @@ bool EmitPolygon(const Cmd &c, const Vector2 *v, int32 n, const uint32 *colors, 
         return false;
     if (skip)
         return true;
-    float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
+    ++sStats.faces;
+    // Integers throughout: 16.16 screen coordinates -> quarter pixels (rounded), bounds in 16.16.
+    int32 minX = 0x7FFFFFFF, maxX = -0x7FFFFFFF, minY = 0x7FFFFFFF, maxY = -0x7FFFFFFF;
     for (int32 i = 0; i < n; ++i) {
-        const float x = v[i].x / 65536.0f, y = v[i].y / 65536.0f;
-        minX = x < minX ? x : minX, maxX = x > maxX ? x : maxX;
-        minY = y < minY ? y : minY, maxY = y > maxY ? y : maxY;
+        minX = v[i].x < minX ? v[i].x : minX, maxX = v[i].x > maxX ? v[i].x : maxX;
+        minY = v[i].y < minY ? v[i].y : minY, maxY = v[i].y > maxY ? v[i].y : maxY;
     }
-    if (maxX <= c.clip[0] || minX >= c.clip[2] || maxY <= c.clip[1] || minY >= c.clip[3])
+    const int32 cx1 = c.clip[0] << 16, cy1 = c.clip[1] << 16, cx2 = c.clip[2] << 16, cy2 = c.clip[3] << 16;
+    if (maxX <= cx1 || minX >= cx2 || maxY <= cy1 || minY >= cy2)
         return true;
-    if ((minX < c.clip[0] && c.clip[0] > 0) || (minY < c.clip[1] && c.clip[1] > 0) || (maxX > c.clip[2] && c.clip[2] < screens[0].size.x)
-        || (maxY > c.clip[3] && c.clip[3] < screens[0].size.y))
+    if ((minX < cx1 && c.clip[0] > 0) || (minY < cy1 && c.clip[1] > 0) || (maxX > cx2 && c.clip[2] < screens[0].size.x)
+        || (maxY > cy2 && c.clip[3] < screens[0].size.y))
         return Refuse(GpuRender::REASON_UNSUPPORTED, colors ? CMD_BLENDED_FACE : CMD_FACE);
 
-    uint8 vr[64], vg[64], vb[64];
-    for (int32 i = 0; i < n; ++i) {
-        if (colors)
-            Widen565(colors[i], &vr[i], &vg[i], &vb[i]);
-        else
-            vr[i] = r, vg[i] = g, vb[i] = b;
-    }
     for (int32 i = 1; i + 1 < n; i += 2) {
         // Two triangles per quad where the fan allows it: (0, i, i + 1, i + 2), else (0, i, i + 1, i + 1).
         const int32 k[4] = { 0, i, i + 1, i + 2 < n ? i + 2 : i + 1 };
-        float px[4], py[4];
-        const float tu[4] = { 4, 4, 4, 4 }, tv[4] = { 4, 4, 4, 4 };
-        for (int j = 0; j < 4; ++j)
-            px[j] = v[k[j]].x / 65536.0f, py[j] = v[k[j]].y / 65536.0f;
-        if (!AddQuadFree(TEX_SPRITE, blend, px, py, tu, tv, SPR_ATLAS_W, SPR_ATLAS_H, vr[0], vg[0], vb[0], (uint8)alpha))
+        if (!AddQuad(TEX_SPRITE, blend, 0, 0, 0, 0, 0, 0, 0, 0, SPR_ATLAS_W, SPR_ATLAS_H, r, g, b, (uint8)alpha))
             return Refuse(GpuRender::REASON_QUAD_LIMIT);
         Vtx *q = &sVbo[sCur][(sQuadCount - 1) * 4];
-        for (int j = 0; j < 4; ++j)
-            q[j].r = vr[k[j]], q[j].g = vg[k[j]], q[j].b = vb[k[j]];
+        for (int j = 0; j < 4; ++j) {
+            const Vector2 &p = v[k[j]];
+            // Quarter pixels in 16 bits: +-8191 px, far beyond the screen; a wilder vertex is clamped, not wrapped.
+            const int32 qx = (p.x + 0x2000) >> 14, qy = (p.y + 0x2000) >> 14;
+            q[j].x = (int16)(qx < -32000 ? -32000 : qx > 32000 ? 32000 : qx);
+            q[j].y = (int16)(qy < -32000 ? -32000 : qy > 32000 ? 32000 : qy);
+            q[j].u = 4, q[j].v = 4; // the solid block of the sprite atlas
+            if (colors)
+                Widen565(colors[k[j]], &q[j].r, &q[j].g, &q[j].b);
+        }
+    }
+    return true;
+}
+
+// Unit circle in 64 steps, for circles and rings.
+struct CircleTable {
+    float x[65], y[65];
+    CircleTable()
+    {
+        for (int i = 0; i <= 64; ++i)
+            x[i] = cosf(i * 6.28318531f / 64), y[i] = sinf(i * 6.28318531f / 64);
+    }
+};
+const CircleTable kCircle;
+
+// One quad of four free corners in screen pixels on the solid block, flat colour.
+bool AddSolidQuad(uint8 blend, const float *px, const float *py, uint8 r, uint8 g, uint8 b, uint8 a)
+{
+    if (!AddQuad(TEX_SPRITE, blend, 0, 0, 0, 0, 0, 0, 0, 0, SPR_ATLAS_W, SPR_ATLAS_H, r, g, b, a))
+        return false;
+    Vtx *q = &sVbo[sCur][(sQuadCount - 1) * 4];
+    for (int j = 0; j < 4; ++j)
+        q[j].x = Quarter(px[j]), q[j].y = Quarter(py[j]), q[j].u = 4, q[j].v = 4;
+    return true;
+}
+
+// DrawCircle (filled, inner radius 0) and DrawCircleOutline (a ring) as polygons of 16-64 steps.
+bool EmitRing(const Cmd &c, int32 x, int32 y, int32 inner, int32 outer, uint32 color, int32 alpha, int32 ink, bool screenRelative)
+{
+    if (outer <= 0 || inner >= outer)
+        return true;
+    uint8 blend;
+    bool skip;
+    if (!SpriteInk(ink, &alpha, &blend, &skip))
+        return false;
+    if (skip)
+        return true;
+    if (!screenRelative) {
+        x = FROM_FIXED(x) - c.pos[0];
+        y = FROM_FIXED(y) - c.pos[1];
+    }
+    if (x + outer < c.clip[0] || x - outer >= c.clip[2] || y + outer < c.clip[1] || y - outer >= c.clip[3])
+        return true;
+    if ((x - outer < c.clip[0] && c.clip[0] > 0) || (y - outer < c.clip[1] && c.clip[1] > 0) || (x + outer >= c.clip[2] && c.clip[2] < screens[0].size.x)
+        || (y + outer >= c.clip[3] && c.clip[3] < screens[0].size.y))
+        return Refuse(GpuRender::REASON_UNSUPPORTED, inner > 0 ? CMD_CIRCLE_OUTLINE : CMD_CIRCLE);
+    uint8 r, g, b;
+    Widen565(color, &r, &g, &b);
+    const int step = outer >= 48 ? 1 : outer >= 16 ? 2 : 4; // 64, 32 or 16 segments
+    const float cx = x + 0.5f, cy = y + 0.5f, ro = outer + 0.5f, ri = inner > 0 ? inner - 0.5f : 0.0f;
+    for (int i = 0; i < 64; i += step) {
+        const int k = i + step;
+        float px[4], py[4];
+        if (ri <= 0) { // a wedge of the disc: centre, two rim points (the last corner repeated)
+            px[0] = cx, py[0] = cy;
+            px[1] = cx + ro * kCircle.x[i], py[1] = cy + ro * kCircle.y[i];
+            px[2] = cx + ro * kCircle.x[k], py[2] = cy + ro * kCircle.y[k];
+            px[3] = px[2], py[3] = py[2];
+        }
+        else {
+            px[0] = cx + ro * kCircle.x[i], py[0] = cy + ro * kCircle.y[i];
+            px[1] = cx + ro * kCircle.x[k], py[1] = cy + ro * kCircle.y[k];
+            px[2] = cx + ri * kCircle.x[k], py[2] = cy + ri * kCircle.y[k];
+            px[3] = cx + ri * kCircle.x[i], py[3] = cy + ri * kCircle.y[i];
+        }
+        if (!AddSolidQuad(blend, px, py, r, g, b, (uint8)alpha))
+            return Refuse(GpuRender::REASON_QUAD_LIMIT);
     }
     return true;
 }
@@ -827,6 +896,30 @@ bool EmitFace(const Cmd &c, const uint8 *arena)
     uint8 r, g, b;
     Widen565(((uint32)c.p[1] << 16) | ((uint32)c.p[2] << 8) | (uint32)c.p[3], &r, &g, &b);
     return EmitPolygon(c, (const Vector2 *)arena, c.p[0], NULL, r, g, b, c.p[5], c.p[4]);
+}
+
+bool EmitFaces(const Cmd &c, const uint8 *at)
+{
+    for (int32 f = 0; f < c.p[0]; ++f) {
+        const int32 n = ((const int32 *)at)[0];
+        uint8 r, g, b;
+        Widen565((uint32)((const int32 *)at)[1], &r, &g, &b);
+        if (!EmitPolygon(c, (const Vector2 *)(at + 8), n, NULL, r, g, b, c.p[2], c.p[1]))
+            return false;
+        at += 8 + n * sizeof(Vector2);
+    }
+    return true;
+}
+
+bool EmitBlendedFaces(const Cmd &c, const uint8 *at)
+{
+    for (int32 f = 0; f < c.p[0]; ++f) {
+        const int32 n = *(const int32 *)at;
+        if (!EmitPolygon(c, (const Vector2 *)(at + 4), n, (const uint32 *)(at + 4 + n * sizeof(Vector2)), 0, 0, 0, c.p[2], c.p[1]))
+            return false;
+        at += 4 + n * (sizeof(Vector2) + sizeof(uint32));
+    }
+    return true;
 }
 
 bool EmitBlendedFace(const Cmd &c, const uint8 *arena)
@@ -914,7 +1007,7 @@ bool EmitRect(const Cmd &c)
 
 bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int kind)
 {
-    if (!sSoftData)
+    if (!sSoftData || !C3DPresent::Staging())
         return Refuse(GpuRender::REASON_UNSUPPORTED, 100 + kind);
     const int x1 = c.clip[0] < 0 ? 0 : c.clip[0], x2 = c.clip[2] > screens[0].pitch ? screens[0].pitch : c.clip[2];
     const int y1 = c.clip[1] < 0 ? 0 : c.clip[1], y2 = c.clip[3] > SCREEN_YSIZE ? SCREEN_YSIZE : c.clip[3];
@@ -963,29 +1056,29 @@ bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int k
     return true;
 }
 
-// Copies a software layer's rows from screen 1 into the texture (8x8 Morton blocks, the key colour transparent).
+// Copies a software layer's rows from screen 1 into the staging buffer as RGBA5551 (the key colour transparent), in
+// plain rows: the display-transfer engine tiles the whole buffer into the texture afterwards (UploadSoft).
 void ConvertSoft(const SoftJob &j)
 {
     const ScreenInfo &scr = screens[1];
-    const int h           = j.y2 - j.y1;
-    for (int ty = 0; ty < h; ty += 8)
-        for (int tx = j.x1 & ~7; tx < j.x2; tx += 8) {
-            u16 *blk = &sSoftData[(((j.texY + ty) >> 3) * (SOFT_W >> 3) + (tx >> 3)) << 6];
-            for (int yy = 0; yy < 8; ++yy) {
-                const int sy = j.y1 + ty + yy;
-                for (int xx = 0; xx < 8; ++xx) {
-                    const int sx = tx + xx;
-                    u16 texel    = 0;
-                    if (sy < j.y2 && sx >= j.x1 && sx < j.x2) {
-                        const uint16 c = scr.frameBuffer[sy * scr.pitch + sx];
-                        texel          = c == SOFT_KEY ? 0 : ToTexel(c);
-                    }
-                    blk[kMorton.v[yy * 8 + xx]] = texel;
-                }
-            }
+    u16 *staging          = (u16 *)C3DPresent::Staging();
+    for (int y = j.y1; y < j.y2; ++y) {
+        const uint16 *src = &scr.frameBuffer[y * scr.pitch];
+        u16 *dst          = &staging[(j.texY + (y - j.y1)) * SOFT_W];
+        for (int x = j.x1; x < j.x2; ++x) {
+            const uint16 c = src[x];
+            dst[x]         = c == SOFT_KEY ? 0 : (u16)((c & 0xFFC0) | ((c & 0x1F) << 1) | 1);
         }
-    const unsigned first = ((unsigned)j.texY >> 3) * (SOFT_W >> 3) * 64 * 2, rows8 = ((unsigned)h + 7) >> 3;
-    GSPGPU_FlushDataCache((u8 *)sSoftData + first, rows8 * (SOFT_W >> 3) * 64 * 2);
+    }
+}
+
+void UploadSoft()
+{
+    void *staging = C3DPresent::Staging();
+    GSPGPU_FlushDataCache(staging, SOFT_W * SOFT_H * 2);
+    C3D_SyncDisplayTransfer((u32 *)staging, GX_BUFFER_DIM(SOFT_W, SOFT_H), (u32 *)sSoftTex.data, GX_BUFFER_DIM(SOFT_W, SOFT_H),
+                            GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB5A1) |
+                                GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB5A1) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
 }
 
 // One run of screen lines [dy, dy + n) that all show tile row `row` of the layer starting at pixel row `srcY` inside
@@ -1094,7 +1187,7 @@ const char *GpuRender::LastRefusal() { return sRefusal[0] ? sRefusal : "-"; }
 
 const char *GpuRender::ReasonName()
 {
-    static const char *const kCmd[]   = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE OUTLINE", "FACE", "BLENDED FACE", "SPRITE", "ROTO SPRITE", "LAYER", "LINEBUF" };
+    static const char *const kCmd[]   = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE OUTLINE", "FACE", "BLENDED FACE", "SPRITE", "ROTO SPRITE", "LAYER", "LINEBUF", "FACES", "BLENDED FACES" };
     static const char *const kLayer[] = { "HSCROLL LAYER", "VSCROLL LAYER", "ROTOZOOM LAYER", "BASIC LAYER" };
     static const char *const kInk[]   = { "INK NONE", "INK BLEND", "INK ALPHA", "INK ADD", "INK SUB", "INK TINT", "INK MASKED", "INK UNMASKED" };
     const unsigned cmd = sStats.unsupportedCmd;
@@ -1169,6 +1262,7 @@ bool GpuRender::Render(const Stream &stream)
     sSprFull      = false;
     sSoftJobCount = sSoftRows = 0;
     sStats.softLayers = 0;
+    sStats.faces      = 0;
     ok            = true;
     memset(sLineBuf, 0, sizeof(sLineBuf));
 
@@ -1180,7 +1274,21 @@ bool GpuRender::Render(const Stream &stream)
             case CMD_ROTO: ok = EmitRoto(c); break;
             case CMD_FACE: ok = EmitFace(c, stream.arena + c.arena); break;
             case CMD_BLENDED_FACE: ok = EmitBlendedFace(c, stream.arena + c.arena); break;
+            case CMD_FACES: {
+                const u64 t0 = svcGetSystemTick();
+                ok           = EmitFaces(c, stream.arena + c.arena);
+                GPU_TIME(STAGE_SHAPES, t0); // GPU mode: face emission (the software shapes stage is idle then)
+                break;
+            }
+            case CMD_BLENDED_FACES: {
+                const u64 t0 = svcGetSystemTick();
+                ok           = EmitBlendedFaces(c, stream.arena + c.arena);
+                GPU_TIME(STAGE_SHAPES, t0);
+                break;
+            }
             case CMD_RECT: ok = EmitRect(c); break;
+            case CMD_CIRCLE: ok = EmitRing(c, c.p[0], c.p[1], 0, c.p[2], (uint32)c.p[3], c.p[4], c.p[5], c.p[6] != 0); break;
+            case CMD_CIRCLE_OUTLINE: ok = EmitRing(c, c.p[0], c.p[1], c.p[2], c.p[3], (uint32)c.p[4], c.p[5], c.p[6], c.p[7] != 0); break;
             case CMD_FILL: ok = EmitFill(c); break;
             case CMD_LAYER: {
                 TileLayer *layer = (TileLayer *)(uintptr_t)c.p[0];
@@ -1258,6 +1366,8 @@ bool GpuRender::Render(const Stream &stream)
     }
     for (unsigned i = 0; i < sSoftJobCount; ++i)
         ConvertSoft(sSoftJobs[i]);
+    if (sSoftJobCount)
+        UploadSoft();
     if (sTileDirtyHi > sTileDirtyLo) {
         GSPGPU_FlushDataCache((u8 *)sTileData + sTileDirtyLo, sTileDirtyHi - sTileDirtyLo);
         ++sStats.atlasFlushes;
@@ -1293,6 +1403,9 @@ bool GpuRender::Render(const Stream &stream)
         const Batch &bt = sBatches[b];
         if (curTex != bt.tex) {
             C3D_TexBind(0, bt.tex == TEX_TILE ? &sTileTex : bt.tex == TEX_SOFT ? &sSoftTex : &sSprTex);
+            const float w = bt.tex == TEX_TILE ? TILE_ATLAS_W : bt.tex == TEX_SOFT ? SOFT_W : SPR_ATLAS_W;
+            const float h = bt.tex == TEX_TILE ? TILE_ATLAS_H : bt.tex == TEX_SOFT ? SOFT_H : SPR_ATLAS_H;
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / w, -1.0f / h, 0.0f, 0.0f);
             curTex = bt.tex;
         }
         if (curBlend != bt.blend || bt.blend == BLEND_FILL) {

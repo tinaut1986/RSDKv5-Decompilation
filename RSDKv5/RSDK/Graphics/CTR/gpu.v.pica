@@ -1,25 +1,31 @@
 ; Vertex shader of the GPU renderer (GpuRender.cpp): screen-space quads with a texture coordinate and a colour.
-; v0 = x, y (screen pixels), u, v ; v1 = r, g, b, a as bytes (0..255). The projection carries the top screen's tilt.
+; v0 = x, y (quarter screen pixels), u, v (texels) as 16-bit integers ; v1 = r, g, b, a as bytes (0..255).
+; uvscale = (1 / texture width, -1 / texture height, 0, 0) of the bound texture: the PICA samples memory row 0 at v = 1.
+; The projection carries the top screen's tilt.
 ; Regenerate gpu_shbin.h with:  tools/gen-shader.sh RSDKv5/RSDK/Graphics/CTR/gpu.v.pica
 .fvec projection[4]
-.constf myconst(0.5, 1.0, 0.0, 0.003921569)
-.alias half  myconst.xxxx
-.alias ones  myconst.yyyy
-.alias inv255 myconst.wwww
+.fvec uvscale
+.constf myconst(0.5, 1.0, 0.25, 0.003921569)
+.constf uvbias(0.0, 1.0, 0.0, 0.0)
+.alias half    myconst.xxxx
+.alias ones    myconst.yyyy
+.alias quarter myconst.zzzz
+.alias inv255  myconst.wwww
 
 .out outpos position
 .out outtc0 texcoord0
 .out outclr color
 
 .proc main
-    mov r0.xy, v0.xy
+    mul r0.xy, quarter, v0.xy
     mov r0.z, half
     mov r0.w, ones
     dp4 outpos.x, projection[0], r0
     dp4 outpos.y, projection[1], r0
     dp4 outpos.z, projection[2], r0
     dp4 outpos.w, projection[3], r0
-    mov outtc0, v0.zwzw
+    mul r1, uvscale, v0.zwzw
+    add outtc0, uvbias, r1
     mul outclr, inv255, v1
     end
 .end

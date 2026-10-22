@@ -30,6 +30,8 @@ bool Ready();
 struct C3D_RenderTarget_tag;
 void *Target(); // C3D_RenderTarget*
 void *Projection(); // C3D_Mtx*
+// The 512x256 linear staging buffer (16-bit texels): free for the GPU renderer, which does not present through it.
+void *Staging();
 
 // Draws `src` (400x240 RGB565 with `pitch` pixels per row) on the top screen and presents it.
 void Present(const unsigned short *src, int pitch);

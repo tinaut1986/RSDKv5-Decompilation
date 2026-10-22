@@ -72,7 +72,10 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
 - [ ] R1.4 Readback of the render target (`SITE SHOT` is blind in GPU mode) and a GPU CHECK (diff against the software replay).
 - [ ] R1.5 Water / per-line palette banks, VScroll/rotozoom layers, `INK_TINT/MASKED/UNMASKED`, `DrawAniTile` (cell invalidation),
   rotozoom and deformed sprites, faces, circles, lines.
-- [ ] R1.6 Special Stage: `Draw3DScene` and faces on the GPU.
+- [x] R1.6 (2026-10-22, measured by Claude on the 2DS; owner not yet) Special Stage on the GPU: every frame of a whole run
+  on the GPU (faces in runs, circles, the rotozoom floor as a software layer). ~9 fps -> 19-23 drawn fps with the frame
+  skip; the CPU is the limit: logic ~5 ms, Draw3DScene (recording, lighting) 14-17 ms, face emission 8-9 ms, floor 7 ms.
+  Next: build the GPU frame on core 1 while core 0 runs the next frame (the frame is a recorded list already).
 - [ ] R1.7 Measure on the 2DS with `tools/perf-sweep.sh` against the software numbers below; keep the software path as fallback.
 - [ ] R1.8 Stereoscopic 3D (needs layers as separate draws).
 

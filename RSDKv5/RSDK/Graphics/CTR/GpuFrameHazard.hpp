@@ -12,6 +12,7 @@ namespace GpuFrame
 extern bool active;
 extern bool pending;
 extern unsigned paletteVersion;
+extern bool lineBufDirty; // gfxLineBuffer was written (SetActivePalette, scene load): the recorder compares it again
 void Hazard(const char *why);
 } // namespace GpuFrame
 } // namespace RSDK
@@ -23,8 +24,11 @@ void Hazard(const char *why);
             RSDK::GpuFrame::Hazard("PALETTE");                                                                                                       \
     } while (0)
 
+#define GPUFRAME_LINEBUF_CHANGED() (RSDK::GpuFrame::lineBufDirty = true)
+
 #else
 
+#define GPUFRAME_LINEBUF_CHANGED() ((void)0)
 #define GPUFRAME_PALETTE_HAZARD()
 
 #endif

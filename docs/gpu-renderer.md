@@ -102,6 +102,16 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Sprite cache key: sprX and sprY overlapped in `SprKey` (sprites drawn from the wrong part of the sheet). Fixed.
 - `SITE CMDS` writes the next recorded frame's command list to `debug/cmds.txt` (type, clip, screen position, params).
 
+## Special Stage (2026-10-22)
+
+- `Draw3DScene` is not a hazard: its faces are recorded through DrawFace/DrawBlendedFace, appended to run commands
+  (`CMD_FACES`, `CMD_BLENDED_FACES`: arena = per face n, colour(s), vertices) so ~4000 faces take a handful of commands.
+  Its insertion sort became a stable merge sort.
+- Vertices are 12 bytes (int16 quarter pixels / texels; `uvscale` uniform per texture): 8192 quads fit in the linear heap.
+- The floor is a rotozoom layer drawn by the software into a texture (soft layer), uploaded by the transfer engine.
+- Circles and rings are polygons. A whole run, exit included, is GPU-only.
+- Cost per drawn frame (2DS): logic ~5, Draw3DScene ~15, face emission ~8, floor ~7 ms: the CPU is the limit.
+
 ## Renderer mode and frame accounting (2026-10-22)
 
 - One switch, **RENDERER GPU/CPU** (bottom screen, text console cell, `SITE GPU 0|1`), saved as `gpumode` in
