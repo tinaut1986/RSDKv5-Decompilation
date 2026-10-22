@@ -60,11 +60,12 @@ bool C3DPresent::Init()
         return false;
 
     const float u = (float)SCREEN_W / TEX_W, v = (float)SCREEN_H / TEX_H;
-    // A triangle strip; positions are screen pixels (y down), the picture's row 0 is the top.
-    sQuad[0] = { 0, 0, 0.5f, 0, 0 };
-    sQuad[1] = { 0, (float)SCREEN_H, 0.5f, 0, v };
-    sQuad[2] = { (float)SCREEN_W, 0, 0.5f, u, 0 };
-    sQuad[3] = { (float)SCREEN_W, (float)SCREEN_H, 0.5f, u, v };
+    // A triangle strip; positions are screen pixels (y down). The picture's row 0 is the top of the
+    // texture's memory, which the PICA samples at v = 1 (the owner saw it upside down with v = 0 on top).
+    sQuad[0] = { 0, 0, 0.5f, 0, v };
+    sQuad[1] = { 0, (float)SCREEN_H, 0.5f, 0, 0 };
+    sQuad[2] = { (float)SCREEN_W, 0, 0.5f, u, v };
+    sQuad[3] = { (float)SCREEN_W, (float)SCREEN_H, 0.5f, u, 0 };
 
     sDvlb = DVLB_ParseFile((u32 *)present_shbin, sizeof(present_shbin));
     if (!sDvlb)
