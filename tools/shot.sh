@@ -1,10 +1,11 @@
 #!/bin/bash
-# Takes a snapshot of the console's top screen: tools/shot.sh [-i IP] [out.png]
+# Takes a snapshot of a console screen: tools/shot.sh [-i IP] [top|bottom] [out.png]
 cd "$(dirname "$0")/.."
 ARGS=(); [ "${1:-}" = "-i" ] && { ARGS=(-i "$2"); shift 2; }
 IP=${ARGS[1]:-$(cat .3ds_ftp_ip)}
-OUT=${1:-/tmp/mania-shot.png}
-tools/site.sh "${ARGS[@]}" SHOT >/dev/null; sleep 1.5
+WHICH=top; case "${1:-}" in top|bottom) WHICH=$1; shift;; esac
+OUT=${1:-/tmp/mania-shot-$WHICH.png}
+tools/site.sh "${ARGS[@]}" SHOT $WHICH >/dev/null; sleep 1.5
 D="ftp://$IP:5000/3ds/Sonic%20Mania%203DS/debug/"
 LAST=$(curl -s --max-time 8 "$D" | awk '{print $NF}' | grep '^shot-' | sort | tail -1)
 curl -s --max-time 20 -o /tmp/mania-shot.raw "$D$LAST"

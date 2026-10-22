@@ -56,7 +56,7 @@ static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
 
 // Requests from the FTP thread, applied by the main thread in FrameEnd.
 static volatile int sPendingCategory = -1, sPendingScene = -1;
-static volatile int sShotRequest;
+static volatile int sShotRequest; // 1 top screen, 2 bottom screen
 
 struct Session {
     int ctrl;
@@ -658,7 +658,7 @@ static void HandleSession(int ctrl)
             }
             else if (!strcmp(sub, "SHOT")) {
                 // The top screen's framebuffer as debug/shot-NNNN.raw (tools/shot.sh converts it).
-                sShotRequest = 1;
+                sShotRequest = (path && !strncasecmp(path, "bottom", 6)) ? 2 : 1;
                 Reply(s, "200 shot queued");
             }
             else if (!strcmp(sub, "GPU")) {
@@ -959,17 +959,18 @@ void DevTools::Init()
 bool DevTools::FrameEnd()
 {
     if (sShotRequest) {
-        sShotRequest = 0;
+        const gfxScreen_t screen = sShotRequest == 2 ? GFX_BOTTOM : GFX_TOP;
+        sShotRequest             = 0;
         static unsigned shotNumber;
         u16 w = 0, h = 0;
         // The back buffer holds the frame before the one just shown: complete, which is all a snapshot needs.
-        const u8 *fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
+        const u8 *fb = gfxGetFramebuffer(screen, GFX_LEFT, &w, &h);
         char path[160];
         snprintf(path, sizeof(path), "%s/shot-%04u.raw", kDir, ++shotNumber);
         FILE *f = fopen(path, "wb");
         if (f && fb) {
             // Header: width, height (the framebuffer is column-major), bytes per pixel.
-            const u32 head[3] = { w, h, (u32)(gfxGetScreenFormat(GFX_TOP) == GSP_RGB565_OES ? 2 : 3) };
+            const u32 head[3] = { w, h, (u32)(gfxGetScreenFormat(screen) == GSP_RGB565_OES ? 2 : 3) };
             fwrite(head, sizeof(head), 1, f);
             fwrite(fb, head[2], (size_t)w * h, f);
         }
