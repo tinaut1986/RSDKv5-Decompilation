@@ -38,6 +38,8 @@ struct Stats {
     unsigned atlasRetries; // frames rebuilt after emptying a full sprite atlas
     unsigned softLayers;   // layers drawn by the software into a texture (last frame)
     unsigned faces;        // polygons emitted (last frame)
+    unsigned rotoUs, rotoQuads; // rotozoom layers as tile runs: build time (us) and quads (last frame)
+    unsigned tileEvictions; // times the full tile atlas gave back the cells not used in the frame (total)
 };
 const Stats &GetStats();
 // The last refusal as a short name for the dev tools ("FACE", "INK TINT", "WATER LINE"); NULL when the last

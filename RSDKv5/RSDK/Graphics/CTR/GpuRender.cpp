@@ -53,7 +53,9 @@ struct Vtx {
 
 inline int16 Quarter(float p) { return (int16)(p >= 0 ? p * 4.0f + 0.5f : p * 4.0f - 0.5f); }
 
-enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D }; // TEX_3D: a 3D scene (Batch::first = index in sDraw3D)
+// TEX_3D: a 3D scene (Batch::first = index in sDraw3D). TEX_TILE_FINE: the tile atlas with texel coordinates in 1/32
+// texel (rotozoom layers: affine runs need sub-texel coordinates).
+enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE };
 
 // Software layers: a layer kind the GPU cannot draw (rotozoom, vscroll, a layer split by the water line) is drawn by
 // the engine's own function into screens[1] (unused on the 3DS), keyed with a colour no palette produces in practice,
@@ -156,6 +158,8 @@ uint8 sTileGroupsOk[TILE_IDS]; // sTileGroups is known (computed once per tile c
 uint32 sTileHash[TILE_COUNT];  // content of each base tile when DrawAniTile last touched it (it rewrites unchanged frames too)
 bool sSprFull;                 // the last ATLAS_FULL came from the sprite atlas
 unsigned sTileCellsUsed;
+int16 sFreeCells[TILE_CELLS]; // cells given back by EvictTiles
+unsigned sFreeCount;
 
 // Sprite cache: shelves of 8-pixel granularity
 SprSlot sSlots[SPR_SLOTS];
@@ -233,6 +237,7 @@ void ResetCaches()
     memset(sTileHash, 0, sizeof(sTileHash));
     memset(sTileGroupsOk, 0, sizeof(sTileGroupsOk));
     sTileCellsUsed = 0;
+    sFreeCount     = 0;
     ++sGen; // everything converted from now on is newer than any group change so far
     ResetSprites();
 }
@@ -394,6 +399,20 @@ void TrackPalette(bool all)
     }
 }
 
+// The tile atlas is full: give back the cells of every (bank, tile) not used in this frame. The Special Stage floor
+// sees most of its 756 tiles over a run, each in up to 7 palette banks (the fog), but only a few hundred at a time.
+void EvictTiles()
+{
+    for (unsigned b = 0; b < BANKS; ++b)
+        for (unsigned id = 0; id < TILE_IDS; ++id)
+            if (sTileCell[b][id] >= 0 && sTileStamp[b][id] != sGen) {
+                sFreeCells[sFreeCount++] = sTileCell[b][id];
+                sTileCell[b][id]         = -1;
+                sTileStamp[b][id]        = 0;
+            }
+    ++sStats.tileEvictions;
+}
+
 // Atlas cell of a tile with the palette bank applied; queues its conversion when it is new or stale.
 int EnsureTile(unsigned id, unsigned bank)
 {
@@ -401,9 +420,14 @@ int EnsureTile(unsigned id, unsigned bank)
         return -1;
     int cell = sTileCell[bank][id];
     if (cell < 0) {
-        if (sTileCellsUsed >= TILE_CELLS)
-            return -2; // atlas full
-        cell                 = (int)sTileCellsUsed++;
+        if (!sFreeCount && sTileCellsUsed >= TILE_CELLS)
+            EvictTiles();
+        if (sFreeCount)
+            cell = sFreeCells[--sFreeCount];
+        else if (sTileCellsUsed < TILE_CELLS)
+            cell = (int)sTileCellsUsed++;
+        else
+            return -2; // atlas full: every cell is in use this frame
         sTileCell[bank][id]  = (int16)cell;
         sTileStamp[bank][id] = 0;
     }
@@ -1442,6 +1466,159 @@ bool EmitLayerBasic(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     return true;
 }
 
+// A rotozoom layer (the Special Stage floor, the title's island): per line the software walks the layer from
+// scanline.position by scanline.deform a pixel, so each line is cut into the runs of pixels that stay in one tile, and
+// each run is a 1-pixel-high quad of that tile with affine texel coordinates (1/32 texel, TEX_TILE_FINE). The ends of
+// a run are its first and last samples kept 2/32 inside the tile, so the interpolation never reads the next atlas
+// cell. Empty tiles (0xFFFF) are skipped, which is most of the Special Stage map (its far lines cross hundreds of
+// empty tiles: walking them is cheap, drawing them is not needed). A layer that would take too many runs or quads (a
+// horizon full of tiles) goes back to the software.
+enum { ROTO_MAX_RUNS = 16384, ROTO_MAX_QUADS = 6000 };
+
+// Where a line's walk along one axis enters the next tile, as exact integer steps (no division per run): with N the
+// distance in 16.16 to the next tile edge counted from the line's start, the crossing is pixel ceil(N / |d|); each tile
+// adds 1 << 20 to N, i.e. q = (1 << 20) / |d| pixels and r = (1 << 20) % |d| of remainder.
+struct RotoAxis {
+    int next;          // first pixel of the line in the next tile (INT_MAX: never)
+    uint32 d, q, r, e; // |deform|; whole pixels and remainder a tile; e = next * d - N, 0 <= e < d
+    void Init(uint32 pos, int32 deform)
+    {
+        if (!deform) {
+            next = 0x7FFFFFFF;
+            return;
+        }
+        d = (uint32)(deform < 0 ? -deform : deform);
+        q = (1u << 20) / d, r = (1u << 20) % d;
+        // Going up the edge is the tile's end (N = 2^20 - f); going down a pixel is still in the tile while its
+        // position is >= the tile's start, so the crossing is floor(f / d) + 1 = ceil((f + 1) / d).
+        const uint32 f = pos & 0xFFFFF, N = deform > 0 ? (1u << 20) - f : f + 1;
+        const uint32 k = (N + d - 1) / d;
+        next = (int)k;
+        e    = k * d - N;
+    }
+    void Step()
+    {
+        if (r > e)
+            next += (int)q + 1, e = d - (r - e);
+        else
+            next += (int)q, e -= r;
+    }
+};
+
+bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
+{
+    const int x1 = c.clip[0] < 0 ? 0 : c.clip[0], x2 = c.clip[2] > screens[0].pitch ? screens[0].pitch : c.clip[2];
+    const int y1 = c.clip[1] < 0 ? 0 : c.clip[1], y2 = c.clip[3] > SCREEN_YSIZE ? SCREEN_YSIZE : c.clip[3];
+    if (x1 >= x2 || y1 >= y2)
+        return true;
+    const int lineSize = x2 - x1;
+    // c.clip[1] is where the recorded scanlines start (the software reads scanlines[clipBound_Y1]).
+    const ScanlineInfo *first = sl + (y1 - c.clip[1]);
+
+    // Estimate the runs: tile crossings along x and y per line, plus one.
+    unsigned estimate = 0;
+    for (int y = y1; y < y2; ++y) {
+        const ScanlineInfo &s = first[y - y1];
+        const uint32 ax = (uint32)(s.deform.x < 0 ? -s.deform.x : s.deform.x), ay = (uint32)(s.deform.y < 0 ? -s.deform.y : s.deform.y);
+        estimate += (uint32)(((uint64)(ax + ay) * (uint32)lineSize) >> 20) + 2;
+    }
+    if (estimate > ROTO_MAX_RUNS)
+        return EmitSoftLayer(c, layer, sl, LAYER_ROTOZOOM);
+    // The layer's quads go into one batch; counts are kept in locals (stores through the vertex pointer would make the
+    // compiler reload every global after each one).
+    if (!sBatchCount || sBatches[sBatchCount - 1].tex != TEX_TILE_FINE || sBatches[sBatchCount - 1].blend != BLEND_NORMAL) {
+        if (sBatchCount >= MAX_BATCHES)
+            return Refuse(GpuRender::REASON_QUAD_LIMIT);
+        sBatches[sBatchCount++] = { TEX_TILE_FINE, BLEND_NORMAL, sQuadCount, 0, 0 };
+    }
+    Batch &batch          = sBatches[sBatchCount - 1];
+    const unsigned first0 = sQuadCount;
+    const unsigned limit  = first0 + ROTO_MAX_QUADS < MAX_QUADS ? first0 + ROTO_MAX_QUADS : MAX_QUADS;
+    unsigned q            = first0, empty = 0;
+    uint32 *w             = (uint32 *)&sVbo[sCur][q * 4];
+
+    // (bank, tile) -> the cell's texel origin in 1/32 texel (u | v << 16) for this layer: EnsureTile's tables (~200 KB)
+    // would miss the cache on every run (the Old 3DS has no L2). Entries stay right for the whole layer: a cell used
+    // this frame is never evicted.
+    static uint32 memoKey[256], memoOrg[256];
+    memset(memoKey, 0xFF, sizeof(memoKey));
+
+    const uint32 maskX = (uint32)((TILE_SIZE << layer->widthShift) - 1) >> 4, maskY = (uint32)((TILE_SIZE << layer->heightShift) - 1) >> 4;
+    const unsigned wShift = layer->widthShift;
+    const uint16 *layout  = layer->layout;
+    for (int y = y1; y < y2; ++y) {
+        const ScanlineInfo &s = first[y - y1];
+        const unsigned bank   = sLineBuf[y];
+        const int32 dx = s.deform.x, dy = s.deform.y;
+        const int hx = dx >> 12, hy = dy >> 12; // half a pixel step in 1/32 texel
+        uint32 px = (uint32)s.position.x, py = (uint32)s.position.y; // wraps as the software's int32 does
+        const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
+        RotoAxis ax, ay;
+        ax.Init(px, dx), ay.Init(py, dy);
+        int cx = 0;
+        while (cx < lineSize) {
+            // The run ends where x or y next enters another tile.
+            while (ax.next <= cx)
+                ax.Step();
+            while (ay.next <= cx)
+                ay.Step();
+            int end = ax.next < ay.next ? ax.next : ay.next;
+            end     = end < lineSize ? end : lineSize;
+            const int n = end - cx;
+            const uint16 t = layout[((px >> 20) & maskX) + (((py >> 20) & maskY) << wShift)];
+            if (t != 0xFFFF) {
+                const uint32 key    = (bank << 12) | (t & 0xFFF);
+                const unsigned slot = (key ^ (key >> 8)) & 255;
+                if (memoKey[slot] != key) {
+                    const int cell = EnsureTile(t & 0xFFF, bank);
+                    if (cell < 0) {
+                        batch.count += q - first0, sQuadCount = q;
+                        return Refuse(cell == -2 ? GpuRender::REASON_ATLAS_FULL : GpuRender::REASON_TILE_RANGE);
+                    }
+                    memoKey[slot] = key;
+                    memoOrg[slot] = (uint32)((cell % (TILE_ATLAS_W / 16)) * 512) | ((uint32)((cell / (TILE_ATLAS_W / 16)) * 512) << 16);
+                }
+                if (q >= limit) {
+                    // Too many: drop this layer's quads and let the software draw it.
+                    sQuadCount = first0;
+                    if (!batch.count)
+                        --sBatchCount;
+                    return EmitSoftLayer(c, layer, sl, LAYER_ROTOZOOM);
+                }
+                // First and last samples in 1/32 texel inside the tile, kept 2/32 off its edges; the quad's ends
+                // are half a pixel step further out.
+                const uint32 org = memoOrg[slot];
+                const int cu = (int)(org & 0xFFFF), cv = (int)(org >> 16);
+                const uint32 fx = px & 0xFFFFF, fy = py & 0xFFFFF;
+                const uint32 lx = (px + (uint32)((n - 1) * dx)) & 0xFFFFF, ly = (py + (uint32)((n - 1) * dy)) & 0xFFFFF;
+                auto in = [](uint32 f) { const int v = (int)(f >> 11); return v < 2 ? 2 : v > 509 ? 509 : v; };
+                const uint32 uv0 = (uint16)(cu + in(fx) - hx) | ((uint32)(uint16)(cv + in(fy) - hy) << 16);
+                const uint32 uv1 = (uint16)(cu + in(lx) + hx) | ((uint32)(uint16)(cv + in(ly) + hy) << 16);
+                const uint32 X0 = (uint32)((x1 + cx) << 2), X1 = (uint32)((x1 + end) << 2);
+                // Whole words (x y | u v | rgba): the vertex buffer is written through to memory, and the byte and
+                // halfword stores of Vtx initialisers (32 a quad) cost most of this loop's time.
+                w[0] = X0 | Y0, w[1] = uv0, w[2] = 0xFFFFFFFFu;
+                w[3] = X1 | Y0, w[4] = uv1, w[5] = 0xFFFFFFFFu;
+                w[6] = X1 | Y1, w[7] = uv1, w[8] = 0xFFFFFFFFu;
+                w[9] = X0 | Y1, w[10] = uv0, w[11] = 0xFFFFFFFFu;
+                w += 12, ++q;
+            }
+            else
+                ++empty;
+            px += (uint32)(n * dx);
+            py += (uint32)(n * dy);
+            cx = end;
+        }
+    }
+    batch.count += q - first0;
+    sStats.tileQuads += q - first0;
+    sStats.emptyTiles += empty;
+    sQuadCount = q;
+    if (!batch.count)
+        --sBatchCount;
+    return true;
+}
+
 bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 {
     const int y1 = c.clip[1], y2 = c.clip[3];
@@ -1627,6 +1804,7 @@ bool GpuRender::Render(const Stream &stream)
     sDraw3DCount  = 0;
     sStats.softLayers = 0;
     sStats.faces      = 0;
+    sStats.rotoUs = sStats.rotoQuads = 0;
     ok            = true;
     memset(sLineBuf, 0, sizeof(sLineBuf));
 
@@ -1665,6 +1843,13 @@ bool GpuRender::Render(const Stream &stream)
                     ok = EmitLayerBasic(c, layer, sl);
                 else if (c.kind == LAYER_HSCROLL)
                     ok = EmitLayerHScroll(c, layer, sl);
+                else if (c.kind == LAYER_ROTOZOOM && !(GpuRender::depthMode & 256)) {
+                    const u64 t0 = svcGetSystemTick();
+                    const unsigned q0 = sQuadCount;
+                    ok = EmitLayerRotozoom(c, layer, sl);
+                    sStats.rotoUs += (unsigned)((svcGetSystemTick() - t0) / (SYSCLOCK_ARM11 / 1000000));
+                    sStats.rotoQuads += sQuadCount - q0;
+                }
                 else
                     ok = EmitSoftLayer(c, layer, sl, c.kind);
                 break;
@@ -1789,9 +1974,11 @@ bool GpuRender::Render(const Stream &stream)
             continue;
         }
         if (curTex != bt.tex) {
-            C3D_TexBind(0, bt.tex == TEX_TILE ? &sTileTex : bt.tex == TEX_SOFT ? &sSoftTex : &sSprTex);
-            const float w = bt.tex == TEX_TILE ? TILE_ATLAS_W : bt.tex == TEX_SOFT ? SOFT_W : SPR_ATLAS_W;
-            const float h = bt.tex == TEX_TILE ? TILE_ATLAS_H : bt.tex == TEX_SOFT ? SOFT_H : SPR_ATLAS_H;
+            const bool tile = bt.tex == TEX_TILE || bt.tex == TEX_TILE_FINE;
+            C3D_TexBind(0, tile ? &sTileTex : bt.tex == TEX_SOFT ? &sSoftTex : &sSprTex);
+            const float fine = bt.tex == TEX_TILE_FINE ? 32.0f : 1.0f;
+            const float w    = (tile ? TILE_ATLAS_W : bt.tex == TEX_SOFT ? SOFT_W : SPR_ATLAS_W) * fine;
+            const float h    = (tile ? TILE_ATLAS_H : bt.tex == TEX_SOFT ? SOFT_H : SPR_ATLAS_H) * fine;
             C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / w, -1.0f / h, 0.0f, 0.0f);
             curTex = bt.tex;
         }

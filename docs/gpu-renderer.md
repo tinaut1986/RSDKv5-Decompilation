@@ -82,9 +82,9 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   the owner on the 2DS: Green Hill 1 (60 fps, flip ~4-5 ms, ~6.7 ms idle; the waterfall area 60 since the conversion
   speed-up), the title screen, the main menu (diorama with masked inks, 50-55 fps, all GPU), the Special Stage.
 - `SITE SHOT` works in GPU mode (it reads the framebuffer the GPU wrote); the old "blind" note no longer applies.
-- **Special Stage**: with `SITE SET gpu3d 1` (off at boot until merged) the 3D scenes are GPU instances: ~17 -> ~40
-  drawn fps (logic at 60). What is left is the floor, a rotozoom layer of 512x512 tiles (8192x8192 px) drawn by the
-  software into a texture: ~9 ms + ~4 ms upload per drawn frame. That is the next job (Next steps 1).
+- **Special Stage**: with `SITE SET gpu3d 1` (off at boot until merged) the 3D scenes are GPU instances and the floor
+  (a rotozoom layer) is drawn as tile runs (see "Rotozoom layers as tile runs"): ~17 -> ~40 -> **48-60 fps** on the 2DS
+  (60 looking down the track, 48-55 turning over the big green field). Every frame is a GPU frame.
 - Known CPU-frame reasons still possible: `INK TINT`, `LINE` (the Special Stage's wireframe item boxes),
   `DEFORMED SPRITE`, `ANI TILE` during the draw lists, `DEV TEXT`, a clip smaller than the screen under a rotated sprite,
   a face or a 3D scene. Water zones (Hydrocity, Chemical Plant...) have not been visited in GPU mode yet: a sprite
@@ -117,6 +117,32 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - The floor is a rotozoom layer drawn by the software into a texture (soft layer), uploaded by the transfer engine.
 - Circles and rings are polygons. A whole run, exit included, is GPU-only.
 - Cost per drawn frame (2DS): logic ~5, Draw3DScene ~15, face emission ~8, floor ~7 ms: the CPU is the limit.
+
+## Rotozoom layers as tile runs (perf/special-stage, 2026-10-22)
+
+- The Special Stage floor and the title's island are LAYER_ROTOZOOM: per line the software walks the layer from
+  `scanlines[y].position` by `.deform` a pixel (16.16), with the line's palette bank (the Special Stage fogs the floor
+  with banks 1-7 by distance). `EmitLayerRotozoom` cuts each line into the runs of pixels that stay in one tile and
+  draws each as a 1-pixel-high quad of that tile from the tile atlas with affine texel coordinates in 1/32 texel
+  (`TEX_TILE_FINE`: the tile atlas with uvscale / 32). A run's ends are its first and last samples kept 2/32 inside
+  the tile, pushed half a pixel step out, so the interpolation never reads the next atlas cell.
+- The run ends come from an exact integer DDA per axis (`RotoAxis`: 4 divisions a line, none a run; checked against
+  the brute force walk). Empty tiles (0xFFFF, 81 % of the Special Stage map) are walked but not drawn.
+- Costs on the 2DS, frozen Special Stage frame with 2678 quads: walk 1.6 ms, + cells and coordinates 3.0 ms, + vertex
+  writes 3.5 ms. Lessons: the vertex buffer must be written in whole words (the `Vtx` initialisers compiled to 32 byte
+  and halfword stores a quad: 10-18 ms), and counters must be locals (stores through the vertex pointer alias the
+  globals). A small per-layer memo (bank, tile) -> cell origin avoids EnsureTile's 200 KB of tables.
+- More than 6000 quads (ROTO_MAX_QUADS) or 16384 runs: the layer goes back to the software (soft layer).
+- The tile atlas (1024 cells) no longer refuses the frame when full: `EvictTiles` gives back every (bank, tile) not
+  used in the current frame (`tile evictions` in `SITE STATE`; about one a second while turning in the Special Stage).
+- Debug: `SITE SET depthmode 256` draws rotozoom layers in software again (compare); `SITE FREEZE 1` stops the objects
+  and keeps drawing, so both renderers can be compared on one picture; `SITE LAYERS` writes `debug/layers.bin` (layer
+  layouts, palettes, the first rotozoom layer's scanlines, tileset) for offline analysis; `SITE STATE` shows
+  `roto N us M quads` (last frame).
+- Still costing: the walk's cache misses in the 512 KB layout (1.6 ms), the GPU (pframe 1-3 ms turning: 4000+ thin
+  quads), the logic (4-6 ms). Ideas: a coarse bitmap of empty 8x8 tile blocks to skip the far lines' empties; or a
+  window texture of the floor rendered by the GPU and sampled with one quad a line (needs a window per fog bank or a
+  combiner lerp between banks 0 and 7, and VRAM).
 
 ## 3D scenes as GPU model instances (perf/special-stage, 2026-10-22: works, off by default until merged)
 
@@ -186,14 +212,7 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 
 ## Next steps (suggested order)
 
-1. **Special Stage floor on the GPU.** It is a rotozoom layer of 512x512 tiles (8192x8192 px: no texture holds it; the
-   PICA tops at 1024x1024). Per line the software walks the layer with an affine step (`scanlines[y].position`,
-   `.deform`). Options: (a) per line, split the walk into the runs that stay inside one tile and draw each as a
-   1-pixel-high quad from the tile atlas with affine texcoords (needs sub-texel texcoords: a tile batch with uvscale/16);
-   near the horizon a pixel can cross several tiles, so those lines may stay in software (mixed); (b) a 1024x1024
-   window texture of the layer around the camera, rebuilt when it moves too far, if the visible floor stays within it;
-   (c) make the software walk cheaper (the inner loop recomputes the layout index per pixel). Measure (a) first. sm-3ds
-   draws its mode 7 as per-line affine quads (`../sm-3ds/source/gpu_ppu_3ds.c` `PushAffine`; 22-30 -> 50-55 fps).
+1. Special Stage floor: done (tile runs, above). Next there: the empty-block bitmap, then measure the GPU side.
 2. Merge `perf/special-stage` once the owner has looked at the Special Stage, the title (logo shine) and the
    collapsing floors on the 2DS; then make `gpu3d` on by default (or drop the switch).
 3. Sweep every zone in GPU mode (Azahar for pictures and reasons, the 2DS for timings): `tools/perf-sweep.sh` with
