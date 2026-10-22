@@ -84,7 +84,15 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   `cmd 0` = `CMD_FILL` before FILL support was added).
 - Everything is off by default and resets at boot (`record`, `gpurender` are not saved in `dev-settings.ini`).
 
-### One reading of the new counters (end of session, scene unknown, draw order `L6 S5 L1 S62 R1 S16`)
+### The Green Hill reading (the install that had the diagnostics, running right in Green Hill 1)
+
+`cmds 59 ... reason 2 cmd 5 layers 5 tileq 0 empty 0 rowsout 0`: five layer commands were processed and **not one tile
+quad was emitted** (and no empty tile, no row outside the layout), while the frame was refused later because of a
+`CMD_FACE` (5). So in Green Hill the layer emitters return without ever entering the tile loops: check first that
+`c.clip` of the layer commands is sane (`y1 < y2`, `x1 < x2`; `EmitLayerBasic` returns early otherwise, `EmitLayerHScroll`
+loops over `[clip[1], clip[3])`) and `layer->xsize/ysize`. The other frame shape below does emit tiles.
+
+### Another reading (draw order `L6 S5 L1 S62 R1 S16`)
 
 `reason 2 cmd 102` (a layer of kind 2 = rotozoom, unsupported: correct refusal), but also `layers 2 tileq 390 empty 0
 rowsout 0`: the first two layers **did** emit 390 tile quads before the refusal. So layer emission is not dead; the
