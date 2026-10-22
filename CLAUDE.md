@@ -85,7 +85,10 @@ tools/site.sh ORDER                         # draw order of the last frame (L la
 tools/site.sh SURFACES                      # sprite sheets in memory (texture-memory budget)
 tools/site.sh CMDS                          # next recorded frame's command list -> debug/cmds.txt (with layer sizes)
 tools/site.sh MODELS                        # loaded 3D models (vertices x frames, flags, ranges)
-tools/site.sh "SET gpu3d 1"                 # 3D scenes as GPU model instances (perf/special-stage; off at boot)
+tools/site.sh "SET gpu3d 0|1"               # 3D scenes as GPU model instances (on by default, saved)
+tools/site.sh REFUSED                       # the last command the GPU refused, and why (STATE's line is cut by the FTP limit)
+tools/site.sh "GOTO DDWrecker"              # move the player next to an object (the camera does not follow: he may die)
+tools/site.sh "SET force3d 1"               # draw both eyes as if the 3D slider were up (cost on a 2DS); also tab/fps/hud/lock30
 tools/site.sh "SET depthmode N"             # renderer debug bits (docs/gpu-renderer.md: depth convention, mask views)
 tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU drew too; right = right eye in 3D)
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
@@ -96,7 +99,8 @@ second), `dev-settings.ini` (the bottom-screen switches). Luma crash dumps are i
 `arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
 `crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).
 
-- The owner's console is an **Old 2DS** (Old 3DS CPU). Its IP changes (DHCP): ping first.
+- The owner's consoles: an **Old 2DS** (Old 3DS CPU, 192.168.1.141) and a **New 3DS** (192.168.1.133, 3D screen: check
+  stereo there). IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
 - Ask before installing in a session unless the owner has said otherwise for that session. A relaunch loses unsaved progress.
 - After the game freezes the console needs a manual power cycle; the first install of a build that cannot be
   installed over FTP (a bug in the installer) is manual: upload to `/cias/` and install with FBI.

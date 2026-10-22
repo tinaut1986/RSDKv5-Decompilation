@@ -278,19 +278,31 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 
 ## Next steps (suggested order)
 
-1. Special Stage floor: done (tile runs, above). Next there: the empty-block bitmap, then measure the GPU side.
-2. Merge `perf/special-stage` once the owner has looked at the Special Stage, the title (logo shine) and the
-   collapsing floors on the 2DS; then make `gpu3d` on by default (or drop the switch).
-3. Sweep every zone in GPU mode (Azahar for pictures and reasons, the 2DS for timings): `tools/perf-sweep.sh` with
-   `SITE STATE`'s reasons and the `render (5 s...)` lines of `log.txt`; fix by frequency. Water zones first.
-4. Sprite atlas: still fills now and then in the title and the menu (`atlas retries` in `SITE STATE`): evict least used
-   entries instead of emptying it.
-5. A 30 fps lock option (as sm-3ds / legend-of-doom: logic at 60, every other frame drawn) for heavy scenes.
-6. Stereoscopic 3D: the command list keeps layers and sprites apart and the target has a depth buffer; submit the frame
-   twice with a per-layer offset. Measure the GPU time first (the Special Stage would draw its models twice).
+Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
+
+1. #1 Save states tab (the owner wants it to reach spots quickly; `SITE GOTO` kills the player far away: the camera
+   bounds do not follow).
+2. #5 INK_TINT on the GPU (the pause menu's grey: copy the frame into a texture mid-frame, combiner grey).
+3. #7 Special Stage: 60 fps turning and with 3D; the second stage's floor over 6000 quads goes to the software
+   (~9 ms); 1/32-texel floor coordinates leave a few wrong pixels (1/64 with an offset).
+4. #2 in-game updates by channel (needs releases first: PLAN B0.3), #3 language, #4 bottom-screen themes, #8 the
+   bottom screen and options in production builds.
+5. Sweep every zone in GPU mode (Azahar for pictures and `SITE REFUSED`, the 2DS for timings) and fix by frequency.
+6. Sprite atlas: evict least used entries instead of emptying it (retries are rare since the shelf fallback).
+7. Stereo elsewhere: zones use layer parallax and draw groups only (playfield on the screen plane); tune STEREO_FAR
+   (6 px) with the owner on the New 3DS.
 
 ## Lessons (read before touching this)
 
+- **Linear memory is the scarcest thing** (240 KB free with the 256 KB GPU command buffer): new GPU buffers go to VRAM
+  when only the GPU and the transfer engine touch them (the soft-layer texture moved there). The heap is ~51.8 MB used
+  in a stage: avoid big mallocs at run time (the CIA installer now uses a static buffer).
+- **`make` misses included .cpp files** (CTRRenderDevice.cpp is included by Drawing.cpp, CTRInputDevice.cpp by Input.cpp):
+  after changing them, `rm -rf bin`.
+- **Stereo**: 2D batches must shift by whole pixels (fractions move 1-pixel quads' samples onto the next atlas cell).
+- **The GPU command buffer** overflowing panics libctru (a frozen console): watch `cmdbuf N%` in `SITE STATE` after
+  anything that adds per-draw uniforms (the second Special Stage with 3D reaches ~90 %; the right eye is dropped rather
+  than overflow).
 - **`currentScreen` has already moved on** when `FlipScreen` runs (the draw loop does `currentScreen++`). Replays must
   set `currentScreen = &screens[0]` (they do now); anything reading screen state after the draw loop must use `screens[0]`.
 - **Do not change `SCREEN_XMAX`** (tried 1280 -> 400 to free linear memory): the top screen came out garbled/blank even

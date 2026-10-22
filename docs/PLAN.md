@@ -4,26 +4,31 @@
 
 - **Priority** (owner): R1 GPU renderer (everything that benefits goes to the GPU) -> graphical bottom screen
   (v1 done) -> stereoscopic 3D. **Technical detail and next steps of R1: [`docs/gpu-renderer.md`](gpu-renderer.md).**
-- **Where R1 stands (end of 2026-10-22):** the GPU renderer works and is what the owner plays with (`SITE GPU 1` / the
-  RENDERER button, saved in `dev-settings.ini`; CPU stays the default at a first boot). On the 2DS: Green Hill 1 60 fps,
-  title and main menu all on the GPU, Special Stage 48-60 fps with `SITE SET gpu3d 1` (~17 without; floor as tile runs). Bottom screen tabs, loading box,
-  stereo/FORCE 3D, LINE and PALETTE on the GPU done on `feat/bottom-tabs` (owner-checked on the 2DS). **Next (owner's
-  list): savestates tab, in-game updates by channel, language, bottom-screen themes, INK TINT (pause), water line.** Full
-  detail, next steps and lessons: [`docs/gpu-renderer.md`](gpu-renderer.md).
+- **Where things stand (end of 2026-10-23, after session 3):** everything below is merged into `release/v0.1.0`.
+  The GPU renderer is what the owner plays with (RENDERER button / `SITE GPU 1`, saved). On the 2DS: Green Hill 60 fps,
+  title, menu and the Special Stages all on the GPU (Special Stage 1 48-60 fps turning, `gpu3d` on by default and
+  saved). Water lines, LINE, PALETTE, scissored rotated sprites on the GPU. Bottom screen with tabs (GAME, OPTIONS,
+  DEBUG), top FPS counter, loading box. Stereoscopic 3D works (checked on the owner's New 3DS: Special Stage with depth
+  for the models, floor, sky, track sprites and item boxes; elsewhere layer parallax and the HUD). Still CPU: INK TINT
+  (the pause menu). **Pending work lives in the GitHub issues** (#1 save states, #2 in-game updates, #3 language,
+  #4 bottom-screen themes, #5 INK TINT, #6 water line (done: close after the owner's check), #7 Special Stage 60 fps
+  turning / with 3D and the floor's quads, #8 options in production builds). Technical record:
+  [`docs/gpu-renderer.md`](gpu-renderer.md).
 - **Active release line**: `release/v0.1.0`, on `origin`.
-- **Console**: the owner's Old 2DS at `192.168.1.141` (DHCP: ping first; `tools/site.sh -i IP`). The build on it is the
-  latest of `perf/special-stage`. Ask the owner before installing in a new session (each session's "install without
-  asking" ends with it). **Without the console**: `tools/azahar.sh` runs the build in the owner's Azahar with the dev
-  tools on `127.0.0.1:5000` (pictures, crashes, reasons; not timings, not the stencil). Azahar's renderer was set to
-  Vulkan for this (backup `qt-config.ini.claude-backup` in `~/.var/app/org.azahar_emu.Azahar/config/azahar-emu/`).
+- **Consoles**: the owner's Old 2DS at `192.168.1.141` and New 3DS at `192.168.1.133` (DHCP: ping first;
+  `tools/site.sh -i IP`). Both run the latest dev build of `release/v0.1.0`; the New 3DS takes `--install` over FTP too
+  (it rewrites `.3ds_ftp_ip`: set it back to the 2DS). Ask the owner before installing in a new session (each session's
+  "install without asking" ends with it); an install relaunches the game (the player loses the spot). **Without a
+  console**: `tools/azahar.sh` runs the build in the owner's Azahar with the dev tools on `127.0.0.1:5000` (pictures,
+  crashes, reasons; not timings, not the stencil). Azahar's renderer was set to Vulkan for this (backup
+  `qt-config.ini.claude-backup` in `~/.var/app/org.azahar_emu.Azahar/config/azahar-emu/`).
 - **Branches**
 
 | Branch | State |
 |---|---|
 | `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
-| `release/v0.1.0` | Holds, merged: build/docs, dev tools, GPU presentation, bottom UI, clock pacing + frame skip, persistent switches, draw-order tooling (owner-checked); `feat/gpu-renderer` (renderer: layers, sprites, rotozoom sprites, RENDERER switch, frame counters, clean exit, scrolling bottom screen); `feat/gpu-faces` (faces, chunked big sprites, atlas retry, software layers); `feat/gpu-special-stage` (Special Stage through faces on the GPU). All seen by the owner on the 2DS. |
-| `feat/bottom-tabs` | **active**, cut from `perf/special-stage`: bottom-screen tabs (GAME, OPTIONS, DEBUG), top FPS counter, loading box, stereo 3D / FORCE 3D, LINE and PALETTE on the GPU, atlas packing, HOME-exit fix, installer buffer. Owner checked it on the 2DS (2026-10-22). |
-| `perf/special-stage` | **not merged**: 3D scenes as GPU model instances (`gpu3d`, off by default), 128 KB command buffer, 24-bit depth + stencil, masked inks (stencil), faster tile conversion, sprite key with 16-bit Y, chunks cut to the frame, `tools/azahar.sh`, rotozoom layers as tile runs (Special Stage floor, title island), tile atlas eviction, `SITE FREEZE`/`LAYERS`. The owner saw the menu, Green Hill's waterfall and the Special Stage working; still to look at: the title's logo shine and the collapsing floors. Merge when the owner says so. |
+| `release/v0.1.0` | Holds, merged: build/docs, dev tools, GPU presentation, bottom UI, clock pacing + frame skip, persistent switches, draw-order tooling; `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage`; `perf/special-stage` (3D scenes as GPU instances, masked inks, rotozoom tile runs, tile eviction) and `feat/bottom-tabs` (tabs, FPS counter, loading box, stereo 3D, LINE / PALETTE / water line on the GPU, scissor, HOME-exit fix), merged 2026-10-23 after the owner checked them on the 2DS and the New 3DS. |
+| `perf/special-stage`, `feat/bottom-tabs` | merged into the release (2026-10-23); may be deleted. |
 | `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage` | merged into the release; may be deleted. |
 | `feat/loading-screen` | bottom-screen loading indicator; **not confirmed by the owner, not merged**; conflicts in spirit with `BottomUi` (text console). |
 | `feat/render-backend` | `gfx-rewrite` base, unused (superseded by record/replay). Reference or delete. |
@@ -35,7 +40,7 @@
 - [ ] B0.1 Build works from a clean clone (`./build_3ds.sh --cia`); document the libtheora workaround. *Done on the owner's machine; check on a clean clone.*
 - [x] B0.2 (2026-10-22, 2DS) Run on hardware with the owner's `Data.rsdk` (find out if it is the Plus data), record Old 3DS frame times per stage (draw vs game logic) with a debug overlay. **Gate for R1: if logic dominates, the GPU will not fix it.**
 - [ ] B0.3 CI (`build-3ds.yml`, `build-release.yml`), version from git, release notes, as in `../zelda-tmc-3ds`.
-- [x] B0.4 Branches pushed to `origin` (2026-10-22). [ ] Enable issues in the repository settings; GitHub's default branch is still `master` (upstream's history).
+- [x] B0.4 Branches pushed to `origin` (2026-10-22). [x] Issues enabled (2026-10-23). GitHub's default branch is still `master` (upstream's history).
 
 ### Measurements (Old 2DS, 80 MB mode, right+A held; `tools/perf-sweep.sh`)
 
