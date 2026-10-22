@@ -295,7 +295,8 @@ int EnsureTile(unsigned id, unsigned bank)
 
 uint64 SprKey(unsigned sheet, unsigned bank, unsigned sprX, unsigned sprY, unsigned w, unsigned h)
 {
-    return 1ull | ((uint64)sheet << 56) | ((uint64)bank << 52) | ((uint64)w << 40) | ((uint64)h << 28) | ((uint64)sprX << 14) | sprY << 1;
+    // bit 0 set (0 is a free slot), sprY bits 2-15, sprX 16-29, h 30-40, w 41-51, bank 52-55, sheet 56-63
+    return 1ull | ((uint64)sheet << 56) | ((uint64)bank << 52) | ((uint64)w << 41) | ((uint64)h << 30) | ((uint64)sprX << 16) | ((uint64)sprY << 2);
 }
 
 // Shelf allocation in 8-pixel units; false when the atlas is full.
@@ -393,7 +394,7 @@ void ConvertSprite(const Pending &p)
 {
     SprSlot &s = sSlots[p.id];
     // The key holds the sheet position: unpack it.
-    const unsigned sheet = (unsigned)(s.key >> 56), sprX = (unsigned)((s.key >> 15) & 0x3FFF), sprY = (unsigned)((s.key >> 1) & 0x3FFF);
+    const unsigned sheet = (unsigned)(s.key >> 56), sprX = (unsigned)((s.key >> 16) & 0x3FFF), sprY = (unsigned)((s.key >> 2) & 0x3FFF);
     const GFXSurface &g  = gfxSurface[sheet];
     const uint16 *pal    = fullPalette[p.bank];
     uint32 groups        = 0;
