@@ -23,6 +23,11 @@ bool CoreReady();
 bool Init();
 bool Ready();
 
+// For the GPU renderer, which draws into the same top-screen target.
+struct C3D_RenderTarget_tag;
+void *Target(); // C3D_RenderTarget*
+void *Projection(); // C3D_Mtx*
+
 // Draws `src` (400x240 RGB565 with `pitch` pixels per row) on the top screen and presents it.
 void Present(const unsigned short *src, int pitch);
 

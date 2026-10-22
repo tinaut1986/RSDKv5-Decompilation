@@ -1,5 +1,7 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
+#include "RSDK/Graphics/CTR/GpuFrameCmd.hpp"
+#include "RSDK/Graphics/CTR/GpuRender.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS
 
@@ -11,32 +13,13 @@ using namespace RSDK;
 
 bool GpuFrame::active;
 bool GpuFrame::pending;
+unsigned GpuFrame::paletteVersion;
+unsigned GpuFrame::contentVersion;
+
+using namespace RSDK::GpuFrame;
 
 namespace
 {
-
-enum CmdType : uint8 {
-    CMD_FILL,
-    CMD_LINE,
-    CMD_RECT,
-    CMD_CIRCLE,
-    CMD_CIRCLE_OUTLINE,
-    CMD_FACE,
-    CMD_BLENDED_FACE,
-    CMD_SPRITE,
-    CMD_ROTO,
-    CMD_LAYER,
-    CMD_LINEBUF, // gfxLineBuffer changed: the new one is in the arena
-};
-
-struct Cmd {
-    uint8 type;
-    uint8 kind;       // layer type
-    int16 clip[4];    // clipBound_X1, Y1, X2, Y2 when the call was made
-    int32 p[15];      // parameters, per type
-    uint32 arena;     // offset of the variable-size data (vertices, colours, scanlines, line buffer)
-    uint32 arenaSize;
-};
 
 enum { MAX_CMDS = 2048, ARENA_SIZE = 96 * 1024 };
 
@@ -78,6 +61,8 @@ Cmd *NewCmd(CmdType type, uint32 arenaBytes = 0)
     c->clip[1] = (int16)currentScreen->clipBound_Y1;
     c->clip[2] = (int16)currentScreen->clipBound_X2;
     c->clip[3] = (int16)currentScreen->clipBound_Y2;
+    c->pos[0]    = currentScreen->position.x;
+    c->pos[1]    = currentScreen->position.y;
     c->arena     = sArenaUsed;
     c->arenaSize = arenaBytes;
     sArenaUsed += (arenaBytes + 3) & ~3u;
@@ -98,7 +83,7 @@ bool SyncLineBuffer()
     return true;
 }
 
-Cmd *Begin(CmdType type, uint32 arenaBytes = 0)
+Cmd *BeginCmd(CmdType type, uint32 arenaBytes = 0)
 {
     if (!SyncLineBuffer())
         return NULL;
@@ -138,20 +123,21 @@ void GpuFrame::End()
     if (!active)
         return;
     active = false;
-    sEndClip[0] = (int16)currentScreen->clipBound_X1;
-    sEndClip[1] = (int16)currentScreen->clipBound_Y1;
-    sEndClip[2] = (int16)currentScreen->clipBound_X2;
-    sEndClip[3] = (int16)currentScreen->clipBound_Y2;
+    // The draw loop has already moved currentScreen on to the next screen: the 3DS has only screen 0.
+    sEndClip[0] = (int16)screens[0].clipBound_X1;
+    sEndClip[1] = (int16)screens[0].clipBound_Y1;
+    sEndClip[2] = (int16)screens[0].clipBound_X2;
+    sEndClip[3] = (int16)screens[0].clipBound_Y2;
     pending = sCount > 1;
 }
 
 void GpuFrame::Hazard()
 {
     if (active) {
-        sEndClip[0] = (int16)currentScreen->clipBound_X1;
-        sEndClip[1] = (int16)currentScreen->clipBound_Y1;
-        sEndClip[2] = (int16)currentScreen->clipBound_X2;
-        sEndClip[3] = (int16)currentScreen->clipBound_Y2;
+        sEndClip[0] = (int16)screens[0].clipBound_X1;
+        sEndClip[1] = (int16)screens[0].clipBound_Y1;
+        sEndClip[2] = (int16)screens[0].clipBound_X2;
+        sEndClip[3] = (int16)screens[0].clipBound_Y2;
     }
     active  = false;
     pending = sCount > 1;
@@ -167,9 +153,10 @@ void GpuFrame::Flush()
     sStats.commands = sCount;
     ++sStats.replayed;
 
-    // Replays only call the public draw functions, with `active` and `pending` off: they draw.
-    const int16 keep[4] = { (int16)currentScreen->clipBound_X1, (int16)currentScreen->clipBound_Y1, (int16)currentScreen->clipBound_X2,
-                            (int16)currentScreen->clipBound_Y2 };
+    // Replays only call the public draw functions, with `active` and `pending` off: they draw. They draw on
+    // screen 0 whatever currentScreen says now (the draw loop moved it on; Present runs later).
+    ScreenInfo *const keepScreen = currentScreen;
+    currentScreen                = &screens[0];
     for (unsigned i = 0; i < sCount; ++i) {
         const Cmd &c = sCmds[i];
         const int32 *p = c.p;
@@ -178,6 +165,8 @@ void GpuFrame::Flush()
             continue;
         }
         SetClip(c.clip);
+        currentScreen->position.x = c.pos[0];
+        currentScreen->position.y = c.pos[1];
         switch (c.type) {
             case CMD_FILL: FillScreen((uint32)p[0], p[1], p[2], p[3]); break;
             case CMD_LINE: DrawLine(p[0], p[1], p[2], p[3], (uint32)p[4], p[5], p[6], p[7]); break;
@@ -213,21 +202,34 @@ void GpuFrame::Flush()
         }
     }
     SetClip(sEndClip);
-    (void)keep;
+    currentScreen = keepScreen;
     sCount = sArenaUsed = 0;
 }
 
-void GpuFrame::Present()
+bool GpuFrame::Present()
 {
-    if (pending)
-        Flush();
+    if (!pending)
+        return false;
+    if (DEV_SW_GPUPRESENT && DEV_SW_GPURENDER) {
+        const Stream stream = { sCmds, sCount, sArena };
+        if (GpuRender::Render(stream)) {
+            pending = false;
+            sCount = sArenaUsed = 0;
+            ++sStats.gpuFrames;
+            return true; // the frame is on screen already
+        }
+    }
+    Flush();
+    return false;
 }
+
+void GpuFrame::InvalidateContent() { ++contentVersion; }
 
 // ---------------------------------------------------------------- recording
 
 bool GpuFrame::RecFill(uint32 color, int32 aR, int32 aG, int32 aB)
 {
-    Cmd *c = Begin(CMD_FILL);
+    Cmd *c = BeginCmd(CMD_FILL);
     if (!c)
         return false;
     c->p[0] = (int32)color, c->p[1] = aR, c->p[2] = aG, c->p[3] = aB;
@@ -236,7 +238,7 @@ bool GpuFrame::RecFill(uint32 color, int32 aR, int32 aG, int32 aB)
 
 bool GpuFrame::RecLine(int32 x1, int32 y1, int32 x2, int32 y2, uint32 color, int32 alpha, int32 ink, bool32 sr)
 {
-    Cmd *c = Begin(CMD_LINE);
+    Cmd *c = BeginCmd(CMD_LINE);
     if (!c)
         return false;
     c->p[0] = x1, c->p[1] = y1, c->p[2] = x2, c->p[3] = y2, c->p[4] = (int32)color, c->p[5] = alpha, c->p[6] = ink, c->p[7] = sr;
@@ -245,7 +247,7 @@ bool GpuFrame::RecLine(int32 x1, int32 y1, int32 x2, int32 y2, uint32 color, int
 
 bool GpuFrame::RecRect(int32 x, int32 y, int32 w, int32 h, uint32 color, int32 alpha, int32 ink, bool32 sr)
 {
-    Cmd *c = Begin(CMD_RECT);
+    Cmd *c = BeginCmd(CMD_RECT);
     if (!c)
         return false;
     c->p[0] = x, c->p[1] = y, c->p[2] = w, c->p[3] = h, c->p[4] = (int32)color, c->p[5] = alpha, c->p[6] = ink, c->p[7] = sr;
@@ -254,7 +256,7 @@ bool GpuFrame::RecRect(int32 x, int32 y, int32 w, int32 h, uint32 color, int32 a
 
 bool GpuFrame::RecCircle(int32 x, int32 y, int32 r, uint32 color, int32 alpha, int32 ink, bool32 sr)
 {
-    Cmd *c = Begin(CMD_CIRCLE);
+    Cmd *c = BeginCmd(CMD_CIRCLE);
     if (!c)
         return false;
     c->p[0] = x, c->p[1] = y, c->p[2] = r, c->p[3] = (int32)color, c->p[4] = alpha, c->p[5] = ink, c->p[6] = sr;
@@ -263,7 +265,7 @@ bool GpuFrame::RecCircle(int32 x, int32 y, int32 r, uint32 color, int32 alpha, i
 
 bool GpuFrame::RecCircleOutline(int32 x, int32 y, int32 ri, int32 ro, uint32 color, int32 alpha, int32 ink, bool32 sr)
 {
-    Cmd *c = Begin(CMD_CIRCLE_OUTLINE);
+    Cmd *c = BeginCmd(CMD_CIRCLE_OUTLINE);
     if (!c)
         return false;
     c->p[0] = x, c->p[1] = y, c->p[2] = ri, c->p[3] = ro, c->p[4] = (int32)color, c->p[5] = alpha, c->p[6] = ink, c->p[7] = sr;
@@ -274,7 +276,7 @@ bool GpuFrame::RecFace(Vector2 *vertices, int32 n, int32 r, int32 g, int32 b, in
 {
     if (n < 0 || n > 64)
         return false; // not recorded: the caller draws it, after a flush
-    Cmd *c = Begin(CMD_FACE, (uint32)n * sizeof(Vector2));
+    Cmd *c = BeginCmd(CMD_FACE, (uint32)n * sizeof(Vector2));
     if (!c)
         return false;
     memcpy(sArena + c->arena, vertices, (size_t)n * sizeof(Vector2));
@@ -286,7 +288,7 @@ bool GpuFrame::RecBlendedFace(Vector2 *vertices, uint32 *colors, int32 n, int32 
 {
     if (n < 0 || n > 64)
         return false;
-    Cmd *c = Begin(CMD_BLENDED_FACE, (uint32)n * (sizeof(Vector2) + sizeof(uint32)));
+    Cmd *c = BeginCmd(CMD_BLENDED_FACE, (uint32)n * (sizeof(Vector2) + sizeof(uint32)));
     if (!c)
         return false;
     memcpy(sArena + c->arena, vertices, (size_t)n * sizeof(Vector2));
@@ -297,7 +299,7 @@ bool GpuFrame::RecBlendedFace(Vector2 *vertices, uint32 *colors, int32 n, int32 
 
 bool GpuFrame::RecSprite(int32 x, int32 y, int32 w, int32 h, int32 sprX, int32 sprY, int32 dir, int32 ink, int32 alpha, int32 sheet)
 {
-    Cmd *c = Begin(CMD_SPRITE);
+    Cmd *c = BeginCmd(CMD_SPRITE);
     if (!c)
         return false;
     c->p[0] = x, c->p[1] = y, c->p[2] = w, c->p[3] = h, c->p[4] = sprX, c->p[5] = sprY, c->p[6] = dir, c->p[7] = ink, c->p[8] = alpha, c->p[9] = sheet;
@@ -307,7 +309,7 @@ bool GpuFrame::RecSprite(int32 x, int32 y, int32 w, int32 h, int32 sprX, int32 s
 bool GpuFrame::RecRoto(int32 x, int32 y, int32 pivotX, int32 pivotY, int32 w, int32 h, int32 sprX, int32 sprY, int32 scaleX, int32 scaleY, int32 dir,
                        int16 rot, int32 ink, int32 alpha, int32 sheet)
 {
-    Cmd *c = Begin(CMD_ROTO);
+    Cmd *c = BeginCmd(CMD_ROTO);
     if (!c)
         return false;
     c->p[0] = x, c->p[1] = y, c->p[2] = pivotX, c->p[3] = pivotY, c->p[4] = w, c->p[5] = h, c->p[6] = sprX, c->p[7] = sprY, c->p[8] = scaleX;
@@ -319,7 +321,7 @@ bool GpuFrame::RecLayer(TileLayer *layer, int kind)
 {
     const int y1 = currentScreen->clipBound_Y1, y2 = currentScreen->clipBound_Y2;
     const unsigned lines = y2 > y1 ? (unsigned)(y2 - y1) : 0;
-    Cmd *c = Begin(CMD_LAYER, lines * (unsigned)sizeof(ScanlineInfo));
+    Cmd *c = BeginCmd(CMD_LAYER, lines * (unsigned)sizeof(ScanlineInfo));
     if (!c)
         return false;
     c->kind = (uint8)kind;

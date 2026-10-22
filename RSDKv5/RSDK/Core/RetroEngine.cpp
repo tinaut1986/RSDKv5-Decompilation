@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
 using namespace RSDK;
 
@@ -384,6 +385,9 @@ void RSDK::ProcessEngine()
                 LoadSceneFolder();
                 LoadSceneAssets();
                 InitObjects();
+#if RETRO_PLATFORM == RETRO_3DS
+                GpuFrame::InvalidateContent();
+#endif
 
 #if RETRO_REV02
 #if !RETRO_USE_ORIGINAL_CODE

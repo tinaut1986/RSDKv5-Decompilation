@@ -11,12 +11,14 @@ namespace GpuFrame
 {
 extern bool active;
 extern bool pending;
+extern unsigned paletteVersion;
 void Hazard();
 } // namespace GpuFrame
 } // namespace RSDK
 
 #define GPUFRAME_PALETTE_HAZARD()                                                                                                                    \
     do {                                                                                                                                             \
+        ++RSDK::GpuFrame::paletteVersion;                                                                                                            \
         if (RSDK::GpuFrame::active || RSDK::GpuFrame::pending)                                                                                       \
             RSDK::GpuFrame::Hazard();                                                                                                                \
     } while (0)

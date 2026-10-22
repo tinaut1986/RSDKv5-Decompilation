@@ -27,7 +27,10 @@ void Begin();
 void End();
 void Flush();   // replay the pending commands through the software renderer now
 void Hazard();  // Flush, and draw immediately for the rest of the frame
-void Present(); // FlipScreen: execute what is pending
+// FlipScreen: execute what is pending. True when the GPU drew the frame and presented it (the caller must not
+// present the software framebuffer), false when it was replayed into the software framebuffer.
+bool Present();
+void InvalidateContent(); // a scene (tileset, sprite sheets) was loaded: textures made from the old ones are stale
 
 // Recording entry points: true when the call was taken (the caller returns).
 bool RecFill(uint32 color, int32 alphaR, int32 alphaG, int32 alphaB);
@@ -46,6 +49,8 @@ bool RecLayer(TileLayer *layer, int kind);
 struct Stats {
     unsigned commands;
     unsigned replayed; // frames executed through the software renderer
+    unsigned gpuFrames; // frames drawn by the GPU
+    unsigned lastReason; // why the last frame fell back (GpuRender::Reason)
 };
 const Stats &GetStats();
 

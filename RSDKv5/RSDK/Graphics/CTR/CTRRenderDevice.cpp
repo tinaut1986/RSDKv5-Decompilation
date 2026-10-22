@@ -73,7 +73,7 @@ static void TransposeToFramebuffer(const u16 *src, int pitch, u16 *dst)
 // https://github.com/JeffRuLz/Sonic-1-2-2013-Decompilation/blob/main/RSDKv4/3ds/3ds.cpp#L141
 void RenderDevice::FlipScreen()
 {
-  GpuFrame::Present(); // execute the frame's recorded draw commands
+  const bool drawnByGpu = GpuFrame::Present(); // execute the frame's recorded draw commands
   const u16 *src = screens[0].frameBuffer;
   u16 *dst = (uint16*) gfxGetFramebuffer(GFX_TOP, GFX_LEFT, 0, 0);
 
@@ -84,7 +84,10 @@ void RenderDevice::FlipScreen()
         // image/video buffer, break
         break;
       case 1:
-        if (DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init()))
+        if (drawnByGpu) {
+          // already on screen
+        }
+        else if (DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init()))
           C3DPresent::Present(src, screens[0].pitch);
         else if (DEV_SW_FLIPCOPY)
           TransposeToFramebuffer(src, screens[0].pitch, dst);
@@ -98,7 +101,7 @@ void RenderDevice::FlipScreen()
         break;
     }
 
-    if (!(DEV_SW_GPUPRESENT && C3DPresent::Ready())) {
+    if (!(drawnByGpu || (DEV_SW_GPUPRESENT && C3DPresent::Ready()))) {
       gfxFlushBuffers();
       gfxSwapBuffers();
     }

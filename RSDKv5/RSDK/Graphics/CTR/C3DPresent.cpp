@@ -122,6 +122,8 @@ bool C3DPresent::Init()
 }
 
 bool C3DPresent::Ready() { return sReady; }
+void *C3DPresent::Target() { return sTarget; }
+void *C3DPresent::Projection() { return &sProj; }
 
 void C3DPresent::Present(const unsigned short *src, int pitch)
 {

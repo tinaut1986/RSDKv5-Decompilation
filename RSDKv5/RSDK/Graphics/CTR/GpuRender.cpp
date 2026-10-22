@@ -1,0 +1,758 @@
+#include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Graphics/CTR/GpuRender.hpp"
+
+#if RETRO_PLATFORM == RETRO_3DS
+
+#include <3ds.h>
+#include <citro3d.h>
+#include <string.h>
+
+#include "RSDK/Graphics/CTR/C3DPresent.hpp"
+#include "RSDK/Graphics/CTR/GpuFrame.hpp"
+#include "RSDK/Graphics/CTR/gpu_shbin.h"
+
+using namespace RSDK;
+using namespace RSDK::GpuFrame;
+
+namespace
+{
+
+enum {
+    TILE_ATLAS_W = 512,
+    TILE_ATLAS_H = 512,
+    TILE_CELLS   = (TILE_ATLAS_W / 16) * (TILE_ATLAS_H / 16),
+    TILE_IDS     = TILE_COUNT * 4, // a tile index may carry the flip bits of the layout (0xFFF)
+    SPR_ATLAS_W  = 1024,
+    SPR_ATLAS_H  = 512,
+    SPR_SLOTS    = 4096,
+    SPR_MAX_PIXELS = 256 * 256,
+    MAX_QUADS    = 4096,
+    MAX_BATCHES  = 64,
+    MAX_PENDING  = 2048,
+    BANKS        = PALETTE_BANK_COUNT,
+};
+
+struct Vtx {
+    float x, y, u, v;
+    uint8 r, g, b, a;
+};
+
+enum Tex { TEX_TILE, TEX_SPRITE };
+enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB };
+
+struct Batch {
+    uint8 tex, blend;
+    unsigned first, count; // quads
+};
+
+struct SprSlot {
+    uint64 key; // 0 = free
+    uint16 x, y, w, h; // atlas position and padded (multiple of 8) size
+    uint16 srcW, srcH;
+    uint32 stamp; // paletteVersion when converted
+};
+
+struct Pending {
+    uint8 kind; // 0 tile, 1 sprite
+    uint8 bank;
+    uint16 id;  // tile id, or sprite slot
+    uint16 cell;
+};
+
+bool sReady, sFailed;
+C3D_Tex sTileTex, sSprTex;
+u16 *sTileData, *sSprData;
+DVLB_s *sDvlb;
+shaderProgram_s sProgram;
+int sProjLoc;
+C3D_AttrInfo sAttr;
+C3D_BufInfo sBufInfo;
+Vtx *sVbo[2];
+u16 *sIdx;
+unsigned sCur;
+
+// Per-frame build state
+unsigned sQuadCount;
+Batch sBatches[MAX_BATCHES];
+unsigned sBatchCount;
+Pending sPending[MAX_PENDING];
+unsigned sPendingCount;
+bool sInPlace;       // a texture cell already in use is rewritten: the previous GPU frame must be finished first
+unsigned sSeenContent = ~0u;
+GpuRender::Stats sStats;
+
+// Tile cache: one cell per (bank, tile id)
+int16 sTileCell[BANKS][TILE_IDS];
+uint32 sTileStamp[BANKS][TILE_IDS];
+unsigned sTileCellsUsed;
+
+// Sprite cache: shelves of 8-pixel granularity
+SprSlot sSlots[SPR_SLOTS];
+struct Shelf {
+    uint16 y, h, xUsed;
+};
+Shelf sShelves[SPR_ATLAS_H / 8];
+unsigned sShelfCount;
+unsigned sSlotsUsed;
+uint16 sShelfNextY;
+
+uint8 sLineBuf[SCREEN_YSIZE];
+
+// Dirty spans of the atlases (byte offsets), flushed before the frame is drawn
+unsigned sTileDirtyLo, sTileDirtyHi, sSprDirtyLo, sSprDirtyHi;
+
+inline unsigned Morton(unsigned x, unsigned y)
+{
+    return (x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) | ((x & 4) << 2) | ((y & 4) << 3);
+}
+
+inline u16 ToTexel(uint16 c565)
+{
+    const unsigned r = c565 >> 11, g = (c565 >> 5) & 0x3F, b = c565 & 0x1F;
+    return (u16)((r << 11) | ((g >> 1) << 6) | (b << 1) | 1);
+}
+
+inline void Put(u16 *base, unsigned atlasW, unsigned X, unsigned Y, u16 texel)
+{
+    base[((((Y >> 3) * (atlasW >> 3) + (X >> 3)) << 6) | Morton(X & 7, Y & 7))] = texel;
+}
+
+inline void Dirty(unsigned &lo, unsigned &hi, unsigned atlasW, unsigned X, unsigned Y, unsigned w, unsigned h)
+{
+    const unsigned first = (((Y >> 3) * (atlasW >> 3) + (X >> 3)) << 6) * 2;
+    const unsigned last  = ((((Y + h - 1) >> 3) * (atlasW >> 3) + ((X + w - 1) >> 3) + 1) << 6) * 2;
+    if (first < lo)
+        lo = first;
+    if (last > hi)
+        hi = last;
+}
+
+void ResetCaches()
+{
+    memset(sTileCell, 0xFF, sizeof(sTileCell)); // -1
+    memset(sTileStamp, 0, sizeof(sTileStamp));
+    sTileCellsUsed = 0;
+    memset(sSlots, 0, sizeof(sSlots));
+    sShelfCount = sSlotsUsed = 0;
+    sShelfNextY = 0;
+    // The solid-colour block at the atlas origin (8x8, opaque white) and the shelf it opens.
+    sShelves[0] = { 0, 8, 8 };
+    sShelfCount = 1;
+    sShelfNextY = 8;
+    for (unsigned y = 0; y < 8; ++y)
+        for (unsigned x = 0; x < 8; ++x)
+            Put(sSprData, SPR_ATLAS_W, x, y, 0xFFFF);
+    sSprDirtyLo = 0;
+    sSprDirtyHi = 8 * 8 * 2;
+}
+
+bool Setup()
+{
+    if (sReady)
+        return true;
+    if (sFailed)
+        return false;
+    sFailed = true;
+    if (!C3DPresent::Init())
+        return false;
+
+    if (!C3D_TexInit(&sTileTex, TILE_ATLAS_W, TILE_ATLAS_H, GPU_RGBA5551) || !C3D_TexInit(&sSprTex, SPR_ATLAS_W, SPR_ATLAS_H, GPU_RGBA5551))
+        return false;
+    sTileData = (u16 *)sTileTex.data;
+    sSprData  = (u16 *)sSprTex.data;
+    memset(sTileData, 0, (size_t)TILE_ATLAS_W * TILE_ATLAS_H * 2);
+    memset(sSprData, 0, (size_t)SPR_ATLAS_W * SPR_ATLAS_H * 2);
+    C3D_TexSetFilter(&sTileTex, GPU_NEAREST, GPU_NEAREST);
+    C3D_TexSetFilter(&sSprTex, GPU_NEAREST, GPU_NEAREST);
+    C3D_TexSetWrap(&sTileTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    C3D_TexSetWrap(&sSprTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+
+    sVbo[0] = (Vtx *)linearAlloc(sizeof(Vtx) * 4 * MAX_QUADS);
+    sVbo[1] = (Vtx *)linearAlloc(sizeof(Vtx) * 4 * MAX_QUADS);
+    sIdx    = (u16 *)linearAlloc(sizeof(u16) * 6 * MAX_QUADS);
+    if (!sVbo[0] || !sVbo[1] || !sIdx)
+        return false;
+    for (unsigned q = 0; q < MAX_QUADS; ++q) {
+        const u16 b = (u16)(q * 4);
+        sIdx[q * 6 + 0] = b, sIdx[q * 6 + 1] = b + 1, sIdx[q * 6 + 2] = b + 2;
+        sIdx[q * 6 + 3] = b, sIdx[q * 6 + 4] = b + 2, sIdx[q * 6 + 5] = b + 3;
+    }
+    GSPGPU_FlushDataCache(sIdx, sizeof(u16) * 6 * MAX_QUADS);
+
+    sDvlb = DVLB_ParseFile((u32 *)gpu_shbin, sizeof(gpu_shbin));
+    if (!sDvlb)
+        return false;
+    shaderProgramInit(&sProgram);
+    shaderProgramSetVsh(&sProgram, &sDvlb->DVLE[0]);
+    sProjLoc = shaderInstanceGetUniformLocation(sProgram.vertexShader, "projection");
+
+    AttrInfo_Init(&sAttr);
+    AttrInfo_AddLoader(&sAttr, 0, GPU_FLOAT, 4);         // x, y, u, v
+    AttrInfo_AddLoader(&sAttr, 1, GPU_UNSIGNED_BYTE, 4); // r, g, b, a
+
+    ResetCaches();
+    sReady  = true;
+    sFailed = false;
+    return true;
+}
+
+// ---------------------------------------------------------------- frame state
+
+struct Fail {
+    GpuRender::Reason reason;
+    unsigned cmd;
+};
+Fail sFail;
+
+bool Refuse(GpuRender::Reason reason, unsigned cmd = 0)
+{
+    sFail.reason = reason;
+    sFail.cmd    = cmd;
+    return false;
+}
+
+bool UniformBank(int y0, int y1, uint8 *bank)
+{
+    if (y0 < 0)
+        y0 = 0;
+    if (y1 > SCREEN_YSIZE)
+        y1 = SCREEN_YSIZE;
+    if (y1 <= y0) {
+        *bank = 0;
+        return true;
+    }
+    const uint8 b = sLineBuf[y0];
+    for (int y = y0 + 1; y < y1; ++y)
+        if (sLineBuf[y] != b)
+            return false;
+    *bank = b;
+    return true;
+}
+
+// ---------------------------------------------------------------- caches
+
+// Atlas cell of a tile with the palette bank applied; queues its conversion when it is new or stale.
+int EnsureTile(unsigned id, unsigned bank)
+{
+    if (id >= TILE_IDS || bank >= BANKS)
+        return -1;
+    int cell = sTileCell[bank][id];
+    if (cell < 0) {
+        if (sTileCellsUsed >= TILE_CELLS)
+            return -2; // atlas full
+        cell                 = (int)sTileCellsUsed++;
+        sTileCell[bank][id]  = (int16)cell;
+        sTileStamp[bank][id] = 0;
+    }
+    if (sTileStamp[bank][id] != paletteVersion + 1) {
+        if (sPendingCount >= MAX_PENDING)
+            return -3;
+        if (sTileStamp[bank][id] != 0)
+            sInPlace = true; // rewriting a cell an earlier frame may still be reading
+        sTileStamp[bank][id] = paletteVersion + 1;
+        sPending[sPendingCount++] = { 0, (uint8)bank, (uint16)id, (uint16)cell };
+    }
+    return cell;
+}
+
+uint64 SprKey(unsigned sheet, unsigned bank, unsigned sprX, unsigned sprY, unsigned w, unsigned h)
+{
+    return 1ull | ((uint64)sheet << 56) | ((uint64)bank << 52) | ((uint64)w << 40) | ((uint64)h << 28) | ((uint64)sprX << 14) | sprY << 1;
+}
+
+// Shelf allocation in 8-pixel units; false when the atlas is full.
+bool AllocSprite(unsigned w8, unsigned h8, unsigned *x, unsigned *y)
+{
+    int best = -1;
+    for (unsigned s = 0; s < sShelfCount; ++s) {
+        Shelf &sh = sShelves[s];
+        if (sh.h >= h8 && sh.h <= h8 + 8 && sh.xUsed + w8 <= SPR_ATLAS_W && (best < 0 || sh.h < sShelves[best].h))
+            best = (int)s;
+    }
+    if (best < 0) {
+        if (sShelfNextY + h8 > SPR_ATLAS_H || sShelfCount >= SPR_ATLAS_H / 8)
+            return false;
+        sShelves[sShelfCount] = { sShelfNextY, (uint16)h8, 0 };
+        sShelfNextY += (uint16)h8;
+        best = (int)sShelfCount++;
+    }
+    *x = sShelves[best].xUsed;
+    *y = sShelves[best].y;
+    sShelves[best].xUsed += (uint16)w8;
+    return true;
+}
+
+SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, int h, int *refuse)
+{
+    *refuse = 0;
+    if (sheet >= SURFACE_COUNT || !gfxSurface[sheet].pixels || sprX < 0 || sprY < 0 || w <= 0 || h <= 0 || sprX >= 16384 || sprY >= 16384 || w >= 2048 || h >= 2048 ||
+        bank >= BANKS) {
+        *refuse = GpuRender::REASON_BAD_DATA;
+        return NULL;
+    }
+    if ((unsigned)(w * h) > SPR_MAX_PIXELS) {
+        *refuse = GpuRender::REASON_SPRITE_SIZE;
+        return NULL;
+    }
+    const uint64 key = SprKey(sheet, bank, sprX, sprY, w, h);
+    unsigned i       = (unsigned)((key ^ (key >> 29) ^ (key >> 13)) * 2654435761u) % SPR_SLOTS;
+    for (unsigned probe = 0; probe < SPR_SLOTS; ++probe, i = (i + 1) % SPR_SLOTS) {
+        SprSlot &s = sSlots[i];
+        if (s.key == key) {
+            if (s.stamp != paletteVersion + 1) {
+                if (sPendingCount >= MAX_PENDING) {
+                    *refuse = GpuRender::REASON_QUAD_LIMIT;
+                    return NULL;
+                }
+                sInPlace = true;
+                s.stamp  = paletteVersion + 1;
+                sPending[sPendingCount++] = { 1, (uint8)bank, (uint16)i, 0 };
+            }
+            return &s;
+        }
+        if (!s.key) {
+            if (sSlotsUsed >= SPR_SLOTS * 3 / 4 || sPendingCount >= MAX_PENDING) {
+                *refuse = GpuRender::REASON_ATLAS_FULL;
+                return NULL;
+            }
+            const unsigned w8 = (w + 7) & ~7u, h8 = (h + 7) & ~7u;
+            unsigned ax, ay;
+            if (!AllocSprite(w8, h8, &ax, &ay)) {
+                *refuse = GpuRender::REASON_ATLAS_FULL;
+                return NULL;
+            }
+            s.key  = key;
+            s.x    = (uint16)ax, s.y = (uint16)ay, s.w = (uint16)w8, s.h = (uint16)h8;
+            s.srcW = (uint16)w, s.srcH = (uint16)h;
+            s.stamp = paletteVersion + 1;
+            ++sSlotsUsed;
+            sPending[sPendingCount++] = { 1, (uint8)bank, (uint16)i, 0 };
+            return &s;
+        }
+    }
+    *refuse = GpuRender::REASON_ATLAS_FULL;
+    return NULL;
+}
+
+void ConvertTile(const Pending &p)
+{
+    const uint8 *src = &tilesetPixels[TILE_DATASIZE * p.id];
+    const uint16 *pal = fullPalette[p.bank];
+    const unsigned X = (p.cell % (TILE_ATLAS_W / 16)) * 16, Y = (p.cell / (TILE_ATLAS_W / 16)) * 16;
+    for (unsigned y = 0; y < 16; ++y)
+        for (unsigned x = 0; x < 16; ++x) {
+            const unsigned idx = src[y * 16 + x];
+            Put(sTileData, TILE_ATLAS_W, X + x, Y + y, idx ? ToTexel(pal[idx]) : 0);
+        }
+    Dirty(sTileDirtyLo, sTileDirtyHi, TILE_ATLAS_W, X, Y, 16, 16);
+    ++sStats.tileConversions;
+}
+
+void ConvertSprite(const Pending &p)
+{
+    SprSlot &s = sSlots[p.id];
+    // The key holds the sheet position: unpack it.
+    const unsigned sheet = (unsigned)(s.key >> 56), sprX = (unsigned)((s.key >> 15) & 0x3FFF), sprY = (unsigned)((s.key >> 1) & 0x3FFF);
+    const GFXSurface &g  = gfxSurface[sheet];
+    const uint16 *pal    = fullPalette[p.bank];
+    for (unsigned y = 0; y < s.h; ++y)
+        for (unsigned x = 0; x < s.w; ++x) {
+            u16 texel = 0;
+            if (x < s.srcW && y < s.srcH && (int)(sprX + x) < g.width && (int)(sprY + y) < g.height) {
+                const unsigned idx = g.pixels[(sprY + y) * g.width + sprX + x];
+                texel              = idx ? ToTexel(pal[idx]) : 0;
+            }
+            Put(sSprData, SPR_ATLAS_W, s.x + x, s.y + y, texel);
+        }
+    Dirty(sSprDirtyLo, sSprDirtyHi, SPR_ATLAS_W, s.x, s.y, s.w, s.h);
+    ++sStats.spriteConversions;
+}
+
+// ---------------------------------------------------------------- geometry
+
+bool AddQuad(uint8 tex, uint8 blend, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, unsigned atlasW, unsigned atlasH,
+             uint8 r, uint8 g, uint8 b, uint8 a)
+{
+    if (sQuadCount >= MAX_QUADS)
+        return false;
+    if (!sBatchCount || sBatches[sBatchCount - 1].tex != tex || sBatches[sBatchCount - 1].blend != blend) {
+        if (sBatchCount >= MAX_BATCHES)
+            return false;
+        sBatches[sBatchCount++] = { tex, blend, sQuadCount, 0 };
+    }
+    ++sBatches[sBatchCount - 1].count;
+    Vtx *v = &sVbo[sCur][sQuadCount * 4];
+    ++sQuadCount;
+    const float iu = 1.0f / atlasW, iv = 1.0f / atlasH;
+    // Texels are rows from the top; the PICA samples memory row 0 at v = 1.
+    const float U0 = u0 * iu, U1 = u1 * iu, V0 = 1.0f - v0 * iv, V1 = 1.0f - v1 * iv;
+    v[0] = { x0, y0, U0, V0, r, g, b, a };
+    v[1] = { x1, y0, U1, V0, r, g, b, a };
+    v[2] = { x1, y1, U1, V1, r, g, b, a };
+    v[3] = { x0, y1, U0, V1, r, g, b, a };
+    return true;
+}
+
+// ---------------------------------------------------------------- commands
+
+bool EmitSprite(const Cmd &c)
+{
+    const int32 *p = c.p;
+    int32 x = p[0], y = p[1], width = p[2], height = p[3], sprX = p[4], sprY = p[5];
+    const int32 direction = p[6], sheetID = p[9];
+    int32 ink = p[7], alpha = p[8];
+    const int32 sprX0 = sprX, sprY0 = sprY, w0 = width, h0 = height;
+
+    uint8 blend = BLEND_NORMAL;
+    switch (ink) {
+        case INK_NONE: alpha = 0xFF; break;
+        case INK_BLEND: alpha = 0x80; break;
+        case INK_ALPHA:
+            if (alpha > 0xFF)
+                alpha = 0xFF;
+            else if (alpha <= 0)
+                return true;
+            break;
+        case INK_ADD:
+            blend = BLEND_ADD;
+            if (alpha > 0xFF)
+                alpha = 0xFF;
+            else if (alpha <= 0)
+                return true;
+            break;
+        case INK_SUB:
+            blend = BLEND_SUB;
+            if (alpha > 0xFF)
+                alpha = 0xFF;
+            else if (alpha <= 0)
+                return true;
+            break;
+        default: return Refuse(GpuRender::REASON_INK, (unsigned)ink);
+    }
+
+    int32 widthFlip = width, heightFlip = height;
+    if (width + x > c.clip[2])
+        width = c.clip[2] - x;
+    if (x < c.clip[0]) {
+        const int32 val = x - c.clip[0];
+        sprX -= val;
+        width += val;
+        widthFlip += 2 * val;
+        x = c.clip[0];
+    }
+    if (height + y > c.clip[3])
+        height = c.clip[3] - y;
+    if (y < c.clip[1]) {
+        const int32 val = y - c.clip[1];
+        sprY -= val;
+        height += val;
+        heightFlip += 2 * val;
+        y = c.clip[1];
+    }
+    if (width <= 0 || height <= 0)
+        return true;
+
+    uint8 bank;
+    if (!UniformBank(y, y + height, &bank))
+        return Refuse(GpuRender::REASON_PALETTE_LINES);
+    int refuse;
+    SprSlot *slot = EnsureSprite((unsigned)sheetID, bank, sprX0, sprY0, w0, h0, &refuse);
+    if (!slot)
+        return Refuse((GpuRender::Reason)refuse);
+
+    // Source rectangle in atlas texels. A flipped axis runs from the far edge back.
+    float su0, su1, sv0, sv1;
+    const float ex = (float)slot->x, ey = (float)slot->y;
+    if (direction == FLIP_X || direction == FLIP_XY) {
+        su0 = ex + (float)(sprX + widthFlip - sprX0);
+        su1 = su0 - (float)width;
+    }
+    else {
+        su0 = ex + (float)(sprX - sprX0);
+        su1 = su0 + (float)width;
+    }
+    if (direction == FLIP_Y || direction == FLIP_XY) {
+        sv0 = ey + (float)(sprY + heightFlip - sprY0);
+        sv1 = sv0 - (float)height;
+    }
+    else {
+        sv0 = ey + (float)(sprY - sprY0);
+        sv1 = sv0 + (float)height;
+    }
+    if (!AddQuad(TEX_SPRITE, blend, (float)x, (float)y, (float)(x + width), (float)(y + height), su0, sv0, su1, sv1, SPR_ATLAS_W, SPR_ATLAS_H, 255, 255, 255,
+                 (uint8)alpha))
+        return Refuse(GpuRender::REASON_QUAD_LIMIT);
+    return true;
+}
+
+bool EmitRect(const Cmd &c)
+{
+    const int32 *p = c.p;
+    int32 x = p[0], y = p[1], width = p[2], height = p[3];
+    const uint32 color = (uint32)p[4];
+    int32 alpha = p[5], ink = p[6];
+    const bool screenRelative = p[7] != 0;
+
+    uint8 blend = BLEND_NORMAL;
+    switch (ink) {
+        case INK_NONE: alpha = 0xFF; break;
+        case INK_BLEND: alpha = 0x80; break;
+        case INK_ALPHA:
+            if (alpha > 0xFF)
+                alpha = 0xFF;
+            else if (alpha <= 0)
+                return true;
+            break;
+        case INK_ADD:
+        case INK_SUB:
+            blend = ink == INK_ADD ? BLEND_ADD : BLEND_SUB;
+            if (alpha > 0xFF)
+                alpha = 0xFF;
+            else if (alpha <= 0)
+                return true;
+            break;
+        default: return Refuse(GpuRender::REASON_INK, (unsigned)ink);
+    }
+    if (!screenRelative) {
+        x      = FROM_FIXED(x) - c.pos[0];
+        y      = FROM_FIXED(y) - c.pos[1];
+        width  = FROM_FIXED(width);
+        height = FROM_FIXED(height);
+    }
+    if (width + x > c.clip[2])
+        width = c.clip[2] - x;
+    if (x < c.clip[0]) {
+        width += x - c.clip[0];
+        x = c.clip[0];
+    }
+    if (height + y > c.clip[3])
+        height = c.clip[3] - y;
+    if (y < c.clip[1]) {
+        height += y - c.clip[1];
+        y = c.clip[1];
+    }
+    if (width <= 0 || height <= 0)
+        return true;
+
+    // The colour as the software renderer stores it (RGB565), widened back to 8 bits by bit replication.
+    const uint16 c16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
+    const unsigned r5 = c16 >> 11, g6 = (c16 >> 5) & 0x3F, b5 = c16 & 0x1F;
+    const uint8 r = (uint8)((r5 << 3) | (r5 >> 2)), g = (uint8)((g6 << 2) | (g6 >> 4)), b = (uint8)((b5 << 3) | (b5 >> 2));
+    // The solid block at the sprite atlas origin: sample its middle.
+    if (!AddQuad(TEX_SPRITE, blend, (float)x, (float)y, (float)(x + width), (float)(y + height), 4.0f, 4.0f, 4.0f, 4.0f, SPR_ATLAS_W, SPR_ATLAS_H, r, g, b,
+                 (uint8)alpha))
+        return Refuse(GpuRender::REASON_QUAD_LIMIT);
+    return true;
+}
+
+// One run of screen lines [dy, dy + n) that all show tile row `row` of the layer starting at pixel row `srcY` inside
+// it, with the layer's pixel column of screen column dx0 being `px`; screen columns [dx0, dx1).
+bool EmitTileRun(TileLayer *layer, unsigned bank, int row, int srcY, int dy, int n, int dx0, int dx1, int px)
+{
+    if (row < 0 || row >= layer->ysize)
+        return true; // outside the layout: nothing is drawn (the software reads garbage; this is the sane reading)
+    int sx = dx0;
+    while (sx < dx1) {
+        const int X     = sx + px;
+        const int col   = (X >> 4) % layer->xsize;
+        const int inX   = X & 15;
+        const int w     = (16 - inX) < (dx1 - sx) ? (16 - inX) : (dx1 - sx);
+        const uint16 t  = layer->layout[col + (row << layer->widthShift)];
+        if (t < 0xFFFF) {
+            const int cell = EnsureTile(t & 0xFFF, bank);
+            if (cell == -2)
+                return Refuse(GpuRender::REASON_ATLAS_FULL);
+            if (cell < 0)
+                return Refuse(GpuRender::REASON_TILE_RANGE);
+            const float cx = (float)((cell % (TILE_ATLAS_W / 16)) * 16 + inX), cy = (float)((cell / (TILE_ATLAS_W / 16)) * 16 + srcY);
+            if (!AddQuad(TEX_TILE, BLEND_NORMAL, (float)sx, (float)dy, (float)(sx + w), (float)(dy + n), cx, cy, cx + (float)w, cy + (float)n, TILE_ATLAS_W,
+                         TILE_ATLAS_H, 255, 255, 255, 255))
+                return Refuse(GpuRender::REASON_QUAD_LIMIT);
+        }
+        sx += w;
+    }
+    return true;
+}
+
+bool EmitLayerBasic(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
+{
+    const int y1 = c.clip[1], y2 = c.clip[3], x1 = c.clip[0], x2 = c.clip[2];
+    if (x1 >= x2 || y1 >= y2)
+        return true;
+    // DrawLayerBasic: the layer's pixel row of the first line, then 16-line blocks, each taking its x from the
+    // scanline of its first line.
+    int layerY = FROM_FIXED(sl[0].position.y);
+    int line   = y1;
+    while (line < y2) {
+        const int rem = 16 - (layerY & 15);
+        const int n   = rem < (y2 - line) ? rem : (y2 - line);
+        const int xOff = FROM_FIXED(sl[line - y1].position.x);
+        if (!EmitTileRun(layer, 0, layerY >> 4, layerY & 15, line, n, x1, x2, x1 + xOff - x1 + 0))
+            return false;
+        line += n;
+        layerY += n;
+    }
+    return true;
+}
+
+bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
+{
+    const int y1 = c.clip[1], y2 = c.clip[3];
+    uint8 bank;
+    if (!UniformBank(y1, y2, &bank))
+        return Refuse(GpuRender::REASON_PALETTE_LINES);
+    const int pitch = currentScreen->pitch;
+    int line        = y1;
+    while (line < y2) {
+        // A band: consecutive lines with the same x whose layer row advances by one pixel each.
+        int x = sl[line - y1].position.x;
+        const int tileX = FROM_FIXED(x);
+        if (tileX >= TILE_SIZE * layer->xsize)
+            x = TO_FIXED(tileX - TILE_SIZE * layer->xsize);
+        else if (tileX < 0)
+            x = TO_FIXED(tileX + TILE_SIZE * layer->xsize);
+        const int yPix = FROM_FIXED(sl[line - y1].position.y);
+        int end        = line + 1;
+        while (end < y2) {
+            const ScanlineInfo &n = sl[end - y1];
+            if (n.position.x != sl[line - y1].position.x || FROM_FIXED(n.position.y) != yPix + (end - line))
+                break;
+            ++end;
+        }
+        // Split the band at tile-row boundaries.
+        int ly = yPix, dy = line;
+        while (dy < end) {
+            const int rem = 16 - (ly & 15);
+            const int n   = rem < (end - dy) ? rem : (end - dy);
+            if (!EmitTileRun(layer, bank, ly >> 4, ly & 15, dy, n, 0, pitch, FROM_FIXED(x)))
+                return false;
+            dy += n;
+            ly += n;
+        }
+        line = end;
+    }
+    return true;
+}
+
+} // namespace
+
+const GpuRender::Stats &GpuRender::GetStats() { return sStats; }
+
+bool GpuRender::Render(const Stream &stream)
+{
+    sStats.reason = REASON_OK;
+    if (!Setup()) {
+        sStats.reason = REASON_NO_GPU;
+        return false;
+    }
+    if (sSeenContent != contentVersion) {
+        sSeenContent = contentVersion;
+        ResetCaches();
+        sInPlace = true;
+    }
+
+    sCur        = (sCur + 1) & 1;
+    sQuadCount  = 0;
+    sBatchCount = 0;
+    sPendingCount = 0;
+    sFail.reason = REASON_OK;
+    bool ok = true;
+    memset(sLineBuf, 0, sizeof(sLineBuf));
+    const bool resetInPlace = sInPlace;
+    sInPlace                = resetInPlace;
+
+    for (unsigned i = 0; i < stream.count && ok; ++i) {
+        const Cmd &c = stream.cmds[i];
+        switch (c.type) {
+            case CMD_LINEBUF: memcpy(sLineBuf, stream.arena + c.arena, sizeof(sLineBuf)); break;
+            case CMD_SPRITE: ok = EmitSprite(c); break;
+            case CMD_RECT: ok = EmitRect(c); break;
+            case CMD_LAYER: {
+                TileLayer *layer = (TileLayer *)(uintptr_t)c.p[0];
+                const ScanlineInfo *sl = (const ScanlineInfo *)(stream.arena + c.arena);
+                if (!layer->xsize || !layer->ysize)
+                    break;
+                if (c.kind == LAYER_BASIC)
+                    ok = EmitLayerBasic(c, layer, sl);
+                else if (c.kind == LAYER_HSCROLL)
+                    ok = EmitLayerHScroll(c, layer, sl);
+                else
+                    ok = Refuse(REASON_UNSUPPORTED, 100 + c.kind);
+                break;
+            }
+            default: ok = Refuse(REASON_UNSUPPORTED, c.type); break;
+        }
+    }
+    if (!ok) {
+        sStats.reason         = sFail.reason;
+        sStats.unsupportedCmd = sFail.cmd;
+        if (sFail.reason == REASON_ATLAS_FULL) {
+            ResetCaches(); // start over next frame
+            sSeenContent = contentVersion;
+        }
+        return false;
+    }
+
+    // ---- the frame is decided: textures, then geometry
+    C3D_RenderTarget *target = (C3D_RenderTarget *)C3DPresent::Target();
+    const bool needSync      = sInPlace;
+    sInPlace                 = false;
+    C3D_FrameBegin(needSync ? C3D_FRAME_SYNCDRAW : 0);
+    sTileDirtyLo = sSprDirtyLo = ~0u;
+    sTileDirtyHi = sSprDirtyHi = 0;
+    for (unsigned i = 0; i < sPendingCount; ++i) {
+        if (sPending[i].kind == 0)
+            ConvertTile(sPending[i]);
+        else
+            ConvertSprite(sPending[i]);
+    }
+    if (sTileDirtyHi > sTileDirtyLo) {
+        GSPGPU_FlushDataCache((u8 *)sTileData + sTileDirtyLo, sTileDirtyHi - sTileDirtyLo);
+        ++sStats.atlasFlushes;
+    }
+    if (sSprDirtyHi > sSprDirtyLo) {
+        GSPGPU_FlushDataCache((u8 *)sSprData + sSprDirtyLo, sSprDirtyHi - sSprDirtyLo);
+        ++sStats.atlasFlushes;
+    }
+    // (After a reset the white block was written before the dirty span was cleared.)
+    GSPGPU_FlushDataCache(sSprData, 8 * 8 * 2 * 8);
+    GSPGPU_FlushDataCache(sVbo[sCur], sizeof(Vtx) * 4 * sQuadCount);
+    sStats.quads = sQuadCount;
+
+    C3D_RenderTargetClear(target, C3D_CLEAR_COLOR, 0x000000FF, 0);
+    C3D_FrameDrawOn(target);
+    C3D_BindProgram(&sProgram);
+    C3D_SetAttrInfo(&sAttr);
+    BufInfo_Init(&sBufInfo);
+    BufInfo_Add(&sBufInfo, sVbo[sCur], sizeof(Vtx), 2, 0x10);
+    C3D_SetBufInfo(&sBufInfo);
+    C3D_TexEnv *env = C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0);
+    C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    C3D_CullFace(GPU_CULL_NONE);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, (C3D_Mtx *)C3DPresent::Projection());
+
+    int curBlend = -1, curTex = -1;
+    for (unsigned b = 0; b < sBatchCount; ++b) {
+        const Batch &bt = sBatches[b];
+        if (curTex != bt.tex) {
+            C3D_TexBind(0, bt.tex == TEX_TILE ? &sTileTex : &sSprTex);
+            curTex = bt.tex;
+        }
+        if (curBlend != bt.blend) {
+            switch (bt.blend) {
+                case BLEND_ADD: C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE, GPU_SRC_ALPHA, GPU_ONE); break;
+                case BLEND_SUB: C3D_AlphaBlend(GPU_BLEND_REVERSE_SUBTRACT, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE, GPU_SRC_ALPHA, GPU_ONE); break;
+                default: C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA); break;
+            }
+            curBlend = bt.blend;
+        }
+        C3D_DrawElements(GPU_TRIANGLES, (int)(bt.count * 6), C3D_UNSIGNED_SHORT, sIdx + bt.first * 6);
+    }
+    C3D_FrameEnd(0);
+    return true;
+}
+
+#endif
