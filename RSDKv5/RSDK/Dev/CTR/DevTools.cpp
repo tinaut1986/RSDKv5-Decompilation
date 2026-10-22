@@ -52,7 +52,7 @@ static volatile int sPhase; // 1 receiving, 2 installing, 3 restart countdown
 static volatile unsigned long long sAllo, sRecvDone, sRecvTotal, sCiaDone, sCiaTotal;
 static volatile unsigned long long sRelaunchAt; // osGetTime() the countdown ends at
 
-static float sLastFps, sLastFrameMs, sLastStageMs[3];
+static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
 
 // Requests from the FTP thread, applied by the main thread in FrameEnd.
 static volatile int sPendingCategory = -1, sPendingScene = -1;
@@ -661,8 +661,10 @@ static void HandleSession(int ctrl)
                 Reply(s, "200 keys %08lx", (unsigned long)DevTools::injectKeys);
             }
             else if (!strcmp(sub, "STATE")) {
-                Reply(s, "200 category %d scene %d state %d fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f", (int)sceneInfo.activeCategory,
-                      (int)sceneInfo.listPos, (int)sceneInfo.state, sLastFps, sLastFrameMs, sLastStageMs[0], sLastStageMs[1], sLastStageMs[2]);
+                Reply(s, "200 category %d scene %d state %d fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f",
+                      (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastFps, sLastFrameMs, sLastStageMs[0],
+                      sLastStageMs[1], sLastStageMs[2], sLastStageMs[3], sLastStageMs[4], sLastStageMs[5], sLastStageMs[6], sLastStageMs[7],
+                      sLastStageMs[8]);
             }
             else
                 Reply(s, "504 Unknown SITE command.");
@@ -745,7 +747,7 @@ static bool StartServer()
 
 // ---------------------------------------------------------------- perf timing
 
-static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip" };
+static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes" };
 static const char *kDir                              = "sdmc:/3ds/Sonic Mania 3DS/debug";
 
 static uint64 sStageTicks[DevTools::STAGE_COUNT];
@@ -795,7 +797,7 @@ static void OpenCsv()
         if (stat(path, &st) != 0) {
             sCsv = fopen(path, "w");
             if (sCsv)
-                fprintf(sCsv, "second,fps,frame_ms_avg,frame_ms_max,update_ms,draw_ms,flip_ms,scene\n");
+                fprintf(sCsv, "second,fps,frame_ms_avg,frame_ms_max,update_ms,draw_ms,flip_ms,layers_ms,sprites_ms,roto_ms,faces_ms,d3_ms,shapes_ms,scene\n");
         }
     }
 }
@@ -872,10 +874,12 @@ static void DrawStatus()
     PrintRow(0, "SONIC MANIA 3DS  dev tools");
     snprintf(line, sizeof(line), "%.1f fps  frame %.1f ms", sLastFps, sLastFrameMs);
     PrintRow(2, line);
-    for (int i = 0; i < DevTools::STAGE_COUNT; ++i) {
-        snprintf(line, sizeof(line), "  %-7s %5.1f ms", kStageName[i], sLastStageMs[i]);
-        PrintRow(3 + i, line);
-    }
+    snprintf(line, sizeof(line), "upd %.1f  draw %.1f  flip %.1f", sLastStageMs[0], sLastStageMs[1], sLastStageMs[2]);
+    PrintRow(3, line);
+    snprintf(line, sizeof(line), "lay %.1f spr %.1f rot %.1f", sLastStageMs[3], sLastStageMs[4], sLastStageMs[5]);
+    PrintRow(4, line);
+    snprintf(line, sizeof(line), "face %.1f 3d %.1f shp %.1f", sLastStageMs[6], sLastStageMs[7], sLastStageMs[8]);
+    PrintRow(5, line);
     extern u32 __ctru_heap_size;
     struct mallinfo mi = mallinfo();
     snprintf(line, sizeof(line), "heap %u/%u KB  lin free %u KB", (unsigned)(mi.uordblks >> 10), (unsigned)(__ctru_heap_size >> 10),
@@ -959,8 +963,10 @@ bool DevTools::FrameEnd()
             sLastStageMs[i] = (float)(sStageTicks[i] * toMs / sFrames);
         if (sCsv) {
             static unsigned second;
-            fprintf(sCsv, "%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d\n", ++second, sLastFps, sLastFrameMs, sFrameTicksMax * toMs, sLastStageMs[0],
-                    sLastStageMs[1], sLastStageMs[2], (int)sceneInfo.listPos);
+            fprintf(sCsv, "%u,%.2f,%.2f,%.2f", ++second, sLastFps, sLastFrameMs, sFrameTicksMax * toMs);
+            for (int i = 0; i < STAGE_COUNT; ++i)
+                fprintf(sCsv, ",%.2f", sLastStageMs[i]);
+            fprintf(sCsv, ",%d\n", (int)sceneInfo.listPos);
             if (second % 5 == 0)
                 fflush(sCsv);
         }

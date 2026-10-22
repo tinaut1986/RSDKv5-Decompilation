@@ -18,7 +18,19 @@ namespace RSDK
 namespace DevTools
 {
 
-enum Stage { STAGE_UPDATE, STAGE_DRAW, STAGE_FLIP, STAGE_COUNT };
+// UPDATE, DRAW and FLIP split a frame; the rest split DRAW by what is drawn (they do not nest).
+enum Stage {
+    STAGE_UPDATE,
+    STAGE_DRAW,
+    STAGE_FLIP,
+    STAGE_LAYERS,  // tile layers
+    STAGE_SPRITES, // DrawSpriteFlipped (all ordinary sprites)
+    STAGE_ROTO,    // rotozoom + deformed sprites
+    STAGE_FACES,   // DrawFace / DrawBlendedFace
+    STAGE_3D,      // Draw3DScene
+    STAGE_SHAPES,  // lines, rectangles, circles, single tiles
+    STAGE_COUNT
+};
 
 // After RenderDevice::Init(): starts the FTP server and opens the perf CSV.
 void Init();

@@ -617,6 +617,7 @@ void RSDK::FillScreen(uint32 color, int32 alphaR, int32 alphaG, int32 alphaB)
 
 void RSDK::DrawLine(int32 x1, int32 y1, int32 x2, int32 y2, uint32 color, int32 alpha, int32 inkEffect, bool32 screenRelative)
 {
+    DEV_STAGE(STAGE_SHAPES);
     switch (inkEffect) {
         default: break;
 
@@ -1146,6 +1147,7 @@ void RSDK::DrawLine(int32 x1, int32 y1, int32 x2, int32 y2, uint32 color, int32 
 }
 void RSDK::DrawRectangle(int32 x, int32 y, int32 width, int32 height, uint32 color, int32 alpha, int32 inkEffect, bool32 screenRelative)
 {
+    DEV_STAGE(STAGE_SHAPES);
     switch (inkEffect) {
         default: break;
         case INK_ALPHA:
@@ -1316,6 +1318,7 @@ void RSDK::DrawRectangle(int32 x, int32 y, int32 width, int32 height, uint32 col
 }
 void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha, int32 inkEffect, bool32 screenRelative)
 {
+    DEV_STAGE(STAGE_SHAPES);
     if (radius > 0) {
         switch (inkEffect) {
             default: break;
@@ -1650,6 +1653,7 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
 void RSDK::DrawCircleOutline(int32 x, int32 y, int32 innerRadius, int32 outerRadius, uint32 color, int32 alpha, int32 inkEffect,
                              bool32 screenRelative)
 {
+    DEV_STAGE(STAGE_SHAPES);
     switch (inkEffect) {
         default: break;
         case INK_ALPHA:
@@ -1930,6 +1934,7 @@ void RSDK::DrawCircleOutline(int32 x, int32 y, int32 innerRadius, int32 outerRad
 
 void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 b, int32 alpha, int32 inkEffect)
 {
+    DEV_STAGE(STAGE_FACES);
     switch (inkEffect) {
         default: break;
         case INK_ALPHA:
@@ -2183,6 +2188,7 @@ void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 
 }
 void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, int32 alpha, int32 inkEffect)
 {
+    DEV_STAGE(STAGE_FACES);
     switch (inkEffect) {
         default: break;
         case INK_ALPHA:
@@ -2857,6 +2863,7 @@ void RSDK::DrawSprite(Animator *animator, Vector2 *position, bool32 screenRelati
 void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 sprX, int32 sprY, int32 direction, int32 inkEffect, int32 alpha,
                              int32 sheetID)
 {
+    DEV_STAGE(STAGE_SPRITES);
     switch (inkEffect) {
         default: break;
         case INK_ALPHA:
@@ -3518,6 +3525,7 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
 void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int32 width, int32 height, int32 sprX, int32 sprY, int32 scaleX,
                               int32 scaleY, int32 direction, int16 rotation, int32 inkEffect, int32 alpha, int32 sheetID)
 {
+    DEV_STAGE(STAGE_ROTO);
     switch (inkEffect) {
         default: break;
         case INK_ALPHA:
@@ -3869,6 +3877,7 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
 
 void RSDK::DrawDeformedSprite(uint16 sheetID, int32 inkEffect, int32 alpha)
 {
+    DEV_STAGE(STAGE_ROTO);
     switch (inkEffect) {
         default: break;
         case INK_ALPHA:
@@ -4076,6 +4085,7 @@ void RSDK::DrawDeformedSprite(uint16 sheetID, int32 inkEffect, int32 alpha)
 
 void RSDK::DrawTile(uint16 *tiles, int32 countX, int32 countY, Vector2 *position, Vector2 *offset, bool32 screenRelative)
 {
+    DEV_STAGE(STAGE_SHAPES);
     if (tiles) {
         if (!position)
             position = &sceneInfo.entity->position;
