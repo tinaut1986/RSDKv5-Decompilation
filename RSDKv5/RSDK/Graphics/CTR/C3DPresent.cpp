@@ -52,7 +52,9 @@ bool C3DPresent::Init()
     C3D_TexSetFilter(&sTex, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&sTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
 
-    sStaging = linearAlloc(SCREEN_W * SCREEN_H * 2);
+    sStaging = linearAlloc(TEX_W * TEX_H * 2);
+    if (sStaging)
+        memset(sStaging, 0, TEX_W * TEX_H * 2);
     sQuad    = (Vertex *)linearAlloc(4 * sizeof(Vertex));
     if (!sStaging || !sQuad)
         return false;
@@ -101,17 +103,14 @@ void C3DPresent::Present(const unsigned short *src, int pitch)
 {
     if (!sReady)
         return;
-    // Row by row when the pitch is not the picture's width.
+    // The staging buffer has the texture's own size (512x256), so the display transfer is a plain tiling
+    // with equal input and output dimensions; the picture is copied into its top-left corner.
     unsigned short *dst = (unsigned short *)sStaging;
-    if (pitch == SCREEN_W)
-        memcpy(dst, src, SCREEN_W * SCREEN_H * 2);
-    else
-        for (int y = 0; y < SCREEN_H; ++y)
-            memcpy(dst + y * SCREEN_W, src + y * pitch, SCREEN_W * 2);
-    GSPGPU_FlushDataCache(sStaging, SCREEN_W * SCREEN_H * 2);
+    for (int y = 0; y < SCREEN_H; ++y)
+        memcpy(dst + y * TEX_W, src + y * pitch, SCREEN_W * 2);
+    GSPGPU_FlushDataCache(sStaging, TEX_W * TEX_H * 2);
 
-    // Linear 400x240 -> the texture's tiled 512x256 (the part outside the picture is left alone).
-    C3D_SyncDisplayTransfer((u32 *)sStaging, GX_BUFFER_DIM(SCREEN_W, SCREEN_H), (u32 *)sTex.data, GX_BUFFER_DIM(TEX_W, TEX_H),
+    C3D_SyncDisplayTransfer((u32 *)sStaging, GX_BUFFER_DIM(TEX_W, TEX_H), (u32 *)sTex.data, GX_BUFFER_DIM(TEX_W, TEX_H),
                             GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
                                 GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
 
