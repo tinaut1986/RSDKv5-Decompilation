@@ -61,6 +61,23 @@ void SaveSettings();
 // F face, 3 3D scene, P shape. Fed by the stage scopes; SITE ORDER prints it.
 void OrderBegin();
 void OrderNote(char kind);
+// The renderer mode, the one switch the owner flips: GPU turns on GPU presentation, recording and the GPU
+// executor together (every frame the GPU can do is drawn by it, the rest by the software renderer); CPU turns
+// all three off (the software renderer and the CPU copy to the screen, as the port started). Switching resets
+// the frame counters below. SITE SET gpu/record/gpurender still flip the parts one by one.
+void SetGpuMode(bool on);
+bool GpuMode();
+// Once per frame shown: NULL when the GPU drew it, else why the CPU did (a static name, see GpuFrame::LastWhy).
+void NoteFrame(const char *why);
+struct RenderStats {
+    bool gpuMode;
+    bool lastFrameGpu;
+    unsigned secGpu, secCpu;     // frames shown in the last full second
+    unsigned totalGpu, totalCpu; // since the mode was last switched
+    const char *lastWhy;         // why the last CPU frame in GPU mode was one (NULL: none yet)
+    struct { const char *why; unsigned count; } top[3]; // most frequent reasons since the switch
+};
+void GetRenderStats(RenderStats *out);
 // While a CIA arrives or installs: 0 when nothing is going on, else the phase (1 receiving, 2 installing,
 // 3 restart countdown), the title to show, how far along it is (0..1, or -1 when unknown) and, in phase 3,
 // the seconds left.
@@ -72,7 +89,9 @@ extern int swMaxSkip;    // most passes skipped in a row
 extern bool swDraw;      // run the draw lists (off isolates the cost of the logic)
 extern bool swFlipCopy;  // copy the frame into the screen (off isolates the cost of the flip)
 extern uint32 injectKeys; // 3DS key mask held on top of the real buttons (SITE INPUT)
-extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy
+extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy (part of the GPU mode)
+extern bool swGpuRender;   // execute recorded frames on the GPU (needs swRecord and swGpuPresent)
+extern bool swRecord;      // record draw calls per frame and execute them at the flip (GpuFrame)
 extern bool swBottomUi;    // redraw the bottom screen (off to measure its cost)
 extern bool swSyncDraw;    // C3D_FrameBegin waits for the previous GPU frame (experiment switch)
 extern bool swVblankWait;  // gspWaitForVBlank after the present (experiment switch)
@@ -94,11 +113,13 @@ struct StageScope {
 
 #define DEV_STAGE(stage) RSDK::DevTools::StageScope devStageScope(RSDK::DevTools::stage)
 #define DEV_LOG(...)     RSDK::DevTools::Log(__VA_ARGS__)
+#define DEV_NOTE_FRAME(why) RSDK::DevTools::NoteFrame(why)
 
 #else
 
 #define DEV_STAGE(stage)
 #define DEV_LOG(...)
+#define DEV_NOTE_FRAME(why) ((void)0)
 
 #endif
 
@@ -108,6 +129,8 @@ struct StageScope {
 #define DEV_SW_DRAW      RSDK::DevTools::swDraw
 #define DEV_SW_FLIPCOPY  RSDK::DevTools::swFlipCopy
 #define DEV_SW_GPUPRESENT RSDK::DevTools::swGpuPresent
+#define DEV_SW_RECORD    RSDK::DevTools::swRecord
+#define DEV_SW_GPURENDER RSDK::DevTools::swGpuRender
 #define DEV_SW_SYNCDRAW  RSDK::DevTools::swSyncDraw
 #define DEV_SW_VBLANK    RSDK::DevTools::swVblankWait
 #define DEV_COUNT_SKIP() (++RSDK::DevTools::skipCount)
@@ -117,6 +140,8 @@ struct StageScope {
 #define DEV_SW_DRAW      true
 #define DEV_SW_FLIPCOPY  true
 #define DEV_SW_GPUPRESENT false
+#define DEV_SW_RECORD    false
+#define DEV_SW_GPURENDER false
 #define DEV_SW_SYNCDRAW  true
 #define DEV_SW_VBLANK    true
 #define DEV_COUNT_SKIP() ((void)0)

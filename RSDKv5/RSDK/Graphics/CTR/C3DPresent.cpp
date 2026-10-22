@@ -32,6 +32,16 @@ static Vertex *sQuad;  // linear memory
 static C3D_BufInfo sBuf;
 static C3D_AttrInfo sAttr;
 
+void C3DPresent::ShutdownCore()
+{
+    if (!sCore)
+        return;
+    C3D_FrameSync(); // the last frame's commands and transfers are done
+    C2D_Fini();
+    C3D_Fini();
+    sCore = sReady = false;
+}
+
 bool C3DPresent::InitCore()
 {
     if (sCore)
@@ -39,10 +49,12 @@ bool C3DPresent::InitCore()
     if (sCoreFailed)
         return false;
     sCoreFailed = true;
-    // A small command buffer and few 2D objects: the app's linear heap holds the screens' buffers too.
+    // A small command buffer: the app's linear heap holds the screens' buffers too. Every glyph of the bottom
+    // screen is a 2D object; past the limit citro2d reuses its vertex buffer mid-frame and only the last
+    // objects show (256 left the bottom screen blank). 768 objects are ~150 KB of linear memory.
     if (!C3D_Init(0x8000))
         return false;
-    if (!C2D_Init(256))
+    if (!C2D_Init(768))
         return false;
     sCore       = true;
     sCoreFailed = false;
@@ -122,6 +134,8 @@ bool C3DPresent::Init()
 }
 
 bool C3DPresent::Ready() { return sReady; }
+void *C3DPresent::Target() { return sTarget; }
+void *C3DPresent::Projection() { return &sProj; }
 
 void C3DPresent::Present(const unsigned short *src, int pitch)
 {

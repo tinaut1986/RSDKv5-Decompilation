@@ -73,6 +73,7 @@ static void TransposeToFramebuffer(const u16 *src, int pitch, u16 *dst)
 // https://github.com/JeffRuLz/Sonic-1-2-2013-Decompilation/blob/main/RSDKv4/3ds/3ds.cpp#L141
 void RenderDevice::FlipScreen()
 {
+  const bool drawnByGpu = GpuFrame::Present(); // execute the frame's recorded draw commands
   const u16 *src = screens[0].frameBuffer;
   u16 *dst = (uint16*) gfxGetFramebuffer(GFX_TOP, GFX_LEFT, 0, 0);
 
@@ -83,7 +84,10 @@ void RenderDevice::FlipScreen()
         // image/video buffer, break
         break;
       case 1:
-        if (DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init()))
+        if (drawnByGpu) {
+          // already on screen
+        }
+        else if (DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init()))
           C3DPresent::Present(src, screens[0].pitch);
         else if (DEV_SW_FLIPCOPY)
           TransposeToFramebuffer(src, screens[0].pitch, dst);
@@ -97,10 +101,11 @@ void RenderDevice::FlipScreen()
         break;
     }
 
-    if (!(DEV_SW_GPUPRESENT && C3DPresent::Ready())) {
+    if (!(drawnByGpu || (DEV_SW_GPUPRESENT && C3DPresent::Ready()))) {
       gfxFlushBuffers();
       gfxSwapBuffers();
     }
+    DEV_NOTE_FRAME(drawnByGpu ? NULL : GpuFrame::LastWhy());
     if (DEV_SW_VBLANK)
       gspWaitForVBlank();
   }
@@ -112,7 +117,10 @@ void RenderDevice::Release(bool32 isRefresh)
     free(scanlines);
 
   if (!isRefresh) {
+    C3DPresent::ShutdownCore();
+    DEV_LOG("exit: citro3d shut down");
     gfxExit();
+    DEV_LOG("exit: gfx shut down");
   }
 }
 
@@ -189,7 +197,11 @@ void RenderDevice::UpdateFPSCap()
     while (svcGetSystemTick() < sNextTick) {
     }
     now = svcGetSystemTick();
+#if MANIA_DEV_TOOLS
     DevTools::StageAdd(DevTools::STAGE_WAIT, now - start);
+#else
+    (void)start;
+#endif
   }
   const u64 late = now > sNextTick ? now - sNextTick : 0;
   sSkipThisPass = DEV_SW_FRAMESKIP && late > TICKS_PER_FRAME && sSkipRun < DEV_SW_MAXSKIP;

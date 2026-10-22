@@ -19,9 +19,17 @@ namespace C3DPresent
 // citro3d and citro2d, shared by the top-screen presentation and the bottom-screen UI.
 bool InitCore();
 bool CoreReady();
+// At exit, before gfxExit: waits for the GPU's queued work and shuts citro2d and citro3d down. A process that
+// ended with GPU work queued is a suspect for the loader faults on the relaunch after SITE INSTALL.
+void ShutdownCore();
 
 bool Init();
 bool Ready();
+
+// For the GPU renderer, which draws into the same top-screen target.
+struct C3D_RenderTarget_tag;
+void *Target(); // C3D_RenderTarget*
+void *Projection(); // C3D_Mtx*
 
 // Draws `src` (400x240 RGB565 with `pitch` pixels per row) on the top screen and presents it.
 void Present(const unsigned short *src, int pitch);
