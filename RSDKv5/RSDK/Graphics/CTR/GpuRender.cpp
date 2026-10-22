@@ -62,7 +62,9 @@ enum { SOFT_W = 512, SOFT_H = 256, SOFT_KEY = 0x0020, SOFT_JOBS = 8 };
 struct SoftJob {
     int16 x1, y1, x2, y2, texY;
 };
-enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL };
+// BLEND_MASKED / BLEND_UNMASKED: INK_MASKED / INK_UNMASKED, normal alpha blending drawn where the stencil says the
+// screen holds / does not hold the mask colour (see the mask frame in Render).
+enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL, BLEND_MASKED, BLEND_UNMASKED };
 
 struct Batch {
     uint8 tex, blend;
@@ -425,8 +427,9 @@ int EnsureTile(unsigned id, unsigned bank)
 
 uint64 SprKey(unsigned sheet, unsigned bank, unsigned sprX, unsigned sprY, unsigned w, unsigned h)
 {
-    // bit 0 set (0 is a free slot), sprY bits 2-15, sprX 16-29, h 30-40, w 41-51, bank 52-55, sheet 56-63
-    return 1ull | ((uint64)sheet << 56) | ((uint64)bank << 52) | ((uint64)w << 41) | ((uint64)h << 30) | ((uint64)sprX << 16) | ((uint64)sprY << 2);
+    // bit 0 set (0 is a free slot), sprY bits 1-16, sprX 17-30, h 31-41, w 42-52, bank 53-55, sheet 56-62. sprY has 16
+    // bits: sheet 0 is the whole tileset as a 16-pixel-wide column (65536 rows), which the collapsing floors draw from.
+    return 1ull | ((uint64)sheet << 56) | ((uint64)bank << 53) | ((uint64)w << 42) | ((uint64)h << 31) | ((uint64)sprX << 17) | ((uint64)sprY << 1);
 }
 
 // Shelf allocation in 8-pixel units; false when the atlas is full.
@@ -458,7 +461,7 @@ SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, 
 {
     *refuse   = 0;
     sBadData  = sheet >= SURFACE_COUNT ? 1 : !gfxSurface[sheet].pixels ? 2 : (sprX < 0 || sprY < 0) ? 3 : (w <= 0 || h <= 0) ? 4
-                : (sprX >= 16384 || sprY >= 16384 || w >= 2048 || h >= 2048) ? 5 : bank >= BANKS ? 6 : 0;
+                : (sprX >= 16384 || sprY >= 65536 || w >= 2048 || h >= 2048) ? 5 : bank >= BANKS ? 6 : 0;
     if (sBadData) {
         *refuse = GpuRender::REASON_BAD_DATA;
         return NULL;
@@ -543,7 +546,7 @@ void ConvertSprite(const Pending &p)
 {
     SprSlot &s = sSlots[p.id];
     // The key holds the sheet position: unpack it.
-    const unsigned sheet = (unsigned)(s.key >> 56), sprX = (unsigned)((s.key >> 16) & 0x3FFF), sprY = (unsigned)((s.key >> 2) & 0x3FFF);
+    const unsigned sheet = (unsigned)(s.key >> 56), sprX = (unsigned)((s.key >> 17) & 0x3FFF), sprY = (unsigned)((s.key >> 1) & 0xFFFF);
     const GFXSurface &g  = gfxSurface[sheet];
     const uint16 *pal    = fullPalette[p.bank];
     uint32 groups        = 0;
@@ -629,6 +632,8 @@ bool SpriteInk(int32 ink, int32 *alpha, uint8 *blend, bool *skip)
     switch (ink) {
         case INK_NONE: *alpha = 0xFF; return true;
         case INK_BLEND: *alpha = 0x80; return true;
+        case INK_MASKED: *blend = BLEND_MASKED, *alpha = 0xFF; return true;
+        case INK_UNMASKED: *blend = BLEND_UNMASKED, *alpha = 0xFF; return true;
         case INK_ALPHA:
         case INK_ADD:
         case INK_SUB:
@@ -707,6 +712,8 @@ bool EmitSprite(const Cmd &c)
     switch (ink) {
         case INK_NONE: alpha = 0xFF; break;
         case INK_BLEND: alpha = 0x80; break;
+        case INK_MASKED: blend = BLEND_MASKED, alpha = 0xFF; break;
+        case INK_UNMASKED: blend = BLEND_UNMASKED, alpha = 0xFF; break;
         case INK_ALPHA:
             if (alpha > 0xFF)
                 alpha = 0xFF;
@@ -1187,6 +1194,8 @@ void Draw3DSceneGpu(unsigned k)
     C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
     C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
     C3D_DepthTest(true, (mode & 2) ? GPU_GREATER : GPU_LESS, GPU_WRITE_ALL);
+    C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF); // a mask frame's stencil does not apply to the 3D scenes
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
 
     for (int32 i = 0; i < h->count; ++i) {
@@ -1246,6 +1255,8 @@ bool EmitRect(const Cmd &c)
     switch (ink) {
         case INK_NONE: alpha = 0xFF; break;
         case INK_BLEND: alpha = 0x80; break;
+        case INK_MASKED: blend = BLEND_MASKED, alpha = 0xFF; break;
+        case INK_UNMASKED: blend = BLEND_UNMASKED, alpha = 0xFF; break;
         case INK_ALPHA:
             if (alpha > 0xFF)
                 alpha = 0xFF;
@@ -1470,6 +1481,59 @@ bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 
 } // namespace
 
+// ---------------------------------------------------------------- the mask frame (INK_MASKED / INK_UNMASKED)
+//
+// The software draws a masked pixel only where the screen already holds maskColor. Here the stencil keeps that: in a
+// frame with masked inks every draw clears the stencil under what it covers, and a second pass of the same batch,
+// writing no colour, sets it back to 1 where the fragment's colour equals the mask colour, tested by the texture
+// combiner: d = colour - mask + 0.5 (ADD_SIGNED), 16 * sum((d - 0.5)^2) (DOT3_RGBA, x4), plus 1 - alpha; the alpha
+// test keeps zeros. Masked batches then draw where the stencil is 1, unmasked ones where it is not.
+
+// The mask colour as the GPU sees it after the atlas conversion (5 bits per channel, widened by replication).
+u32 MaskConstant()
+{
+    const u16 t       = ToTexel((uint16)maskColor);
+    const unsigned r5 = t >> 11, g5 = (t >> 6) & 31, b5 = (t >> 1) & 31;
+    const unsigned r = (r5 << 3) | (r5 >> 2), g = (g5 << 3) | (g5 >> 2), b = (b5 << 3) | (b5 >> 2);
+    return 0xFF000000u | (b << 16) | (g << 8) | r;
+}
+
+void SetCompareTexEnv(u32 mask)
+{
+    C3D_TexEnv *e0 = C3D_GetTexEnv(0); // the fragment colour, as the colour pass computes it
+    C3D_TexEnvInit(e0);
+    C3D_TexEnvSrc(e0, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0);
+    C3D_TexEnvFunc(e0, C3D_Both, GPU_MODULATE);
+    C3D_TexEnvBufUpdate(C3D_Alpha, BIT(0)); // keep the fragment's alpha for stage 3
+    C3D_TexEnv *e1 = C3D_GetTexEnv(1); // d = colour + (1 - mask) - 0.5
+    C3D_TexEnvInit(e1);
+    C3D_TexEnvSrc(e1, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, (GPU_TEVSRC)0);
+    C3D_TexEnvOpRgb(e1, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR);
+    C3D_TexEnvFunc(e1, C3D_RGB, GPU_ADD_SIGNED);
+    C3D_TexEnvColor(e1, mask);
+    C3D_TexEnv *e2 = C3D_GetTexEnv(2); // 16 * |colour - mask|^2 in every channel
+    C3D_TexEnvInit(e2);
+    C3D_TexEnvSrc(e2, C3D_Both, GPU_PREVIOUS, GPU_PREVIOUS, (GPU_TEVSRC)0);
+    C3D_TexEnvFunc(e2, C3D_Both, GPU_DOT3_RGBA);
+    C3D_TexEnvScale(e2, C3D_Both, GPU_TEVSCALE_4);
+    C3D_TexEnv *e3 = C3D_GetTexEnv(3); // + (1 - the fragment's alpha): transparent texels never count as mask
+    C3D_TexEnvInit(e3);
+    C3D_TexEnvSrc(e3, C3D_Alpha, GPU_PREVIOUS, GPU_PREVIOUS_BUFFER, (GPU_TEVSRC)0);
+    C3D_TexEnvOpAlpha(e3, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA);
+    C3D_TexEnvFunc(e3, C3D_Alpha, GPU_ADD);
+}
+
+void ResetTexEnv()
+{
+    for (int i = 1; i < 4; ++i)
+        C3D_TexEnvInit(C3D_GetTexEnv(i));
+    C3D_TexEnvBufUpdate(C3D_Both, 0);
+    C3D_TexEnv *env = C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0);
+    C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+}
+
 unsigned GpuRender::depthMode = 0;
 
 const GpuRender::Stats &GpuRender::GetStats() { return sStats; }
@@ -1677,8 +1741,14 @@ bool GpuRender::Render(const Stream &stream)
     GPU_TIME(STAGE_PXFER, t);
     t = svcGetSystemTick();
 
-    // Depth only matters to the 3D scenes; its clear value is the far end for the depth mode in use.
-    C3D_RenderTargetClear(target, sDraw3DCount ? C3D_CLEAR_ALL : C3D_CLEAR_COLOR, 0x000000FF, (GpuRender::depthMode & 4) ? 0 : 0xFFFFFFFF);
+    bool maskFrame = false;
+    for (unsigned b = 0; b < sBatchCount && !maskFrame; ++b)
+        maskFrame = sBatches[b].blend == BLEND_MASKED || sBatches[b].blend == BLEND_UNMASKED;
+    const u32 maskConst = maskFrame ? MaskConstant() : 0;
+    // Depth matters to the 3D scenes, the stencil to the mask frame. Clear: depth to its far end for the depth mode in
+    // use (24 low bits), stencil 0 (8 high bits).
+    C3D_RenderTargetClear(target, (sDraw3DCount || maskFrame) ? C3D_CLEAR_ALL : C3D_CLEAR_COLOR, 0x000000FF,
+                          (GpuRender::depthMode & 4) ? 0 : 0x00FFFFFF);
     C3D_FrameDrawOn(target);
     C3D_CullFace(GPU_CULL_NONE);
     auto bind2D = [&]() {
@@ -1687,11 +1757,11 @@ bool GpuRender::Render(const Stream &stream)
         BufInfo_Init(&sBufInfo);
         BufInfo_Add(&sBufInfo, sVbo[sCur], sizeof(Vtx), 2, 0x10);
         C3D_SetBufInfo(&sBufInfo);
-        C3D_TexEnv *env = C3D_GetTexEnv(0);
-        C3D_TexEnvInit(env);
-        C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0);
-        C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+        ResetTexEnv();
         C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+        C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
+        // In the mask frame transparent texels must not touch the stencil: they are discarded.
+        C3D_AlphaTest(maskFrame, GPU_GREATER, 0);
         C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, (C3D_Mtx *)C3DPresent::Projection());
     };
     bind2D();
@@ -1724,8 +1794,41 @@ bool GpuRender::Render(const Stream &stream)
             }
             curBlend = bt.blend;
         }
+        if (maskFrame) {
+            switch (bt.blend) {
+                case BLEND_MASKED: // only on the mask colour; the stencil stays
+                    C3D_StencilTest(true, GPU_EQUAL, 1, 0xFF, 0x00);
+                    C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_KEEP);
+                    break;
+                case BLEND_UNMASKED: // only off the mask colour
+                    C3D_StencilTest(true, GPU_NOTEQUAL, 1, 0xFF, 0xFF);
+                    C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_ZERO);
+                    break;
+                case BLEND_FILL: C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF); break;
+                default: // what it covers is no longer the mask colour (the second pass may say it is)
+                    C3D_StencilTest(true, GPU_ALWAYS, 0, 0xFF, 0xFF);
+                    C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_ZERO);
+                    break;
+            }
+        }
         C3D_DrawElements(GPU_TRIANGLES, (int)(bt.count * 6), C3D_UNSIGNED_SHORT, sIdx + bt.first * 6);
+        if (maskFrame && (bt.blend == BLEND_NORMAL || bt.blend == BLEND_UNMASKED)) {
+            // Second pass: stencil 1 where the drawn colour is the mask colour (blended colours are not judged).
+            SetCompareTexEnv(maskConst);
+            C3D_AlphaTest(true, GPU_LESS, 3);
+            C3D_DepthTest(false, GPU_ALWAYS, (GPU_WRITEMASK)0);
+            C3D_StencilTest(true, GPU_ALWAYS, 1, 0xFF, 0xFF);
+            C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_REPLACE);
+            C3D_DrawElements(GPU_TRIANGLES, (int)(bt.count * 6), C3D_UNSIGNED_SHORT, sIdx + bt.first * 6);
+            ResetTexEnv();
+            C3D_AlphaTest(true, GPU_GREATER, 0);
+            C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+        }
     }
+    // citro3d's state is sticky and citro2d (the bottom screen) draws next: leave no stencil or alpha test behind.
+    C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    ResetTexEnv();
     C3D_FrameEnd(0);
     GPU_TIME(STAGE_PFRAME, t);
     return true;
