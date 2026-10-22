@@ -179,7 +179,7 @@ static void Draw()
     char line[96], val[32];
 
     C2D_TextBufClear(sTextBuf);
-    C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+    C3D_FrameBegin(0); // SYNCDRAW would wait for a vblank: up to 16 ms of the game's frame, four times a second
     C2D_Prepare();
     // The top-screen presentation turns blending off and the state is sticky: citro2d's glyph alpha needs it.
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);

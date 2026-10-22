@@ -84,6 +84,19 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   `cmd 0` = `CMD_FILL` before FILL support was added).
 - Everything is off by default and resets at boot (`record`, `gpurender` are not saved in `dev-settings.ini`).
 
+## Palette tracking in the atlases (2026-10-22)
+
+- Before: every cached tile/sprite was stamped with the global `paletteVersion`, so any palette write (Green Hill's water
+  cycle, every frame) reconverted everything on screen and, because a cell in use was rewritten, started the frame with
+  `C3D_FRAME_SYNCDRAW` (a vblank wait): 25 fps, flip 30 ms.
+- Now `TrackPalette` compares `fullPalette` with a copy at every GPU frame (catches every writer) and stamps the changed
+  groups of 8 colours with the frame's generation; a tile/sprite keeps the groups its pixels use and its conversion's
+  generation, and is reconverted only when one of its groups changed since. No `SYNCDRAW` (FrameBegin already waits for
+  the previous GPU frame). Green Hill 1: 60 fps, flip 5.6-7.7 ms, all frames on the GPU after the title card.
+- A refused frame drops its queued conversions: their stamps go back to 0 (unconverted), or the cells keep stale content
+  (seen: white/blue blocks where the title card's `FACE` frames had been refused).
+- Still ~80 tiles a frame are reconverted in Green Hill (a group changing every frame): per-colour tracking would cut it.
+
 ## Renderer mode and frame accounting (2026-10-22)
 
 - One switch, **RENDERER GPU/CPU** (bottom screen, text console cell, `SITE GPU 0|1`), saved as `gpumode` in

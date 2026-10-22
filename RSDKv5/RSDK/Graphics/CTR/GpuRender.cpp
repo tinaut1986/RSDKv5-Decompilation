@@ -50,7 +50,8 @@ struct SprSlot {
     uint64 key; // 0 = free
     uint16 x, y, w, h; // atlas position and padded (multiple of 8) size
     uint16 srcW, srcH;
-    uint32 stamp; // paletteVersion when converted
+    uint32 stamp;  // sGen when converted (0: never)
+    uint32 groups; // palette groups its pixels use (see sGroupGen)
 };
 
 struct Pending {
@@ -78,13 +79,22 @@ Batch sBatches[MAX_BATCHES];
 unsigned sBatchCount;
 Pending sPending[MAX_PENDING];
 unsigned sPendingCount;
-bool sInPlace;       // a texture cell already in use is rewritten: the previous GPU frame must be finished first
 unsigned sSeenContent = ~0u;
 GpuRender::Stats sStats;
+
+// Palette change tracking. Every frame the palette is compared with a copy of the last one; the colours are
+// taken in 32 groups of 8 and each group remembers the generation (frame) it last changed in. A converted tile or
+// sprite keeps the generation it was converted in and the groups its pixels use, and is converted again only when
+// one of those groups changed since: a palette cycle on a few colours no longer reconverts everything on screen.
+// The comparison catches every writer of fullPalette, hooked or not.
+uint32 sGen = 1;
+uint16 sPalShadow[BANKS][PALETTE_BANK_SIZE];
+uint32 sGroupGen[BANKS][32];
 
 // Tile cache: one cell per (bank, tile id)
 int16 sTileCell[BANKS][TILE_IDS];
 uint32 sTileStamp[BANKS][TILE_IDS];
+uint32 sTileGroups[TILE_IDS]; // palette groups the tile's pixels use (valid once converted)
 unsigned sTileCellsUsed;
 
 // Sprite cache: shelves of 8-pixel granularity
@@ -133,6 +143,7 @@ void ResetCaches()
     memset(sTileCell, 0xFF, sizeof(sTileCell)); // -1
     memset(sTileStamp, 0, sizeof(sTileStamp));
     sTileCellsUsed = 0;
+    ++sGen; // everything converted from now on is newer than any group change so far
     memset(sSlots, 0, sizeof(sSlots));
     sShelfCount = sSlotsUsed = 0;
     sShelfNextY = 0;
@@ -232,6 +243,33 @@ bool UniformBank(int y0, int y1, uint8 *bank)
 
 // ---------------------------------------------------------------- caches
 
+// The palette groups set in `groups` changed after generation `stamp`.
+bool GroupsChanged(unsigned bank, uint32 groups, uint32 stamp)
+{
+    while (groups) {
+        const unsigned g = (unsigned)__builtin_ctz(groups);
+        if (sGroupGen[bank][g] > stamp)
+            return true;
+        groups &= groups - 1;
+    }
+    return false;
+}
+
+// Compares the palette with the last frame's and stamps the groups that changed with this frame's generation.
+void TrackPalette()
+{
+    ++sGen;
+    for (unsigned b = 0; b < BANKS; ++b) {
+        const uint32 *now = (const uint32 *)fullPalette[b], *was = (const uint32 *)sPalShadow[b];
+        if (!memcmp(now, was, sizeof(sPalShadow[b])))
+            continue;
+        for (unsigned g = 0; g < 32; ++g) // a group is 8 colours, 4 words
+            if (now[g * 4] != was[g * 4] || now[g * 4 + 1] != was[g * 4 + 1] || now[g * 4 + 2] != was[g * 4 + 2] || now[g * 4 + 3] != was[g * 4 + 3])
+                sGroupGen[b][g] = sGen;
+        memcpy(sPalShadow[b], fullPalette[b], sizeof(sPalShadow[b]));
+    }
+}
+
 // Atlas cell of a tile with the palette bank applied; queues its conversion when it is new or stale.
 int EnsureTile(unsigned id, unsigned bank)
 {
@@ -245,12 +283,11 @@ int EnsureTile(unsigned id, unsigned bank)
         sTileCell[bank][id]  = (int16)cell;
         sTileStamp[bank][id] = 0;
     }
-    if (sTileStamp[bank][id] != paletteVersion + 1) {
+    const uint32 stamp = sTileStamp[bank][id];
+    if (!stamp || (stamp != sGen && GroupsChanged(bank, sTileGroups[id], stamp))) {
         if (sPendingCount >= MAX_PENDING)
             return -3;
-        if (sTileStamp[bank][id] != 0)
-            sInPlace = true; // rewriting a cell an earlier frame may still be reading
-        sTileStamp[bank][id] = paletteVersion + 1;
+        sTileStamp[bank][id] = sGen;
         sPending[sPendingCount++] = { 0, (uint8)bank, (uint16)id, (uint16)cell };
     }
     return cell;
@@ -300,13 +337,12 @@ SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, 
     for (unsigned probe = 0; probe < SPR_SLOTS; ++probe, i = (i + 1) % SPR_SLOTS) {
         SprSlot &s = sSlots[i];
         if (s.key == key) {
-            if (s.stamp != paletteVersion + 1) {
+            if (!s.stamp || (s.stamp != sGen && GroupsChanged(bank, s.groups, s.stamp))) {
                 if (sPendingCount >= MAX_PENDING) {
                     *refuse = GpuRender::REASON_QUAD_LIMIT;
                     return NULL;
                 }
-                sInPlace = true;
-                s.stamp  = paletteVersion + 1;
+                s.stamp = sGen;
                 sPending[sPendingCount++] = { 1, (uint8)bank, (uint16)i, 0 };
             }
             return &s;
@@ -325,7 +361,8 @@ SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, 
             s.key  = key;
             s.x    = (uint16)ax, s.y = (uint16)ay, s.w = (uint16)w8, s.h = (uint16)h8;
             s.srcW = (uint16)w, s.srcH = (uint16)h;
-            s.stamp = paletteVersion + 1;
+            s.stamp  = sGen;
+            s.groups = 0;
             ++sSlotsUsed;
             sPending[sPendingCount++] = { 1, (uint8)bank, (uint16)i, 0 };
             return &s;
@@ -340,11 +377,14 @@ void ConvertTile(const Pending &p)
     const uint8 *src = &tilesetPixels[TILE_DATASIZE * p.id];
     const uint16 *pal = fullPalette[p.bank];
     const unsigned X = (p.cell % (TILE_ATLAS_W / 16)) * 16, Y = (p.cell / (TILE_ATLAS_W / 16)) * 16;
+    uint32 groups = 0;
     for (unsigned y = 0; y < 16; ++y)
         for (unsigned x = 0; x < 16; ++x) {
             const unsigned idx = src[y * 16 + x];
+            groups |= (idx ? 1u : 0u) << (idx >> 3);
             Put(sTileData, TILE_ATLAS_W, X + x, Y + y, idx ? ToTexel(pal[idx]) : 0);
         }
+    sTileGroups[p.id] = groups;
     Dirty(sTileDirtyLo, sTileDirtyHi, TILE_ATLAS_W, X, Y, 16, 16);
     ++sStats.tileConversions;
 }
@@ -356,15 +396,18 @@ void ConvertSprite(const Pending &p)
     const unsigned sheet = (unsigned)(s.key >> 56), sprX = (unsigned)((s.key >> 15) & 0x3FFF), sprY = (unsigned)((s.key >> 1) & 0x3FFF);
     const GFXSurface &g  = gfxSurface[sheet];
     const uint16 *pal    = fullPalette[p.bank];
+    uint32 groups        = 0;
     for (unsigned y = 0; y < s.h; ++y)
         for (unsigned x = 0; x < s.w; ++x) {
             u16 texel = 0;
             if (x < s.srcW && y < s.srcH && (int)(sprX + x) < g.width && (int)(sprY + y) < g.height) {
                 const unsigned idx = g.pixels[(sprY + y) * g.width + sprX + x];
-                texel              = idx ? ToTexel(pal[idx]) : 0;
+                groups |= (idx ? 1u : 0u) << (idx >> 3);
+                texel = idx ? ToTexel(pal[idx]) : 0;
             }
             Put(sSprData, SPR_ATLAS_W, s.x + x, s.y + y, texel);
         }
+    s.groups = groups;
     Dirty(sSprDirtyLo, sSprDirtyHi, SPR_ATLAS_W, s.x, s.y, s.w, s.h);
     ++sStats.spriteConversions;
 }
@@ -698,8 +741,8 @@ bool GpuRender::Render(const Stream &stream)
     if (sSeenContent != contentVersion) {
         sSeenContent = contentVersion;
         ResetCaches();
-        sInPlace = true;
     }
+    TrackPalette();
 
     sCur        = (sCur + 1) & 1;
     sQuadCount  = 0;
@@ -708,8 +751,6 @@ bool GpuRender::Render(const Stream &stream)
     sFail.reason = REASON_OK;
     bool ok = true;
     memset(sLineBuf, 0, sizeof(sLineBuf));
-    const bool resetInPlace = sInPlace;
-    sInPlace                = resetInPlace;
 
     for (unsigned i = 0; i < stream.count && ok; ++i) {
         const Cmd &c = stream.cmds[i];
@@ -736,6 +777,15 @@ bool GpuRender::Render(const Stream &stream)
         }
     }
     if (!ok) {
+        // The conversions this frame queued are dropped with it: mark them unconverted again, or the cells would
+        // keep whatever they held (the cache trusts its stamps until a colour the entry uses changes).
+        for (unsigned i = 0; i < sPendingCount; ++i) {
+            if (sPending[i].kind == 0)
+                sTileStamp[sPending[i].bank][sPending[i].id] = 0;
+            else
+                sSlots[sPending[i].id].stamp = 0;
+        }
+        sPendingCount         = 0;
         sStats.reason         = sFail.reason;
         sStats.unsupportedCmd = sFail.cmd;
         if (sFail.reason == REASON_ATLAS_FULL) {
@@ -747,9 +797,9 @@ bool GpuRender::Render(const Stream &stream)
 
     // ---- the frame is decided: textures, then geometry
     C3D_RenderTarget *target = (C3D_RenderTarget *)C3DPresent::Target();
-    const bool needSync      = sInPlace;
-    sInPlace                 = false;
-    C3D_FrameBegin(needSync ? C3D_FRAME_SYNCDRAW : 0);
+    // Without SYNCDRAW, which waits for the next vblank (up to 16 ms): FrameBegin already waits until the GPU has
+    // finished the previous frame, so the atlas cells rewritten below are no longer being read.
+    C3D_FrameBegin(0);
     sTileDirtyLo = sSprDirtyLo = ~0u;
     sTileDirtyHi = sSprDirtyHi = 0;
     for (unsigned i = 0; i < sPendingCount; ++i) {
