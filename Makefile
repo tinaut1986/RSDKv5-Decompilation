@@ -153,6 +153,7 @@ RSDK_SOURCES += \
 	RSDKv5/RSDK/Core/ModAPI       			\
 	RSDKv5/RSDK/Dev/Debug        			\
 	RSDKv5/RSDK/Dev/CTR/DevTools 			\
+	RSDKv5/RSDK/Dev/CTR/BottomUi 			\
 	RSDKv5/RSDK/Graphics/CTR/C3DPresent 		\
 	RSDKv5/RSDK/Storage/Storage       		\
 	RSDKv5/RSDK/Storage/Text         		\

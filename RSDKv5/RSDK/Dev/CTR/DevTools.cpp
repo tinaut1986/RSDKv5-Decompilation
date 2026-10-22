@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
 
@@ -837,7 +838,7 @@ bool DevTools::swFrameSkip = true;
 int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
-bool DevTools::swGpuPresent = false; // off at boot until it has been checked; SITE GPU 1 or the menu
+bool DevTools::swGpuPresent = true; // GPU presentation is the default (SITE GPU 0 or the CPU button switches back)
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 
@@ -977,10 +978,40 @@ static void PollTouch()
     }
 }
 
+void DevTools::GetStats(Stats *out)
+{
+    out->fps     = sLastFps;
+    out->frameMs = sLastFrameMs;
+    memcpy(out->stageMs, sLastStageMs, sizeof(out->stageMs));
+    out->skipped = sLastSkipped;
+    out->scene   = (int)sceneInfo.listPos;
+}
+
+const char *DevTools::FtpStatus() { return sStatus; }
+void DevTools::Mark() { TapMark(); }
+
+bool DevTools::InstallNotice(char *out, unsigned cap, float *progress)
+{
+    if (!sNotice)
+        return false;
+    snprintf(out, cap, "%s", sNotice);
+    *progress = -1;
+    if (sPhase == 1 && sRecvTotal)
+        *progress = (float)sRecvDone / (float)sRecvTotal;
+    else if (sPhase == 2 && sCiaTotal)
+        *progress = (float)sCiaDone / (float)sCiaTotal;
+    else if (sPhase == 3) {
+        u64 now = osGetTime(), at = sRelaunchAt;
+        *progress = now >= at ? 1.0f : 1.0f - (float)(at - now) / (float)RELAUNCH_MS;
+    }
+    return true;
+}
+
 void DevTools::Init()
 {
     StartServer();
     OpenCsv();
+    BottomUi::Init(); // the graphical bottom screen; the text console menu stays as the fallback
     sSecondStart = sLastFrameTick = svcGetSystemTick();
     DrawStatus();
 }
@@ -1037,17 +1068,21 @@ bool DevTools::FrameEnd()
             if (second % 5 == 0)
                 fflush(sCsv);
         }
-        DrawStatus();
         sLastSkipped = skipCount;
+        if (!BottomUi::Ready())
+            DrawStatus();
         skipCount    = 0;
         memset(sStageTicks, 0, sizeof(sStageTicks));
         sFrameTicksSum = sFrameTicksMax = 0;
         sFrames                         = 0;
         sSecondStart                    = now;
     }
-    else if ((sPhase == 3 && (sFrames & 15) == 0) || sMenuDirty)
+    else if (!BottomUi::Ready() && ((sPhase == 3 && (sFrames & 15) == 0) || sMenuDirty))
         DrawStatus();
-    PollTouch();
+    if (BottomUi::Ready())
+        BottomUi::Update();
+    else
+        PollTouch();
 
     if (sPhase == 3 && osGetTime() >= sRelaunchAt) {
         // aptExit() starts this title again once the process has exited (as HOME -> close).

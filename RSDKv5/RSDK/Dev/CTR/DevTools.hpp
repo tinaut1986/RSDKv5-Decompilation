@@ -44,6 +44,18 @@ void Shutdown();
 
 void StageAdd(Stage stage, uint64 ticks);
 
+struct Stats {
+    float fps, frameMs;
+    float stageMs[STAGE_COUNT];
+    unsigned skipped; // passes without drawing in the last second
+    int scene;
+};
+void GetStats(Stats *out);
+const char *FtpStatus(); // "192.168.1.141:5000" or why the server is off
+void Mark();             // writes a mark into log.txt and the perf CSV
+// While a CIA arrives or installs: the line to show and how far along it is (0..1, or -1 when unknown).
+bool InstallNotice(char *out, unsigned cap, float *progress);
+
 // Switches the bottom-screen menu flips at run time (in memory, on at every boot).
 extern bool swFrameSkip; // skip drawing + flip when the logic is more than a tick late
 extern int swMaxSkip;    // most passes skipped in a row

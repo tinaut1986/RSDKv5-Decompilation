@@ -16,6 +16,10 @@ namespace C3DPresent
 
 // Brings citro3d, the top render target, the texture and the shader up. False leaves everything as it
 // was (the CPU path keeps working).
+// citro3d and citro2d, shared by the top-screen presentation and the bottom-screen UI.
+bool InitCore();
+bool CoreReady();
+
 bool Init();
 bool Ready();
 
