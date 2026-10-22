@@ -14,6 +14,7 @@ using namespace RSDK;
 
 volatile bool GpuFrame::dumpRequest;
 const char *GpuFrame::dumpPath;
+bool GpuFrame::lineBufDirty = true;
 bool GpuFrame::active;
 bool GpuFrame::pending;
 unsigned GpuFrame::paletteVersion;
@@ -24,7 +25,9 @@ using namespace RSDK::GpuFrame;
 namespace
 {
 
-enum { MAX_CMDS = 2048, ARENA_SIZE = 96 * 1024 };
+// The Special Stage records thousands of faces a frame; the heap is tight (~51 MB used), so the buffers are as big
+// as malloc allows, from the first size down (Alloc logs which one it got).
+unsigned MAX_CMDS, ARENA_SIZE;
 
 Cmd *sCmds;
 uint8 *sArena;
@@ -38,18 +41,28 @@ const char *sLastWhy;   // why the last presented frame was not drawn by the GPU
 
 bool Alloc()
 {
+    static bool failed;
     if (sCmds)
         return true;
-    sCmds  = (Cmd *)malloc(MAX_CMDS * sizeof(Cmd));
-    sArena = (uint8 *)malloc(ARENA_SIZE);
-    if (!sCmds || !sArena) {
+    if (failed)
+        return false;
+    static const unsigned kSizes[][2] = { { 8192, 384 * 1024 }, { 4096, 256 * 1024 }, { 2048, 96 * 1024 } };
+    for (const auto &sz : kSizes) {
+        sCmds  = (Cmd *)malloc(sz[0] * sizeof(Cmd));
+        sArena = (uint8 *)malloc(sz[1]);
+        if (sCmds && sArena) {
+            MAX_CMDS = sz[0], ARENA_SIZE = sz[1];
+            DEV_LOG("gpuframe: %u commands, %u KB arena (%u KB)", MAX_CMDS, ARENA_SIZE >> 10, (unsigned)((MAX_CMDS * sizeof(Cmd) + ARENA_SIZE) >> 10));
+            return true;
+        }
         free(sCmds);
         free(sArena);
-        sCmds = NULL;
+        sCmds  = NULL;
         sArena = NULL;
-        return false;
     }
-    return true;
+    failed = true;
+    DEV_LOG("gpuframe: no memory for the command buffers");
+    return false;
 }
 
 // A new command with the screen state it needs; NULL when the buffers are full (the caller then falls back
@@ -79,6 +92,10 @@ Cmd *NewCmd(CmdType type, uint32 arenaBytes = 0)
 // draws, so a snapshot goes into the stream whenever it differs from the one the stream last set.
 bool SyncLineBuffer()
 {
+    // Compared only after a write to it: a frame records thousands of commands (the Special Stage's faces).
+    if (!lineBufDirty)
+        return true;
+    lineBufDirty = false;
     if (!memcmp(sLineBuf, gfxLineBuffer, sizeof(sLineBuf)))
         return true;
     Cmd *c = NewCmd(CMD_LINEBUF, sizeof(sLineBuf));
@@ -117,6 +134,7 @@ void GpuFrame::Begin()
     sCount     = 0;
     sArenaUsed = 0;
     memcpy(sLineBuf, gfxLineBuffer, sizeof(sLineBuf));
+    lineBufDirty = false;
     // The stream starts by setting the line buffer the frame starts with.
     Cmd *c = NewCmd(CMD_LINEBUF, sizeof(sLineBuf));
     if (!c)
@@ -191,6 +209,24 @@ void GpuFrame::Flush()
                 DrawBlendedFace(v, colors, p[0], p[1], p[2]);
                 break;
             }
+            case CMD_FACES: {
+                const uint8 *at = sArena + c.arena;
+                for (int32 f = 0; f < p[0]; ++f) {
+                    const int32 n = ((const int32 *)at)[0], rgb = ((const int32 *)at)[1];
+                    DrawFace((Vector2 *)(at + 8), n, (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, p[1], p[2]);
+                    at += 8 + n * sizeof(Vector2);
+                }
+                break;
+            }
+            case CMD_BLENDED_FACES: {
+                const uint8 *at = sArena + c.arena;
+                for (int32 f = 0; f < p[0]; ++f) {
+                    const int32 n = *(const int32 *)at;
+                    DrawBlendedFace((Vector2 *)(at + 4), (uint32 *)(at + 4 + n * sizeof(Vector2)), n, p[1], p[2]);
+                    at += 4 + n * (sizeof(Vector2) + sizeof(uint32));
+                }
+                break;
+            }
             case CMD_SPRITE: DrawSpriteFlipped(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9]); break;
             case CMD_ROTO: DrawSpriteRotozoom(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], (int16)p[11], p[12], p[13], p[14]); break;
             case CMD_LAYER: {
@@ -219,7 +255,7 @@ void GpuFrame::Flush()
 
 static void DumpCommands()
 {
-    static const char *const kName[] = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE_OUTLINE", "FACE", "BLENDED_FACE", "SPRITE", "ROTO", "LAYER", "LINEBUF" };
+    static const char *const kName[] = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE_OUTLINE", "FACE", "BLENDED_FACE", "SPRITE", "ROTO", "LAYER", "LINEBUF", "FACES", "BLENDED_FACES" };
     FILE *f = fopen(dumpPath, "w");
     if (!f)
         return;
@@ -328,15 +364,44 @@ bool GpuFrame::RecCircleOutline(int32 x, int32 y, int32 ri, int32 ro, uint32 col
     return true;
 }
 
+// Arena room for one more face in a run of `type`: appended to the last command when it is a run of the same kind
+// with the same state and its data ends the arena, else a new run. NULL when the buffers are full.
+static uint8 *FaceRecord(CmdType type, uint32 bytes, int32 alpha, int32 ink)
+{
+    if (!SyncLineBuffer())
+        return NULL;
+    Cmd *last = sCount ? &sCmds[sCount - 1] : NULL;
+    if (last && last->type == type && last->p[1] == alpha && last->p[2] == ink && last->arena + last->arenaSize == sArenaUsed
+        && last->clip[0] == currentScreen->clipBound_X1 && last->clip[1] == currentScreen->clipBound_Y1 && last->clip[2] == currentScreen->clipBound_X2
+        && last->clip[3] == currentScreen->clipBound_Y2 && last->pos[0] == currentScreen->position.x && last->pos[1] == currentScreen->position.y) {
+        if (sArenaUsed + bytes > ARENA_SIZE) {
+            GpuFrame::Hazard("ARENA FULL");
+            return NULL;
+        }
+        uint8 *at = sArena + sArenaUsed;
+        sArenaUsed += bytes;
+        last->arenaSize += bytes;
+        ++last->p[0];
+        return at;
+    }
+    Cmd *c = NewCmd(type, bytes);
+    if (!c)
+        return NULL;
+    c->p[0] = 1, c->p[1] = alpha, c->p[2] = ink;
+    return sArena + c->arena;
+}
+
 bool GpuFrame::RecFace(Vector2 *vertices, int32 n, int32 r, int32 g, int32 b, int32 alpha, int32 ink)
 {
     if (n < 0 || n > 64)
         return false; // not recorded: the caller draws it, after a flush
-    Cmd *c = BeginCmd(CMD_FACE, (uint32)n * sizeof(Vector2));
-    if (!c)
+    uint8 *at = FaceRecord(CMD_FACES, 8 + (uint32)n * sizeof(Vector2), alpha, ink);
+    if (!at)
         return false;
-    memcpy(sArena + c->arena, vertices, (size_t)n * sizeof(Vector2));
-    c->p[0] = n, c->p[1] = r, c->p[2] = g, c->p[3] = b, c->p[4] = alpha, c->p[5] = ink;
+    int32 *head = (int32 *)at;
+    head[0]     = n;
+    head[1]     = ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF);
+    memcpy(at + 8, vertices, (size_t)n * sizeof(Vector2));
     return true;
 }
 
@@ -344,12 +409,12 @@ bool GpuFrame::RecBlendedFace(Vector2 *vertices, uint32 *colors, int32 n, int32 
 {
     if (n < 0 || n > 64)
         return false;
-    Cmd *c = BeginCmd(CMD_BLENDED_FACE, (uint32)n * (sizeof(Vector2) + sizeof(uint32)));
-    if (!c)
+    uint8 *at = FaceRecord(CMD_BLENDED_FACES, 4 + (uint32)n * (sizeof(Vector2) + sizeof(uint32)), alpha, ink);
+    if (!at)
         return false;
-    memcpy(sArena + c->arena, vertices, (size_t)n * sizeof(Vector2));
-    memcpy(sArena + c->arena + n * sizeof(Vector2), colors, (size_t)n * sizeof(uint32));
-    c->p[0] = n, c->p[1] = alpha, c->p[2] = ink;
+    *(int32 *)at = n;
+    memcpy(at + 4, vertices, (size_t)n * sizeof(Vector2));
+    memcpy(at + 4 + n * sizeof(Vector2), colors, (size_t)n * sizeof(uint32));
     return true;
 }
 

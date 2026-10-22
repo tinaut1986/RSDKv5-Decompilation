@@ -47,6 +47,7 @@ inline void SetActivePalette(uint8 newActiveBank, int32 startLine, int32 endLine
 {
     if (newActiveBank < PALETTE_BANK_COUNT)
         for (int32 l = startLine; l < endLine && l < SCREEN_YSIZE; l++) gfxLineBuffer[l] = newActiveBank;
+    GPUFRAME_LINEBUF_CHANGED();
 }
 
 inline uint32 GetPaletteEntry(uint8 bankID, uint8 index)

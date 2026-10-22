@@ -37,6 +37,7 @@ struct Stats {
     unsigned reason, unsupportedCmd;
     unsigned atlasRetries; // frames rebuilt after emptying a full sprite atlas
     unsigned softLayers;   // layers drawn by the software into a texture (last frame)
+    unsigned faces;        // polygons emitted (last frame)
 };
 const Stats &GetStats();
 // The last refusal as a short name for the dev tools ("FACE", "INK TINT", "WATER LINE"); NULL when the last

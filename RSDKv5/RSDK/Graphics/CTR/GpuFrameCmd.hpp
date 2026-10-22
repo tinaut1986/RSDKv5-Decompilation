@@ -24,6 +24,11 @@ enum CmdType : uint8 {
     CMD_ROTO,
     CMD_LAYER,
     CMD_LINEBUF, // gfxLineBuffer changed: the new one is in the arena
+    // Runs of faces with the same ink, alpha, clip and screen position (the 3D scenes draw thousands a frame): p[0]
+    // faces, p[1] alpha, p[2] ink; the arena holds per face int32 n, int32 0xRRGGBB (CMD_FACES only), Vector2 v[n],
+    // and for CMD_BLENDED_FACES uint32 colours[n].
+    CMD_FACES,
+    CMD_BLENDED_FACES,
 };
 
 struct Cmd {

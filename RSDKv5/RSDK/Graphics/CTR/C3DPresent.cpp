@@ -42,6 +42,8 @@ void C3DPresent::ShutdownCore()
     sCore = sReady = false;
 }
 
+void *C3DPresent::Staging() { return sStaging; }
+
 bool C3DPresent::InitCore()
 {
     if (sCore)
