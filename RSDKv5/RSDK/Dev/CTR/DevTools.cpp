@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
 
@@ -53,9 +54,11 @@ static volatile unsigned long long sAllo, sRecvDone, sRecvTotal, sCiaDone, sCiaT
 static volatile unsigned long long sRelaunchAt; // osGetTime() the countdown ends at
 
 static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
+static unsigned sLastSkipped;
 
 // Requests from the FTP thread, applied by the main thread in FrameEnd.
 static volatile int sPendingCategory = -1, sPendingScene = -1;
+static char sOrderCur[400], sOrderLast[400];
 static volatile int sShotRequest; // 1 top screen, 2 bottom screen
 
 struct Session {
@@ -665,6 +668,47 @@ static void HandleSession(int ctrl)
                 DevTools::swGpuPresent = path && atoi(path) != 0;
                 Reply(s, "200 gpu present %d", (int)DevTools::swGpuPresent);
             }
+            else if (!strcmp(sub, "SET") && path) {
+                // SITE SET <frameskip|maxskip|draw|flipcopy|gpu|syncdraw|vblank> <value>
+                char *val = strchr(path, ' ');
+                const int v = val ? atoi(val + 1) : 0;
+                bool ok     = true;
+                if (!strncmp(path, "frameskip", 9))
+                    DevTools::swFrameSkip = v != 0;
+                else if (!strncmp(path, "maxskip", 7))
+                    DevTools::swMaxSkip = v < 1 ? 1 : v > 4 ? 4 : v;
+                else if (!strncmp(path, "draw", 4))
+                    DevTools::swDraw = v != 0;
+                else if (!strncmp(path, "flipcopy", 8))
+                    DevTools::swFlipCopy = v != 0;
+                else if (!strncmp(path, "gpu", 3))
+                    DevTools::swGpuPresent = v != 0;
+                else if (!strncmp(path, "bottomui", 8))
+                    DevTools::swBottomUi = v != 0;
+                else if (!strncmp(path, "syncdraw", 8))
+                    DevTools::swSyncDraw = v != 0;
+                else if (!strncmp(path, "vblank", 6))
+                    DevTools::swVblankWait = v != 0;
+                else
+                    ok = false;
+                if (ok) {
+                    DevTools::SaveSettings();
+                    Reply(s, "200 %s", path);
+                }
+                else
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|syncdraw|vblank <value>");
+            }
+            else if (!strcmp(sub, "ORDER")) {
+                Reply(s, "200 %s", sOrderLast);
+            }
+            else if (!strcmp(sub, "SYNCDRAW")) {
+                DevTools::swSyncDraw = path && atoi(path) != 0;
+                Reply(s, "200 syncdraw %d", (int)DevTools::swSyncDraw);
+            }
+            else if (!strcmp(sub, "VBLANK")) {
+                DevTools::swVblankWait = path && atoi(path) != 0;
+                Reply(s, "200 vblank wait %d", (int)DevTools::swVblankWait);
+            }
             else if (!strcmp(sub, "INPUT")) {
                 // SITE INPUT <hex mask of 3DS keys, e.g. 10 = A, 10 = KEY_A bit>: held until set to 0.
                 DevTools::injectKeys = path ? (uint32)strtoul(path, NULL, 16) : 0;
@@ -687,10 +731,10 @@ static void HandleSession(int ctrl)
                 Reply(s, "200 %u sheets, %u KB at 8 bit (%u KB at 16 bit): %s", count, total >> 10, (total * 2) >> 10, list);
             }
             else if (!strcmp(sub, "STATE")) {
-                Reply(s, "200 category %d scene %d state %d fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f",
-                      (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastFps, sLastFrameMs, sLastStageMs[0],
+                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f",
+                      (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastSkipped, sLastFps, sLastFrameMs, sLastStageMs[0],
                       sLastStageMs[1], sLastStageMs[2], sLastStageMs[3], sLastStageMs[4], sLastStageMs[5], sLastStageMs[6], sLastStageMs[7],
-                      sLastStageMs[8], sLastStageMs[9], sLastStageMs[10], sLastStageMs[11]);
+                      sLastStageMs[8], sLastStageMs[9], sLastStageMs[10], sLastStageMs[11], sLastStageMs[12]);
             }
             else
                 Reply(s, "504 Unknown SITE command.");
@@ -773,16 +817,50 @@ static bool StartServer()
 
 // ---------------------------------------------------------------- perf timing
 
-static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes", "pcopy", "pxfer", "pframe" };
+static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes", "pcopy", "pxfer", "pframe", "wait" };
 static const char *kDir                              = "sdmc:/3ds/Sonic Mania 3DS/debug";
 
 static uint64 sStageTicks[DevTools::STAGE_COUNT];
 static uint64 sFrameTicksSum, sFrameTicksMax, sLastFrameTick, sSecondStart;
 static unsigned sFrames;
 static FILE *sCsv;
-static unsigned sLastSkipped;
 
-DevTools::StageScope::StageScope(Stage s) : stage(s), start(svcGetSystemTick()) {}
+static unsigned sOrderLen;
+static char sOrderKind;
+static unsigned sOrderRun;
+
+static void OrderFlush()
+{
+    if (sOrderRun && sOrderLen + 8 < sizeof(sOrderCur))
+        sOrderLen += (unsigned)snprintf(sOrderCur + sOrderLen, sizeof(sOrderCur) - sOrderLen, "%c%u ", sOrderKind, sOrderRun);
+    sOrderRun = 0;
+}
+
+void DevTools::OrderBegin()
+{
+    OrderFlush();
+    sOrderCur[sOrderLen] = 0;
+    memcpy(sOrderLast, sOrderCur, sizeof(sOrderLast));
+    sOrderLen = 0;
+    sOrderCur[0] = 0;
+    sOrderKind   = 0;
+}
+
+void DevTools::OrderNote(char kind)
+{
+    if (kind != sOrderKind) {
+        OrderFlush();
+        sOrderKind = kind;
+    }
+    ++sOrderRun;
+}
+
+DevTools::StageScope::StageScope(Stage s) : stage(s), start(svcGetSystemTick())
+{
+    static const char kinds[STAGE_COUNT] = { 0, 0, 0, 'L', 'S', 'R', 'F', '3', 'P', 0, 0, 0, 0 };
+    if (kinds[s])
+        OrderNote(kinds[s]);
+}
 DevTools::StageScope::~StageScope() { StageAdd(stage, svcGetSystemTick() - start); }
 
 void DevTools::StageAdd(Stage stage, uint64 ticks) { sStageTicks[stage] += ticks; }
@@ -837,7 +915,10 @@ bool DevTools::swFrameSkip = true;
 int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
-bool DevTools::swGpuPresent = false; // off at boot until it has been checked; SITE GPU 1 or the menu
+bool DevTools::swBottomUi = true;
+bool DevTools::swSyncDraw = false;   // waiting for the previous GPU frame in FrameBegin cost 10 ms (46 fps instead of 60)
+bool DevTools::swVblankWait = false; // the clock paces the loop now (RenderDevice::UpdateFPSCap)
+bool DevTools::swGpuPresent = true; // GPU presentation is the default (SITE GPU 0 or the CPU button switches back)
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 
@@ -977,10 +1058,82 @@ static void PollTouch()
     }
 }
 
+void DevTools::GetStats(Stats *out)
+{
+    out->fps     = sLastFps;
+    out->frameMs = sLastFrameMs;
+    memcpy(out->stageMs, sLastStageMs, sizeof(out->stageMs));
+    out->skipped = sLastSkipped;
+    out->scene   = (int)sceneInfo.listPos;
+}
+
+const char *DevTools::FtpStatus() { return sStatus; }
+void DevTools::Mark() { TapMark(); }
+
+int DevTools::InstallNotice(char *title, unsigned cap, float *progress, unsigned *secondsLeft)
+{
+    const int phase = sPhase;
+    if (!sNotice || !phase)
+        return 0;
+    snprintf(title, cap, "%s", sNotice);
+    *progress    = -1;
+    *secondsLeft = 0;
+    if (phase == 1 && sRecvTotal)
+        *progress = (float)sRecvDone / (float)sRecvTotal;
+    else if (phase == 2 && sCiaTotal)
+        *progress = (float)sCiaDone / (float)sCiaTotal;
+    else if (phase == 3) {
+        u64 now = osGetTime(), at = sRelaunchAt;
+        *progress    = now >= at ? 1.0f : 1.0f - (float)(at - now) / (float)RELAUNCH_MS;
+        *secondsLeft = now >= at ? 0 : (unsigned)((at - now + 999) / 1000);
+    }
+    return phase;
+}
+
+static const char *kSettingsPath = "sdmc:/3ds/Sonic Mania 3DS/dev-settings.ini";
+
+void DevTools::SaveSettings()
+{
+    mkdir("sdmc:/3ds", 0777);
+    mkdir("sdmc:/3ds/Sonic Mania 3DS", 0777);
+    FILE *f = fopen(kSettingsPath, "w");
+    if (!f)
+        return;
+    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpu=%d\nsyncdraw=%d\nvblank=%d\n", (int)swFrameSkip, swMaxSkip, (int)swFlipCopy,
+            (int)swGpuPresent, (int)swSyncDraw, (int)swVblankWait);
+    fclose(f);
+}
+
+static void LoadSettings()
+{
+    FILE *f = fopen(kSettingsPath, "r");
+    if (!f)
+        return;
+    char key[24];
+    int v;
+    while (fscanf(f, " %23[^=]=%d", key, &v) == 2) {
+        if (!strcmp(key, "frameskip"))
+            DevTools::swFrameSkip = v != 0;
+        else if (!strcmp(key, "maxskip"))
+            DevTools::swMaxSkip = v < 1 ? 1 : v > 4 ? 4 : v;
+        else if (!strcmp(key, "flipcopy"))
+            DevTools::swFlipCopy = v != 0;
+        else if (!strcmp(key, "gpu"))
+            DevTools::swGpuPresent = v != 0;
+        else if (!strcmp(key, "syncdraw"))
+            DevTools::swSyncDraw = v != 0;
+        else if (!strcmp(key, "vblank"))
+            DevTools::swVblankWait = v != 0;
+    }
+    fclose(f);
+}
+
 void DevTools::Init()
 {
+    LoadSettings();
     StartServer();
     OpenCsv();
+    BottomUi::Init(); // the graphical bottom screen; the text console menu stays as the fallback
     sSecondStart = sLastFrameTick = svcGetSystemTick();
     DrawStatus();
 }
@@ -1037,17 +1190,21 @@ bool DevTools::FrameEnd()
             if (second % 5 == 0)
                 fflush(sCsv);
         }
-        DrawStatus();
         sLastSkipped = skipCount;
+        if (!BottomUi::Ready())
+            DrawStatus();
         skipCount    = 0;
         memset(sStageTicks, 0, sizeof(sStageTicks));
         sFrameTicksSum = sFrameTicksMax = 0;
         sFrames                         = 0;
         sSecondStart                    = now;
     }
-    else if ((sPhase == 3 && (sFrames & 15) == 0) || sMenuDirty)
+    else if (!BottomUi::Ready() && ((sPhase == 3 && (sFrames & 15) == 0) || sMenuDirty))
         DrawStatus();
-    PollTouch();
+    if (BottomUi::Ready())
+        BottomUi::Update();
+    else
+        PollTouch();
 
     if (sPhase == 3 && osGetTime() >= sRelaunchAt) {
         // aptExit() starts this title again once the process has exited (as HOME -> close).

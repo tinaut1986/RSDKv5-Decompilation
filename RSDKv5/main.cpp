@@ -6,7 +6,7 @@
 // linear heap, so the same build starts on the Old 3DS (64 MB mode, where a fixed 52 MB heap plus
 // the code did not fit and __system_allocateHeaps panicked) and on the New 3DS (124 MB mode).
 __attribute__((weak)) u32 __ctru_heap_size        = 0;
-__attribute__((weak)) u32 __ctru_linear_heap_size = 0x200000;
+__attribute__((weak)) u32 __ctru_linear_heap_size = 0x300000; // 3 MB: the screens, the GPU presentation and the bottom-screen UI live here
 
 bool RSDK::printToConsole;
 #endif

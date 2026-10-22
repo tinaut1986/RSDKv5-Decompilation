@@ -4,6 +4,7 @@
 #if RETRO_PLATFORM == RETRO_3DS
 
 #include <3ds.h>
+#include <citro2d.h>
 #include <citro3d.h>
 #include <string.h>
 
@@ -18,7 +19,7 @@ struct Vertex {
     float x, y, z, u, v;
 };
 
-static bool sReady, sFailed;
+static bool sReady, sFailed, sCore, sCoreFailed;
 static C3D_RenderTarget *sTarget;
 static C3D_Tex sTex;
 static DVLB_s *sDvlb;
@@ -29,6 +30,26 @@ static void *sStaging; // linear memory: the CPU writes the picture here, the di
                        // (VRAM is not writable by the CPU from an installed title: the first try crashed in memcpy)
 static Vertex *sQuad;  // linear memory
 static C3D_BufInfo sBuf;
+static C3D_AttrInfo sAttr;
+
+bool C3DPresent::InitCore()
+{
+    if (sCore)
+        return true;
+    if (sCoreFailed)
+        return false;
+    sCoreFailed = true;
+    // A small command buffer and few 2D objects: the app's linear heap holds the screens' buffers too.
+    if (!C3D_Init(0x8000))
+        return false;
+    if (!C2D_Init(256))
+        return false;
+    sCore       = true;
+    sCoreFailed = false;
+    return true;
+}
+
+bool C3DPresent::CoreReady() { return sCore; }
 
 bool C3DPresent::Init()
 {
@@ -37,8 +58,7 @@ bool C3DPresent::Init()
     if (sFailed)
         return false; // one try only: a failed Init must not run again every frame
     sFailed = true;
-    // A small command buffer: the app's linear heap is only a couple of MB and holds the screens.
-    if (!C3D_Init(0x8000))
+    if (!InitCore())
         return false;
 
     sTarget = C3D_RenderTargetCreate(SCREEN_H, SCREEN_W, GPU_RB_RGB565, (GPU_DEPTHBUF)-1);
@@ -78,10 +98,10 @@ bool C3DPresent::Init()
     C3D_BindProgram(&sProgram);
     sProjLoc = shaderInstanceGetUniformLocation(sProgram.vertexShader, "projection");
 
-    C3D_AttrInfo *attr = C3D_GetAttrInfo();
-    AttrInfo_Init(attr);
-    AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 3); // position
-    AttrInfo_AddLoader(attr, 1, GPU_FLOAT, 2); // texture coordinates
+    AttrInfo_Init(&sAttr);
+    AttrInfo_AddLoader(&sAttr, 0, GPU_FLOAT, 3); // position
+    AttrInfo_AddLoader(&sAttr, 1, GPU_FLOAT, 2); // texture coordinates
+    C3D_SetAttrInfo(&sAttr);
 
     BufInfo_Init(&sBuf);
     BufInfo_Add(&sBuf, sQuad, sizeof(Vertex), 2, 0x10);
@@ -125,9 +145,19 @@ void C3DPresent::Present(const unsigned short *src, int pitch)
     }
 
     DEV_STAGE(STAGE_PFRAME);
-    C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+    C3D_FrameBegin(DEV_SW_SYNCDRAW ? C3D_FRAME_SYNCDRAW : 0);
     C3D_FrameDrawOn(sTarget);
+    // citro2d (the bottom screen) changes the pipeline state between our frames: set ours again.
     C3D_BindProgram(&sProgram);
+    C3D_SetAttrInfo(&sAttr);
+    C3D_SetBufInfo(&sBuf);
+    C3D_TexEnv *env = C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+    C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    C3D_CullFace(GPU_CULL_NONE);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &sProj);
     C3D_TexBind(0, &sTex);
     C3D_DrawArrays(GPU_TRIANGLE_STRIP, 0, 4);
