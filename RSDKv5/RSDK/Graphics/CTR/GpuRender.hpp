@@ -35,11 +35,15 @@ struct Stats {
     unsigned quads, tileConversions, spriteConversions, atlasFlushes;
     unsigned layerCmds, tileQuads, emptyTiles, rowsOut; // diagnostics
     unsigned reason, unsupportedCmd;
+    unsigned atlasRetries; // frames rebuilt after emptying a full sprite atlas
+    unsigned softLayers;   // layers drawn by the software into a texture (last frame)
 };
 const Stats &GetStats();
 // The last refusal as a short name for the dev tools ("FACE", "INK TINT", "WATER LINE"); NULL when the last
 // frame was drawn. Always a static string: callers may keep and compare the pointer.
 const char *ReasonName();
+// The last refused command with its parameters ("#12 type 7 kind 0 clip ... | p0 p1 ..."), for SITE STATE.
+const char *LastRefusal();
 
 } // namespace GpuRender
 } // namespace RSDK
