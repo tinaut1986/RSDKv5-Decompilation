@@ -16,7 +16,7 @@ LIBDIR="$DEVKITPRO/portlibs/3ds/lib/pkgconfig:$DEVKITPRO/portlibs/armv6k/lib/pkg
 
 # The Makefile does not add these by itself.
 # DEV_TOOLS=0 leaves the FTP server and the perf timing out (production builds).
-export DEFINES="-DRETRO_USE_MOD_LOADER=0 -DMANIA_DEV_TOOLS=${DEV_TOOLS:-1} -DSCREEN_XMAX=400 -I./Game -I./Game/Objects ${EXTRA_DEFINES:-}"
+export DEFINES="-DRETRO_USE_MOD_LOADER=0 -DMANIA_DEV_TOOLS=${DEV_TOOLS:-1} -I./Game -I./Game/Objects ${EXTRA_DEFINES:-}"
 # make does not rebuild objects when only a -D changes, and some of them (SCREEN_XMAX) change the layout of
 # structures the engine and the game logic share: a stamp of the defines wipes the objects when they differ.
 STAMP="bin/.defines"

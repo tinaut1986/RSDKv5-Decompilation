@@ -101,7 +101,8 @@ void RenderDevice::FlipScreen()
       gfxFlushBuffers();
       gfxSwapBuffers();
     }
-    gspWaitForVBlank();
+    if (DEV_SW_VBLANK)
+      gspWaitForVBlank();
   }
 }
 
@@ -172,10 +173,23 @@ static bool sSkipThisPass;
 
 void RenderDevice::UpdateFPSCap()
 {
-  const u64 now = svcGetSystemTick();
+  u64 now = svcGetSystemTick();
   if (sNextTick == 0 || now > sNextTick + 4 * TICKS_PER_FRAME) {
     sNextTick = now;
     sSkipRun = 0;
+  }
+  // Early: wait for this pass's moment. The clock, not a vblank wait after the flip, sets the rhythm: a
+  // pass that skipped its drawing used to skip the wait too, which shifted every later pass against the
+  // vblank and made the drawn ones wait two (the picture ran at half rate while the logic ran at 60).
+  if (now + SYSCLOCK_ARM11 / 2000 < sNextTick) {
+    const u64 start = now;
+    // Sleep most of it, leave about half a millisecond to spin on.
+    const u64 sleepTicks = sNextTick - now - SYSCLOCK_ARM11 / 2000;
+    svcSleepThread((s64)(sleepTicks * 1000000000ULL / SYSCLOCK_ARM11));
+    while (svcGetSystemTick() < sNextTick) {
+    }
+    now = svcGetSystemTick();
+    DevTools::StageAdd(DevTools::STAGE_WAIT, now - start);
   }
   const u64 late = now > sNextTick ? now - sNextTick : 0;
   sSkipThisPass = DEV_SW_FRAMESKIP && late > TICKS_PER_FRAME && sSkipRun < DEV_SW_MAXSKIP;

@@ -32,6 +32,7 @@ enum Stage {
     STAGE_PCOPY,   // GPU presentation: copy of the picture into the staging buffer
     STAGE_PXFER,   // ... display transfer into the texture
     STAGE_PFRAME,  // ... citro3d frame (wait for the previous one, draw, queue)
+    STAGE_WAIT,    // idle time the pacing waits for the next tick: the headroom of the frame
     STAGE_COUNT
 };
 
@@ -53,8 +54,10 @@ struct Stats {
 void GetStats(Stats *out);
 const char *FtpStatus(); // "192.168.1.141:5000" or why the server is off
 void Mark();             // writes a mark into log.txt and the perf CSV
-// While a CIA arrives or installs: the line to show and how far along it is (0..1, or -1 when unknown).
-bool InstallNotice(char *out, unsigned cap, float *progress);
+// While a CIA arrives or installs: 0 when nothing is going on, else the phase (1 receiving, 2 installing,
+// 3 restart countdown), the title to show, how far along it is (0..1, or -1 when unknown) and, in phase 3,
+// the seconds left.
+int InstallNotice(char *title, unsigned cap, float *progress, unsigned *secondsLeft);
 
 // Switches the bottom-screen menu flips at run time (in memory, on at every boot).
 extern bool swFrameSkip; // skip drawing + flip when the logic is more than a tick late
@@ -63,6 +66,8 @@ extern bool swDraw;      // run the draw lists (off isolates the cost of the log
 extern bool swFlipCopy;  // copy the frame into the screen (off isolates the cost of the flip)
 extern uint32 injectKeys; // 3DS key mask held on top of the real buttons (SITE INPUT)
 extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy
+extern bool swSyncDraw;    // C3D_FrameBegin waits for the previous GPU frame (experiment switch)
+extern bool swVblankWait;  // gspWaitForVBlank after the present (experiment switch)
 extern unsigned skipCount; // passes whose drawing was skipped since the last second
 
 // Appends one line to sdmc:/3ds/Sonic Mania 3DS/debug/log.txt (flushed at once, so it survives a
@@ -95,6 +100,8 @@ struct StageScope {
 #define DEV_SW_DRAW      RSDK::DevTools::swDraw
 #define DEV_SW_FLIPCOPY  RSDK::DevTools::swFlipCopy
 #define DEV_SW_GPUPRESENT RSDK::DevTools::swGpuPresent
+#define DEV_SW_SYNCDRAW  RSDK::DevTools::swSyncDraw
+#define DEV_SW_VBLANK    RSDK::DevTools::swVblankWait
 #define DEV_COUNT_SKIP() (++RSDK::DevTools::skipCount)
 #else
 #define DEV_SW_FRAMESKIP true
@@ -102,6 +109,8 @@ struct StageScope {
 #define DEV_SW_DRAW      true
 #define DEV_SW_FLIPCOPY  true
 #define DEV_SW_GPUPRESENT false
+#define DEV_SW_SYNCDRAW  true
+#define DEV_SW_VBLANK    true
 #define DEV_COUNT_SKIP() ((void)0)
 #endif
 

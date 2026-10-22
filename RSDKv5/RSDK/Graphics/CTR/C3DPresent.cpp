@@ -145,7 +145,7 @@ void C3DPresent::Present(const unsigned short *src, int pitch)
     }
 
     DEV_STAGE(STAGE_PFRAME);
-    C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+    C3D_FrameBegin(DEV_SW_SYNCDRAW ? C3D_FRAME_SYNCDRAW : 0);
     C3D_FrameDrawOn(sTarget);
     // citro2d (the bottom screen) changes the pipeline state between our frames: set ours again.
     C3D_BindProgram(&sProgram);

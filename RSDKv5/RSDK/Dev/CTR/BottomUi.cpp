@@ -110,7 +110,7 @@ static void Draw()
             C2D_DrawRectSolid(x, barY, 0.3f, w, barH, colors[i]);
         x += w;
     }
-    snprintf(line, sizeof(line), "update %.1f   draw %.1f   flip %.1f", st.stageMs[0], st.stageMs[1], st.stageMs[2]);
+    snprintf(line, sizeof(line), "update %.1f   draw %.1f   flip %.1f   idle %.1f", st.stageMs[0], st.stageMs[1], st.stageMs[2], st.stageMs[12]);
     Text(line, 8, 88, 0.42f, Rgb(200, 205, 210));
     snprintf(line, sizeof(line), "layers %.1f  sprites %.1f  3d %.1f  faces %.1f", st.stageMs[3], st.stageMs[4], st.stageMs[7], st.stageMs[6]);
     Text(line, 8, 99, 0.38f, Rgb(140, 150, 160));
@@ -133,14 +133,29 @@ static void Draw()
         Text(val, bx + 10, by + 15, 0.55f, Rgb(255, 255, 255));
     }
 
-    // An install in progress covers the FTP line with its progress bar.
+    // An install in progress is a modal message: the screen is dimmed and a box with the step, a bar and the
+    // percentage (or the seconds left before the restart) in it takes the middle.
     float progress;
-    char notice[48];
-    if (DevTools::InstallNotice(notice, sizeof(notice), &progress)) {
-        C2D_DrawRectSolid(0, 214, 0.6f, W, 26, Rgb(150, 60, 30));
-        if (progress >= 0)
-            C2D_DrawRectSolid(0, 214, 0.65f, W * progress, 26, Rgb(235, 140, 50));
-        Text(notice, 8, 219, 0.5f, Rgb(255, 255, 255));
+    unsigned seconds;
+    char title[48];
+    const int phase = DevTools::InstallNotice(title, sizeof(title), &progress, &seconds);
+    if (phase) {
+        C2D_DrawRectSolid(0, 0, 0.6f, W, H, C2D_Color32(0, 0, 0, 170));
+        const float bx = 30, by = 80, bw = W - 60, bh = 84;
+        C2D_DrawRectSolid(bx - 2, by - 2, 0.62f, bw + 4, bh + 4, Rgb(90, 120, 170));
+        C2D_DrawRectSolid(bx, by, 0.64f, bw, bh, Rgb(24, 32, 46));
+        Text(title, W / 2.0f, by + 8, 0.6f, Rgb(255, 255, 255), C2D_AlignCenter);
+        const float px = bx + 14, py = by + 44, pw = bw - 28, ph = 24;
+        C2D_DrawRectSolid(px, py, 0.66f, pw, ph, Rgb(44, 54, 70));
+        const float fill = progress < 0 ? 0 : progress > 1 ? 1 : progress;
+        C2D_DrawRectSolid(px, py, 0.68f, pw * fill, ph, phase == 3 ? Rgb(235, 140, 50) : Rgb(60, 160, 100));
+        if (phase == 3)
+            snprintf(val, sizeof(val), "%us", seconds);
+        else if (progress >= 0)
+            snprintf(val, sizeof(val), "%u%%", (unsigned)(fill * 100));
+        else
+            snprintf(val, sizeof(val), "...");
+        Text(val, W / 2.0f, py + 3, 0.55f, Rgb(255, 255, 255), C2D_AlignCenter);
     }
 
     C3D_FrameEnd(0);
@@ -197,7 +212,12 @@ void BottomUi::Update()
         sDirty   = true;
     }
     const u64 now = svcGetSystemTick();
-    if (sDirty || now - sLastDraw > SYSCLOCK_ARM11 / 4) {
+    // Quicker while an install is going on, so the bar moves.
+    float p;
+    unsigned secs;
+    char t[8];
+    const bool installing = DevTools::InstallNotice(t, sizeof(t), &p, &secs) != 0;
+    if (sDirty || now - sLastDraw > (installing ? SYSCLOCK_ARM11 / 10 : SYSCLOCK_ARM11 / 4)) {
         Draw();
         sLastDraw = now;
         sDirty    = false;
