@@ -775,6 +775,9 @@ void RSDK::ProcessFrozenObjects()
 void RSDK::ProcessObjectDrawLists()
 {
     DEV_STAGE(STAGE_DRAW);
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+    DevTools::OrderBegin();
+#endif
 #if RETRO_PLATFORM == RETRO_3DS
     if (RenderDevice::CheckForFrameSkip() || !DEV_SW_DRAW)
       return;

@@ -57,6 +57,10 @@ void Mark();             // writes a mark into log.txt and the perf CSV
 // The switches survive between sessions: sdmc:/3ds/Sonic Mania 3DS/dev-settings.ini, written on every change
 // and read at start. DRAW LISTS is not saved: off it leaves a blank picture, which is a poor thing to wake up to.
 void SaveSettings();
+// Draw order of the last frame, run-length coded ("L2 S37 L1 S5 R1"): L tile layer, S sprite, R rotozoom/deform,
+// F face, 3 3D scene, P shape. Fed by the stage scopes; SITE ORDER prints it.
+void OrderBegin();
+void OrderNote(char kind);
 // While a CIA arrives or installs: 0 when nothing is going on, else the phase (1 receiving, 2 installing,
 // 3 restart countdown), the title to show, how far along it is (0..1, or -1 when unknown) and, in phase 3,
 // the seconds left.
@@ -69,6 +73,7 @@ extern bool swDraw;      // run the draw lists (off isolates the cost of the log
 extern bool swFlipCopy;  // copy the frame into the screen (off isolates the cost of the flip)
 extern uint32 injectKeys; // 3DS key mask held on top of the real buttons (SITE INPUT)
 extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy
+extern bool swBottomUi;    // redraw the bottom screen (off to measure its cost)
 extern bool swSyncDraw;    // C3D_FrameBegin waits for the previous GPU frame (experiment switch)
 extern bool swVblankWait;  // gspWaitForVBlank after the present (experiment switch)
 extern unsigned skipCount; // passes whose drawing was skipped since the last second

@@ -58,6 +58,7 @@ static unsigned sLastSkipped;
 
 // Requests from the FTP thread, applied by the main thread in FrameEnd.
 static volatile int sPendingCategory = -1, sPendingScene = -1;
+static char sOrderCur[400], sOrderLast[400];
 static volatile int sShotRequest; // 1 top screen, 2 bottom screen
 
 struct Session {
@@ -682,6 +683,8 @@ static void HandleSession(int ctrl)
                     DevTools::swFlipCopy = v != 0;
                 else if (!strncmp(path, "gpu", 3))
                     DevTools::swGpuPresent = v != 0;
+                else if (!strncmp(path, "bottomui", 8))
+                    DevTools::swBottomUi = v != 0;
                 else if (!strncmp(path, "syncdraw", 8))
                     DevTools::swSyncDraw = v != 0;
                 else if (!strncmp(path, "vblank", 6))
@@ -694,6 +697,9 @@ static void HandleSession(int ctrl)
                 }
                 else
                     Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|syncdraw|vblank <value>");
+            }
+            else if (!strcmp(sub, "ORDER")) {
+                Reply(s, "200 %s", sOrderLast);
             }
             else if (!strcmp(sub, "SYNCDRAW")) {
                 DevTools::swSyncDraw = path && atoi(path) != 0;
@@ -819,7 +825,42 @@ static uint64 sFrameTicksSum, sFrameTicksMax, sLastFrameTick, sSecondStart;
 static unsigned sFrames;
 static FILE *sCsv;
 
-DevTools::StageScope::StageScope(Stage s) : stage(s), start(svcGetSystemTick()) {}
+static unsigned sOrderLen;
+static char sOrderKind;
+static unsigned sOrderRun;
+
+static void OrderFlush()
+{
+    if (sOrderRun && sOrderLen + 8 < sizeof(sOrderCur))
+        sOrderLen += (unsigned)snprintf(sOrderCur + sOrderLen, sizeof(sOrderCur) - sOrderLen, "%c%u ", sOrderKind, sOrderRun);
+    sOrderRun = 0;
+}
+
+void DevTools::OrderBegin()
+{
+    OrderFlush();
+    sOrderCur[sOrderLen] = 0;
+    memcpy(sOrderLast, sOrderCur, sizeof(sOrderLast));
+    sOrderLen = 0;
+    sOrderCur[0] = 0;
+    sOrderKind   = 0;
+}
+
+void DevTools::OrderNote(char kind)
+{
+    if (kind != sOrderKind) {
+        OrderFlush();
+        sOrderKind = kind;
+    }
+    ++sOrderRun;
+}
+
+DevTools::StageScope::StageScope(Stage s) : stage(s), start(svcGetSystemTick())
+{
+    static const char kinds[STAGE_COUNT] = { 0, 0, 0, 'L', 'S', 'R', 'F', '3', 'P', 0, 0, 0, 0 };
+    if (kinds[s])
+        OrderNote(kinds[s]);
+}
 DevTools::StageScope::~StageScope() { StageAdd(stage, svcGetSystemTick() - start); }
 
 void DevTools::StageAdd(Stage stage, uint64 ticks) { sStageTicks[stage] += ticks; }
@@ -874,6 +915,7 @@ bool DevTools::swFrameSkip = true;
 int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
+bool DevTools::swBottomUi = true;
 bool DevTools::swSyncDraw = false;   // waiting for the previous GPU frame in FrameBegin cost 10 ms (46 fps instead of 60)
 bool DevTools::swVblankWait = false; // the clock paces the loop now (RenderDevice::UpdateFPSCap)
 bool DevTools::swGpuPresent = true; // GPU presentation is the default (SITE GPU 0 or the CPU button switches back)

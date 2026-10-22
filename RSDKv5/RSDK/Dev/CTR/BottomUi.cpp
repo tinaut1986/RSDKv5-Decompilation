@@ -60,12 +60,12 @@ static void ButtonRect(int i, float *x, float *y)
     *y = BTN_TOP + (i / BTN_COLS) * (BTN_H + BTN_GAP);
 }
 
-static void Text(const char *s, float x, float y, float scale, u32 color, u32 flags = 0)
+static void Text(const char *s, float x, float y, float scale, u32 color, u32 flags = 0, float z = 0.5f)
 {
     C2D_Text t;
     C2D_TextParse(&t, sTextBuf, s);
     C2D_TextOptimize(&t);
-    C2D_DrawText(&t, C2D_WithColor | flags, x, y, 0.5f, scale, scale, color);
+    C2D_DrawText(&t, C2D_WithColor | flags, x, y, z, scale, scale, color);
 }
 
 static void Draw()
@@ -144,7 +144,7 @@ static void Draw()
         const float bx = 30, by = 80, bw = W - 60, bh = 84;
         C2D_DrawRectSolid(bx - 2, by - 2, 0.62f, bw + 4, bh + 4, Rgb(90, 120, 170));
         C2D_DrawRectSolid(bx, by, 0.64f, bw, bh, Rgb(24, 32, 46));
-        Text(title, W / 2.0f, by + 8, 0.6f, Rgb(255, 255, 255), C2D_AlignCenter);
+        Text(title, W / 2.0f, by + 8, 0.6f, Rgb(255, 255, 255), C2D_AlignCenter, 0.9f); // above the dimmer and the box (z 0.6-0.68)
         const float px = bx + 14, py = by + 44, pw = bw - 28, ph = 24;
         C2D_DrawRectSolid(px, py, 0.66f, pw, ph, Rgb(44, 54, 70));
         const float fill = progress < 0 ? 0 : progress > 1 ? 1 : progress;
@@ -155,7 +155,7 @@ static void Draw()
             snprintf(val, sizeof(val), "%u%%", (unsigned)(fill * 100));
         else
             snprintf(val, sizeof(val), "...");
-        Text(val, W / 2.0f, py + 3, 0.55f, Rgb(255, 255, 255), C2D_AlignCenter);
+        Text(val, W / 2.0f, py + 3, 0.55f, Rgb(255, 255, 255), C2D_AlignCenter, 0.9f);
     }
 
     C3D_FrameEnd(0);
@@ -189,7 +189,7 @@ bool BottomUi::Ready() { return sReady; }
 
 void BottomUi::Update()
 {
-    if (!sReady)
+    if (!sReady || !DevTools::swBottomUi)
         return;
     const u32 down = hidKeysDown(), held = hidKeysHeld();
     int hit = -1;
