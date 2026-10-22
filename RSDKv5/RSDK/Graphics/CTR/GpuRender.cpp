@@ -438,7 +438,44 @@ bool AddQuad(uint8 tex, uint8 blend, float x0, float y0, float x1, float y1, flo
     return true;
 }
 
+// A quad with free corners (a rotated sprite): corners in order around the quad, texel coordinates per corner.
+bool AddQuadFree(uint8 tex, uint8 blend, const float *px, const float *py, const float *tu, const float *tv, unsigned atlasW, unsigned atlasH, uint8 r,
+                 uint8 g, uint8 b, uint8 a)
+{
+    if (!AddQuad(tex, blend, 0, 0, 0, 0, 0, 0, 0, 0, atlasW, atlasH, r, g, b, a))
+        return false;
+    Vtx *v         = &sVbo[sCur][(sQuadCount - 1) * 4];
+    const float iu = 1.0f / atlasW, iv = 1.0f / atlasH;
+    for (int i = 0; i < 4; ++i)
+        v[i] = { px[i], py[i], tu[i] * iu, 1.0f - tv[i] * iv, r, g, b, a };
+    return true;
+}
+
 // ---------------------------------------------------------------- commands
+
+// The blend and alpha of an ink effect for sprites; false refuses the frame, `*skip` drops the sprite (alpha 0).
+bool SpriteInk(int32 ink, int32 *alpha, uint8 *blend, bool *skip)
+{
+    *blend = BLEND_NORMAL;
+    *skip  = false;
+    switch (ink) {
+        case INK_NONE: *alpha = 0xFF; return true;
+        case INK_BLEND: *alpha = 0x80; return true;
+        case INK_ALPHA:
+        case INK_ADD:
+        case INK_SUB:
+            if (ink == INK_ADD)
+                *blend = BLEND_ADD;
+            else if (ink == INK_SUB)
+                *blend = BLEND_SUB;
+            if (*alpha > 0xFF)
+                *alpha = 0xFF;
+            else if (*alpha <= 0)
+                *skip = true;
+            return true;
+        default: return Refuse(GpuRender::REASON_INK, (unsigned)ink);
+    }
+}
 
 bool EmitSprite(const Cmd &c)
 {
@@ -526,6 +563,73 @@ bool EmitSprite(const Cmd &c)
     }
     if (!AddQuad(TEX_SPRITE, blend, (float)x, (float)y, (float)(x + width), (float)(y + height), su0, sv0, su1, sv1, SPR_ATLAS_W, SPR_ATLAS_H, 255, 255, 255,
                  (uint8)alpha))
+        return Refuse(GpuRender::REASON_QUAD_LIMIT);
+    return true;
+}
+
+// DrawSpriteRotozoom as a quad. The software walks the screen pixels of the bounding box and maps each back into the
+// sheet with an affine step; here the same map is inverted to put the sprite's four corners on the screen.
+// Screen offset (dx, dy) from (x, y) -> sheet: u = sprX - pivotX + kx*(c*dx - s*dy), v = sprY - pivotY + ky*(s*dx + c*dy)
+// (FLIP_X negates the x terms), with kx = 512 / scaleX and c, s the engine's 512-step tables.
+bool EmitRoto(const Cmd &c)
+{
+    const int32 *p = c.p;
+    const int32 x = p[0], y = p[1], pivotX = p[2], pivotY = p[3], width = p[4], height = p[5], sprX = p[6], sprY = p[7];
+    const int32 scaleX = p[8], scaleY = p[9], direction = p[10], sheetID = p[14];
+    const int16 rotation = (int16)p[11];
+    int32 alpha          = p[13];
+    if (direction != RSDK::FLIP_NONE && direction != RSDK::FLIP_X)
+        return true; // the software draws nothing for these either
+    if (scaleX <= 0 || scaleY <= 0 || width <= 0 || height <= 0)
+        return true;
+    uint8 blend;
+    bool skip;
+    if (!SpriteInk(p[12], &alpha, &blend, &skip))
+        return false;
+    if (skip)
+        return true;
+
+    int32 angle = 0x200 - (rotation & 0x1FF);
+    if (!(rotation & 0x1FF))
+        angle = rotation & 0x1FF;
+    const float cs = sin512LookupTable[angle] / 512.0f, cc = cos512LookupTable[angle] / 512.0f;
+    const float kx = 512.0f / scaleX, ky = 512.0f / scaleY, fx = direction == RSDK::FLIP_X ? -1.0f : 1.0f;
+    // Screen -> sheet matrix and its inverse
+    const float a = fx * kx * cc, b = -fx * kx * cs, m = ky * cs, d = ky * cc;
+    const float det = a * d - b * m;
+    if (det == 0)
+        return true;
+    const float ia = d / det, ib = -b / det, ic = -m / det, id = a / det;
+
+    // Sheet corners relative to the sheet point under (x, y), which is (sprX - pivotX, sprY - pivotY)
+    const float rx[4] = { (float)pivotX, (float)(pivotX + width), (float)(pivotX + width), (float)pivotX };
+    const float ry[4] = { (float)pivotY, (float)pivotY, (float)(pivotY + height), (float)(pivotY + height) };
+    float px[4], py[4], tu[4], tv[4], minY = 1e9f, maxY = -1e9f, minX = 1e9f, maxX = -1e9f;
+    for (int i = 0; i < 4; ++i) {
+        px[i] = x + ia * rx[i] + ib * ry[i];
+        py[i] = y + ic * rx[i] + id * ry[i];
+        minX = px[i] < minX ? px[i] : minX, maxX = px[i] > maxX ? px[i] : maxX;
+        minY = py[i] < minY ? py[i] : minY, maxY = py[i] > maxY ? py[i] : maxY;
+    }
+    if (maxX <= c.clip[0] || minX >= c.clip[2] || maxY <= c.clip[1] || minY >= c.clip[3])
+        return true; // off the clip rectangle
+    // Quads are not scissored: a sprite crossing a clip rectangle smaller than the screen is left to the CPU.
+    if ((minX < c.clip[0] && c.clip[0] > 0) || (minY < c.clip[1] && c.clip[1] > 0) || (maxX > c.clip[2] && c.clip[2] < screens[0].size.x)
+        || (maxY > c.clip[3] && c.clip[3] < screens[0].size.y))
+        return Refuse(GpuRender::REASON_UNSUPPORTED, CMD_ROTO);
+
+    uint8 bank;
+    if (!UniformBank((int)minY, (int)maxY + 1, &bank))
+        return Refuse(GpuRender::REASON_PALETTE_LINES);
+    int refuse;
+    SprSlot *slot = EnsureSprite((unsigned)sheetID, bank, sprX, sprY, width, height, &refuse);
+    if (!slot)
+        return Refuse((GpuRender::Reason)refuse);
+    for (int i = 0; i < 4; ++i) {
+        tu[i] = slot->x + (rx[i] - pivotX);
+        tv[i] = slot->y + (ry[i] - pivotY);
+    }
+    if (!AddQuadFree(TEX_SPRITE, blend, px, py, tu, tv, SPR_ATLAS_W, SPR_ATLAS_H, 255, 255, 255, (uint8)alpha))
         return Refuse(GpuRender::REASON_QUAD_LIMIT);
     return true;
 }
@@ -758,6 +862,7 @@ bool GpuRender::Render(const Stream &stream)
         switch (c.type) {
             case CMD_LINEBUF: memcpy(sLineBuf, stream.arena + c.arena, sizeof(sLineBuf)); break;
             case CMD_SPRITE: ok = EmitSprite(c); break;
+            case CMD_ROTO: ok = EmitRoto(c); break;
             case CMD_RECT: ok = EmitRect(c); break;
             case CMD_FILL: ok = EmitFill(c); break;
             case CMD_LAYER: {
