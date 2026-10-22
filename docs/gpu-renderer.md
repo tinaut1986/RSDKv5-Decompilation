@@ -1,8 +1,8 @@
 # GPU renderer: design, state and how to continue
 
-Written 2026-10-22 at the end of the first GPU session, for whoever (a new session, another model) picks it up.
-Read `docs/PLAN.md` first (status, priorities, decisions); this file is the technical detail of the renderer work
-on branch `feat/gpu-renderer`.
+Written 2026-10-22, updated at the end of the second GPU session (same day), for whoever picks it up. Read
+`docs/PLAN.md` first (status, priorities, decisions); this file is the technical detail of the renderer. The work is
+on `release/v0.1.0` (merged) and `perf/special-stage` (3D scenes on the GPU, masked inks: not merged yet).
 
 ## Goal
 
@@ -47,42 +47,48 @@ In `ProcessObjectDrawLists` each draw group draws its **entities first, then its
   tries the GPU executor; if it refuses (or is off) the list is **replayed through the same software functions in order**
   (`Flush`), so an unsupported frame looks exactly as before. Each command stores the clip bounds and screen position of
   its call; `gfxLineBuffer` changes are recorded as `CMD_LINEBUF`; layer commands carry a copy of the `scanlines` table.
-  **Hazards** (`GPUFRAME_HAZARD/PALETTE_HAZARD`): `DrawDeformedSprite`, `DrawDevString`, `DrawAniTile`, `Draw3DScene` and
-  every palette mutator (`LoadPalette`, `BlendColors`, `SetPaletteFade`, the inline `SetPaletteEntry/Mask`,
+  **Hazards** (`GPUFRAME_HAZARD/PALETTE_HAZARD`): `DrawDeformedSprite`, `DrawDevString`, `DrawAniTile` (only when called
+  while drawing; outside it marks tiles changed, see below) and every palette mutator (`LoadPalette`, `BlendColors`, `SetPaletteFade`, the inline `SetPaletteEntry/Mask`,
   `CopyPalette`, `RotatePalette`) flush what is pending (replay with the pre-change state) and the rest of the frame is
   drawn immediately. `paletteVersion` is bumped by every palette change; `contentVersion` by every scene load
   (`GpuFrame::InvalidateContent` in `RetroEngine.cpp`).
-- `GpuRender.cpp/.hpp` + `gpu.v.pica`/`gpu_shbin.h`: the executor (P1). Walks the stream and builds, on the CPU, quads
-  (screen x,y,u,v + RGBA bytes, 20 B/vertex, two vertex buffers + a static index buffer in linear memory) for
-  tile layers (BASIC and HSCROLL, one palette bank per layer), sprites (`DrawSpriteFlipped`, 4 flips, inks NONE/BLEND/
-  ALPHA/ADD/SUB), rectangles (same inks) and `FillScreen` (per-channel alpha via the constant-colour blend factor).
+- `GpuRender.cpp/.hpp` + `gpu.v.pica`/`gpu_shbin.h`: the executor. Walks the stream and builds, on the CPU, quads
+  (int16 x,y in quarter pixels, int16 u,v texels, RGBA bytes: 12 B/vertex; the shader's `uvscale` per texture
+  normalises; 8192 quads, two vertex buffers + a static index buffer in linear memory) for tile layers (BASIC, HSCROLL),
+  sprites (4 flips; inks NONE/BLEND/ALPHA/ADD/SUB/MASKED/UNMASKED; big ones in chunks cut to the frame), rotozoom sprites
+  (free quads), rectangles, `FillScreen` (per-channel alpha via the constant-colour blend factor), faces and blended
+  faces (fans; runs of faces are one command), circles and rings (polygons), 3D scenes (`GpuScene3D`, below) and
+  "software layers": a layer the GPU cannot draw (rotozoom, vscroll, split by the water line) is drawn by the engine
+  into `screens[1]` and uploaded as a texture by the transfer engine.
   Anything else, or an ink/size/atlas problem, returns false with a `Reason` (`SITE STATE` shows `reason`/`cmd`).
   Textures: a **tile atlas** (512x512 RGBA5551, 1024 cells of 16x16, keyed by (bank, tile id incl. flip bits)) and a
   **sprite atlas** (1024x512 RGBA5551, shelf packer in 8-pixel units, keyed by (sheet, bank, sprX, sprY, w, h); a solid
   white 8x8 block at the origin serves rectangles/fills). Both live in **linear memory** and are written by the CPU in
   the PICA 8x8 Morton layout, then cache-flushed (the CPU cannot write VRAM from an installed title). Conversion is lazy,
-  queued during the build and done after `C3D_FrameBegin`; a stale (palette changed) or reused cell makes the frame begin
-  with `C3D_FRAME_SYNCDRAW` so the GPU is not reading it. TEV = texture * vertex colour; blending per batch.
-  Texture V: PICA samples memory row 0 at v = 1 (`AddQuad` does `1 - y/H`).
+  queued during the build and done after `C3D_FrameBegin(0)` (it waits for the previous GPU frame; no SYNCDRAW). Palette
+  changes are tracked per group of 8 colours, animated tiles by hash (sections below). A full sprite atlas is emptied and
+  the frame rebuilt once. TEV = texture * vertex colour; blending per batch. Texture V: the PICA samples memory row 0 at
+  v = 1 (the shader's `uvscale` = (1/W, -1/H) plus 1).
+- `GpuScene3D.cpp/.hpp` + `scene3d.v.pica`: the engine's 3D scenes as model instances (section below).
 - `BottomUi.cpp` (in `Dev/CTR/`): the citro2d bottom screen (fps, stage bar, buttons, modal install dialog).
 - `DevTools.cpp`: FTP server, perf CSV, remote control (see CLAUDE.md), `StageScope` timers, `SITE ORDER`.
 
 Build wiring: `Makefile` source list + `CMakeLists.txt` + `makefiles/3DS.cfg` (`-lcitro2d -lcitro3d`). Shaders are
 assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbin.h`.
 
-## State at the end of the session
+## State at the end of the second session (2026-10-22)
 
-- **P0 (record + software replay) works and is correct** (verified by screenshots while running right in Green Hill:
-  scrolling, Sonic, enemies, HUD). Off by default: `SITE SET record 1`.
-- **P1 (GPU executor) runs without crashing but does not work yet.** With `SET record 1`, `SET gpu 1`,
-  `SET gpurender 1` in Green Hill the stats say frames are accepted (`gpu` count rising, `reason 0`) but **`quads` is only
-  ~22 (the sprites) and `tileconv` is 0: the layers emit no quads**. Diagnostics were just added (`layers`, `tileq`,
-  `empty`, `rowsout` in `SITE STATE`: layer commands seen, tile quads, empty tiles, rows outside the layout) and the
-  build that has them was being installed when the session ended, so **those numbers have not been read yet**: read
-  them first. The owner looked at the screen and said it does not work (not described further; a layer-less frame would
-  show only sprites on black). After a few seconds frames also start falling back (`reason 2`, `cmd 5` = `CMD_FACE`,
-  `cmd 0` = `CMD_FILL` before FILL support was added).
-- Everything is off by default and resets at boot (`record`, `gpurender` are not saved in `dev-settings.ini`).
+- The renderer works and is the default way to look at the game: `SITE GPU 1` / the RENDERER button (saved). Checked by
+  the owner on the 2DS: Green Hill 1 (60 fps, flip ~4-5 ms, ~6.7 ms idle; the waterfall area 60 since the conversion
+  speed-up), the title screen, the main menu (diorama with masked inks, 50-55 fps, all GPU), the Special Stage.
+- `SITE SHOT` works in GPU mode (it reads the framebuffer the GPU wrote); the old "blind" note no longer applies.
+- **Special Stage**: with `SITE SET gpu3d 1` (off at boot until merged) the 3D scenes are GPU instances and the floor
+  (a rotozoom layer) is drawn as tile runs (see "Rotozoom layers as tile runs"): ~17 -> ~40 -> **48-60 fps** on the 2DS
+  (60 looking down the track, 48-55 turning over the big green field). Every frame is a GPU frame.
+- Known CPU-frame reasons still possible: `INK TINT`, `LINE` (the Special Stage's wireframe item boxes),
+  `DEFORMED SPRITE`, `ANI TILE` during the draw lists, `DEV TEXT`, a clip smaller than the screen under a rotated sprite,
+  a face or a 3D scene. Water zones (Hydrocity, Chemical Plant...) have not been visited in GPU mode yet: a sprite
+  crossing the water line still refuses the frame (`WATER LINE`); layers crossing it go through the software layer path.
 
 ## Palette tracking in the atlases (2026-10-22)
 
@@ -112,6 +118,82 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Circles and rings are polygons. A whole run, exit included, is GPU-only.
 - Cost per drawn frame (2DS): logic ~5, Draw3DScene ~15, face emission ~8, floor ~7 ms: the CPU is the limit.
 
+## Rotozoom layers as tile runs (perf/special-stage, 2026-10-22)
+
+- The Special Stage floor and the title's island are LAYER_ROTOZOOM: per line the software walks the layer from
+  `scanlines[y].position` by `.deform` a pixel (16.16), with the line's palette bank (the Special Stage fogs the floor
+  with banks 1-7 by distance). `EmitLayerRotozoom` cuts each line into the runs of pixels that stay in one tile and
+  draws each as a 1-pixel-high quad of that tile from the tile atlas with affine texel coordinates in 1/32 texel
+  (`TEX_TILE_FINE`: the tile atlas with uvscale / 32). A run's ends are its first and last samples kept 2/32 inside
+  the tile, pushed half a pixel step out, so the interpolation never reads the next atlas cell.
+- The run ends come from an exact integer DDA per axis (`RotoAxis`: 4 divisions a line, none a run; checked against
+  the brute force walk). Empty tiles (0xFFFF, 81 % of the Special Stage map) are walked but not drawn.
+- Costs on the 2DS, frozen Special Stage frame with 2678 quads: walk 1.6 ms, + cells and coordinates 3.0 ms, + vertex
+  writes 3.5 ms. Lessons: the vertex buffer must be written in whole words (the `Vtx` initialisers compiled to 32 byte
+  and halfword stores a quad: 10-18 ms), and counters must be locals (stores through the vertex pointer alias the
+  globals). A small per-layer memo (bank, tile) -> cell origin avoids EnsureTile's 200 KB of tables.
+- More than 6000 quads (ROTO_MAX_QUADS) or 16384 runs: the layer goes back to the software (soft layer).
+- The tile atlas (1024 cells) no longer refuses the frame when full: `EvictTiles` gives back every (bank, tile) not
+  used in the current frame (`tile evictions` in `SITE STATE`; about one a second while turning in the Special Stage).
+- Debug: `SITE SET depthmode 256` draws rotozoom layers in software again (compare); `SITE FREEZE 1` stops the objects
+  and keeps drawing, so both renderers can be compared on one picture; `SITE LAYERS` writes `debug/layers.bin` (layer
+  layouts, palettes, the first rotozoom layer's scanlines, tileset) for offline analysis; `SITE STATE` shows
+  `roto N us M quads` (last frame).
+- Still costing: the walk's cache misses in the 512 KB layout (1.6 ms), the GPU (pframe 1-3 ms turning: 4000+ thin
+  quads), the logic (4-6 ms). Ideas: a coarse bitmap of empty 8x8 tile blocks to skip the far lines' empties; or a
+  window texture of the floor rendered by the GPU and sampled with one quad a line (needs a window per fog bank or a
+  combiner lerp between banks 0 and 7, and VRAM).
+
+## 3D scenes as GPU model instances (perf/special-stage, 2026-10-22: works, off by default until merged)
+
+- Why: in the Special Stage the CPU spends ~30 ms a frame on the engine's 3D (vertex transforms in AddModelToScene,
+  lighting and the face sort in Draw3DScene, face emission). legend-of-doom and sm-3ds got their Old 3DS speed by
+  cutting CPU work, not with core 1 (core 1 only does audio there; 80 % of core 1 slowed Doom and froze the 2DS).
+- Design (`GpuScene3D.cpp`, `GpuRender.cpp` "3D scenes", `scene3d.v.pica`): AddModelToScene / AddMeshFrameToScene in
+  S3D_SOLIDCOLOR_SCREEN and S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN store an instance (model, frames A/B and timer,
+  matrices, colour); Draw3DScene records one CMD_SCENE3D. The executor keeps each model in VRAM (all frames, int16
+  position + normal / 4, triangle indices, colours; ~850 KB for the Special Stage, which does not fit the linear heap)
+  and the shader interpolates, transforms, projects (X * 2^projX / Z + centre, homogeneous w = Z) and lights as the
+  software does. Depth buffer (GPU_RB_DEPTH16 on the top target) instead of the sort; each scene its own 1/64 of the
+  depth range. A refused frame replays the same engine calls (GpuScene3D::Replay).
+- First try on the 2DS froze the console. Reproduced in Azahar (see below): libctru panicked in `GPUCMD_AddInternal`,
+  the GPU command buffer (`C3D_Init(0x8000)`, 32 KB) overflowed with the per-instance uniforms. Now 128 KB.
+- Depth: 1/Z inside a scene's band left a model's near and far sides a few 16-bit steps apart (Sonic seen from the
+  front). Now z/w linear in min(Z, 65536) inside the band, and a 24-bit depth buffer. `depthmode 0` (default) is right
+  (checked in Azahar: Sonic's back, as the software draws him); `SITE SET depthmode 0..7` stays for experiments.
+- Checked in Azahar: the Special Stage draws its 3D scenes from instances (`faces 0`, `3d 0.0` ms), every frame on the
+  GPU, matching the software picture. Still **off by default** until seen on the 2DS: `SITE SET gpu3d 1`.
+
+## Masked inks (INK_MASKED / INK_UNMASKED) with the stencil (2026-10-22)
+
+- A masked pixel is drawn only where the screen already holds `maskColor`. In a frame that uses masked inks the depth
+  test is on (GPU_ALWAYS) and the alpha test drops transparent texels; every batch clears the stencil under it, then a
+  colourless second pass sets it to 1 where the fragment equals the mask colour. The comparison runs in the combiner:
+  frag (0), frag again with its alpha kept in the combiner buffer (1), ADD_SIGNED colour + (1 - mask) - 0.5 (2),
+  DOT3_RGBA x4 (3), alpha = **red** of the result + (1 - frag alpha) (4); alpha test LESS 3.
+- Learned on the 2DS: DOT3_RGBA does **not** put its result in the alpha (take it from red with GPU_TEVOP_A_SRC_R).
+  Azahar does not reproduce the stencil here (nothing is ever marked): check masked inks on the console only.
+- Masked batches are drawn quad by quad (draw where 1, raise to 2, second pass lowers to 1 where the colour drawn is the
+  mask colour): within one draw call a later quad saw the stencil an earlier one had raised and drew nothing (the menu's
+  diorama: a masked rectangle first, the scene's sprites after it). A 2 means "drawn over".
+- Debug: `SITE SET depthmode` bit 3 paints the comparison (unblended), bit 7 its alpha as grey, bit 4 draws masked inks
+  as plain sprites, bit 5 adds a red masked rectangle over the screen (shows where the stencil ends at 1), bit 6 tries
+  the reverse alpha test.
+- Big sprites are chunked on a 128 grid but each chunk is cut to the sprite's frame (a 512x32 strip takes 128x32 chunks):
+  the menu's diorama no longer fills the sprite atlas (ATLAS FULL, 7 CPU frames a second -> none).
+
+## Testing in Azahar (when the console is not at hand)
+
+- `tools/azahar.sh` copies the build and (re)starts the emulator, waiting for the dev tools; `--stop` stops it.
+- The build runs in the owner's Azahar (Flatpak): `Data.rsdk` and `RSDKv5U.3dsx` in the emulator's
+  `sdmc/3ds/Sonic Mania 3DS/`; the dev tools' FTP server listens on the host's port 5000, so `tools/site.sh -i 127.0.0.1`
+  and `tools/shot.sh -i 127.0.0.1` work as with the console. Timings mean nothing there; crashes, hangs and pictures do.
+- OpenGL fails when Azahar is started from a non-interactive shell ("shared contexts not supported"): its renderer was
+  switched to Vulkan in `qt-config.ini` (backup `qt-config.ini.claude-backup` next to it; restore it afterwards).
+- A panic shows in Azahar's log (`~/.var/app/org.azahar_emu.Azahar/data/azahar-emu/log/azahar_log.txt`) with PC/LR:
+  resolve them with addr2line against `bin/3DS/CTR/RSDKv5U.elf`.
+- `SITE MODELS` lists the loaded models (vertices x frames, flags, position and normal ranges).
+
 ## Renderer mode and frame accounting (2026-10-22)
 
 - One switch, **RENDERER GPU/CPU** (bottom screen, text console cell, `SITE GPU 0|1`), saved as `gpumode` in
@@ -128,56 +210,18 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   (`render (5 s, scene N): gpu N cpu N | why: FACE 120, PALETTE 3`).
 - The fps number counts loop passes and is capped at 60 by the clock pacing: compare renderers by the ms, not the fps.
 
-### The Green Hill reading (the install that had the diagnostics, running right in Green Hill 1)
-
-`cmds 59 ... reason 2 cmd 5 layers 5 tileq 0 empty 0 rowsout 0`: five layer commands were processed and **not one tile
-quad was emitted** (and no empty tile, no row outside the layout), while the frame was refused later because of a
-`CMD_FACE` (5). So in Green Hill the layer emitters return without ever entering the tile loops: check first that
-`c.clip` of the layer commands is sane (`y1 < y2`, `x1 < x2`; `EmitLayerBasic` returns early otherwise, `EmitLayerHScroll`
-loops over `[clip[1], clip[3])`) and `layer->xsize/ysize`. The other frame shape below does emit tiles.
-
-### Another reading (draw order `L6 S5 L1 S62 R1 S16`)
-
-`reason 2 cmd 102` (a layer of kind 2 = rotozoom, unsupported: correct refusal), but also `layers 2 tileq 390 empty 0
-rowsout 0`: the first two layers **did** emit 390 tile quads before the refusal. So layer emission is not dead; the
-earlier GHZ reading (`quads 22`, `tileconv 0`, `reason 0`) may have been a frame with no layers at all (transition) or a
-different bug. **Re-measure in Green Hill 1 while running right** before trusting any of the suspects below.
-
-## Suspects for "layers emit nothing"
-
-1. `EmitLayerBasic/EmitLayerHScroll` use `layer->layout`, `xsize/ysize`, `widthShift` and the `ScanlineInfo` copy: check
-   with the new counters whether `layerCmds` > 0 and where the quads go (`emptyTiles`, `rowsOut`). If `rowsOut` is high the
-   row index maths is wrong (BASIC uses the first scanline's y and 16-line blocks; HSCROLL groups lines whose
-   `position.y` advances by exactly 1 px).
-2. `c.kind` vs `LAYER_BASIC/HSCROLL/...` enum values, and that the layer command's `p[0]` pointer survives (32-bit).
-3. `UniformBank` is fed by the `sLineBuf` of the stream; check it is not refusing (it would show `reason 4`).
-4. The tile index: `layout & 0xFFF` includes the flip bits (index into the 4-variant `tilesetPixels`); `EnsureTile`
-   refuses ids >= 4096 (`TILE_RANGE`).
-5. Verify the emitted geometry against the software result with a readback tool (below) rather than by eye.
-
-## Tooling gaps to close first
-
-- **There is no reliable way to look at the GPU output.** `SITE SHOT` (top) reads `gfxGetFramebuffer`, which in GPU
-  presentation mode is a stale buffer. Add a readback: `C3D_SyncDisplayTransfer` from the render target's colour buffer
-  (VRAM, tiled) to a temporary linear buffer, then write it like `SHOT` does. Then add a **GPU CHECK**: render the same
-  frame with the software replay and the GPU, diff them, report the differing pixel count and write both images (the
-  Zelda port has this: `../zelda-tmc-3ds` `PortPpuGpu3DS` parity checks and `docs/gpu-rasterizer-parity-notes.md`).
-- Verify with a *moving* scene. A static scene hides a renderer that draws nothing: the software framebuffer keeps the
-  last frame. (This misled the session once: the first P0 replay wrote into `screens[1]`, the screenshot looked right
-  and "60 fps" was fake. See the lessons below.)
-
 ## Next steps (suggested order)
 
-1. Read the new counters, fix the layer emission, add the readback + GPU CHECK, get Green Hill (`L4 S6 L1 S22`)
-   pixel-close to the software frame.
-2. Measure on the 2DS (`SITE STATE`, perf CSV, `tools/perf-sweep.sh`) before claiming any gain.
-3. Cover the rest of the common frames: `DrawLayerVScroll`, per-line palette banks (water: draw twice with scissor, or one
-   texture version per bank), `INK_TINT/MASKED/UNMASKED`, `DrawAniTile` (invalidate tile cells instead of a hazard),
-   `DrawSpriteRotozoom`/`DrawDeformedSprite`, faces (`DrawFace`, `DrawBlendedFace`) and circles/lines.
-4. Special Stage (`Draw3DScene`): ~800 faces per frame; textured/vertex-coloured triangles are native on the PICA.
-5. Cut the cost of the GPU path itself: the present path costs ~2 ms more than the CPU transpose (copy ~1 ms + frame ~4 ms
-   with `SYNCDRAW` off it is ~1.3 ms); the executor writes the atlas with the CPU, keep conversions lazy and per-entry.
-6. Then stereoscopic 3D (layers as separate draws with depth) and the rest of the bottom UI.
+1. Special Stage floor: done (tile runs, above). Next there: the empty-block bitmap, then measure the GPU side.
+2. Merge `perf/special-stage` once the owner has looked at the Special Stage, the title (logo shine) and the
+   collapsing floors on the 2DS; then make `gpu3d` on by default (or drop the switch).
+3. Sweep every zone in GPU mode (Azahar for pictures and reasons, the 2DS for timings): `tools/perf-sweep.sh` with
+   `SITE STATE`'s reasons and the `render (5 s...)` lines of `log.txt`; fix by frequency. Water zones first.
+4. Sprite atlas: still fills now and then in the title and the menu (`atlas retries` in `SITE STATE`): evict least used
+   entries instead of emptying it.
+5. A 30 fps lock option (as sm-3ds / legend-of-doom: logic at 60, every other frame drawn) for heavy scenes.
+6. Stereoscopic 3D: the command list keeps layers and sprites apart and the target has a depth buffer; submit the frame
+   twice with a per-layer offset. Measure the GPU time first (the Special Stage would draw its models twice).
 
 ## Lessons (read before touching this)
 
@@ -192,8 +236,15 @@ different bug. **Re-measure in Green Hill 1 while running right** before trustin
 - citro3d state is sticky across frames: the present path turns blending off and sets its own program/attributes each
   frame; citro2d (`BottomUi`) calls `C2D_Prepare()` and sets alpha blending itself. Re-apply state after anyone else's frame.
 - citro2d text needs a higher z than the rectangles it sits on (modal dialog bug).
-- `C3D_FrameBegin(C3D_FRAME_SYNCDRAW)` cost ~10 ms per frame (46 fps instead of 60): off by default; use it only when
-  rewriting texture cells the previous GPU frame may still read.
+- `C3D_FrameBegin(C3D_FRAME_SYNCDRAW)` waits for a vblank (up to 16 ms): never use it. `C3D_FrameBegin(0)` already waits
+  for the previous GPU frame, so atlas cells can be rewritten after it.
+- The GPU command buffer (`C3D_Init`) overflowing makes libctru panic in `GPUCMD_AddInternal` (svcBreak): on the console
+  a frozen 2DS. 128 KB now; per-instance uniforms of the 3D scenes filled 32 KB.
+- On the 2DS, `GPU_DOT3_RGBA` writes its result to RGB only, not to the alpha (read it with `GPU_TEVOP_A_SRC_R`).
+- Azahar does not reproduce the stencil here: masked inks can only be checked on the console. Everything else (pictures,
+  crashes, panics with PC/LR in its log) can be checked in Azahar (`tools/azahar.sh`).
+- A refused frame must undo what it queued (atlas stamps), or cells keep stale content; a cache keyed by packed fields
+  must give each field enough bits (sprY needed 16: sheet 0 is the whole tileset as one column).
 - The bottom screen is the citro2d UI now; the libctru text console is only a fallback and must never print past row 29
   or the 40th column (it scrolls).
 - Linear memory is the scarce pool. `__ctru_linear_heap_size` is 5 MB now (`main.cpp`), heap size 0 (automatic: the

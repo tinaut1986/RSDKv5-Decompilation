@@ -1,6 +1,7 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
+#include "RSDK/Graphics/CTR/GpuScene3D.hpp"
 
 using namespace RSDK;
 
@@ -513,6 +514,10 @@ uint16 RSDK::Create3DScene(const char *name, uint16 vertexLimit, uint8 scope)
 }
 void RSDK::AddModelToScene(uint16 modelFrames, uint16 sceneIndex, uint8 drawMode, Matrix *matWorld, Matrix *matNormals, color color)
 {
+#if RETRO_PLATFORM == RETRO_3DS
+    if (GpuScene3D::AddModel(modelFrames, sceneIndex, drawMode, matWorld, matNormals, color, false, 0, 0, 0))
+        return; // an instance for the GPU
+#endif
     if (modelFrames < MODEL_COUNT && sceneIndex < SCENE3D_COUNT) {
         if (matWorld) {
             Model *mdl            = &modelList[modelFrames];
@@ -658,6 +663,15 @@ void RSDK::AddModelToScene(uint16 modelFrames, uint16 sceneIndex, uint8 drawMode
 void RSDK::AddMeshFrameToScene(uint16 modelFrames, uint16 sceneIndex, Animator *animator, uint8 drawMode, Matrix *matWorld, Matrix *matNormals,
                                color color)
 {
+#if RETRO_PLATFORM == RETRO_3DS
+    if (animator && modelFrames < MODEL_COUNT) {
+        int32 next = animator->frameID + 1;
+        if (next >= animator->frameCount)
+            next = animator->loopIndex;
+        if (GpuScene3D::AddModel(modelFrames, sceneIndex, drawMode, matWorld, matNormals, color, true, animator->frameID, next, animator->timer))
+            return; // an instance for the GPU
+    }
+#endif
     if (modelFrames < MODEL_COUNT && sceneIndex < SCENE3D_COUNT) {
         if (matWorld && animator) {
             Model *mdl            = &modelList[modelFrames];
@@ -861,6 +875,9 @@ static void SortFacesByDepth(Scene3DFace *faces, int32 count)
 void RSDK::Draw3DScene(uint16 sceneID)
 {
     // Not a hazard: the faces below go through DrawFace / DrawBlendedFace / DrawLine, which record themselves.
+#if RETRO_PLATFORM == RETRO_3DS
+    GpuScene3D::OnDraw(sceneID); // the scene's GPU instances, as one command
+#endif
     DEV_STAGE(STAGE_3D);
     if (sceneID < SCENE3D_COUNT) {
         Entity *entity = sceneInfo.entity;

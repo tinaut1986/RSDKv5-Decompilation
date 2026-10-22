@@ -4,20 +4,27 @@
 
 - **Priority** (owner): R1 GPU renderer (everything that benefits goes to the GPU) -> graphical bottom screen
   (v1 done) -> stereoscopic 3D. **Technical detail and next steps of R1: [`docs/gpu-renderer.md`](gpu-renderer.md).**
-- **Where R1 stands (2026-10-22):** P0 (record + software replay) works; P1 (GPU executor for layers/sprites/rects) runs
-  but **does not draw the layers correctly yet** (quads = sprites only; diagnostics added, not read). Both are off at boot.
-- **Active release line**: `release/v0.1.0`. Pushed to `origin` (the owner's fork) on 2026-10-22 together with `main`, `feat/gpu-renderer`, `feat/loading-screen` and `feat/render-backend`; the merged topic branches were not pushed (their commits are in the release).
+- **Where R1 stands (end of 2026-10-22):** the GPU renderer works and is what the owner plays with (`SITE GPU 1` / the
+  RENDERER button, saved in `dev-settings.ini`; CPU stays the default at a first boot). On the 2DS: Green Hill 1 60 fps,
+  title and main menu all on the GPU, Special Stage 48-60 fps with `SITE SET gpu3d 1` (~17 without; floor as tile runs). **Next: the bottom screen
+  tabs (options, game info, force 3D) asked by the owner**, then merge `perf/special-stage`. Full
+  detail, next steps and lessons: [`docs/gpu-renderer.md`](gpu-renderer.md).
+- **Active release line**: `release/v0.1.0`, on `origin`.
 - **Console**: the owner's Old 2DS at `192.168.1.141` (DHCP: ping first; `tools/site.sh -i IP`). The build on it is the
-  latest of `feat/gpu-renderer` (with the layer diagnostics, if the last install finished). Ask the owner before
-  installing in a new session (the "install without asking" permission was for the previous session only).
+  latest of `perf/special-stage`. Ask the owner before installing in a new session (each session's "install without
+  asking" ends with it). **Without the console**: `tools/azahar.sh` runs the build in the owner's Azahar with the dev
+  tools on `127.0.0.1:5000` (pictures, crashes, reasons; not timings, not the stencil). Azahar's renderer was set to
+  Vulkan for this (backup `qt-config.ini.claude-backup` in `~/.var/app/org.azahar_emu.Azahar/config/azahar-emu/`).
 - **Branches**
 
 | Branch | State |
 |---|---|
-| `main`, `release/v0.1.0` | `main` = SaturnSH2x2 `3ds-main` (dfef28d). The release holds, merged: build/docs, dev tools, GPU presentation, bottom UI, clock pacing + frame skip, persistent switches, draw-order tooling. All checked on the 2DS by the owner. |
-| `feat/gpu-renderer` | **active**: `GpuFrame` recorder (P0), `GpuRender` executor (P1, broken), diagnostics. Cut from the release. |
-| `feat/loading-screen` | bottom-screen loading indicator for boot and stage loads (all builds). Written and installed once; **the owner has not confirmed it, not merged**. It conflicts in spirit with `BottomUi` (it uses the text console): review before merging. |
-| `feat/render-backend` | `gfx-rewrite` merged into the base (`RenderBackend` + `SoftwareBackend`). Not used: the record/replay design superseded it. Keep as reference or delete. |
+| `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
+| `release/v0.1.0` | Holds, merged: build/docs, dev tools, GPU presentation, bottom UI, clock pacing + frame skip, persistent switches, draw-order tooling (owner-checked); `feat/gpu-renderer` (renderer: layers, sprites, rotozoom sprites, RENDERER switch, frame counters, clean exit, scrolling bottom screen); `feat/gpu-faces` (faces, chunked big sprites, atlas retry, software layers); `feat/gpu-special-stage` (Special Stage through faces on the GPU). All seen by the owner on the 2DS. |
+| `perf/special-stage` | **active, not merged**: 3D scenes as GPU model instances (`gpu3d`, off by default), 128 KB command buffer, 24-bit depth + stencil, masked inks (stencil), faster tile conversion, sprite key with 16-bit Y, chunks cut to the frame, `tools/azahar.sh`, rotozoom layers as tile runs (Special Stage floor, title island), tile atlas eviction, `SITE FREEZE`/`LAYERS`. The owner saw the menu, Green Hill's waterfall and the Special Stage working; still to look at: the title's logo shine and the collapsing floors. Merge when the owner says so. |
+| `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage` | merged into the release; may be deleted. |
+| `feat/loading-screen` | bottom-screen loading indicator; **not confirmed by the owner, not merged**; conflicts in spirit with `BottomUi` (text console). |
+| `feat/render-backend` | `gfx-rewrite` base, unused (superseded by record/replay). Reference or delete. |
 | `chore/build-and-docs`, `feat/dev-tools`, `feat/gpu-present`, `feat/bottom-ui`, `perf/frame-pacing` | merged into the release; may be deleted. |
 
 ## Tasks
@@ -69,13 +76,15 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
 - [x] R1.3b (2026-10-22) One RENDERER GPU/CPU switch (CPU = everything in software, as originally) and GPU/CPU frame
   counters with the reason of every CPU frame (bottom screen, `SITE STATE`, CSV, log). Not yet checked on the console.
 - [x] R1.3c Rotozoom sprites on the GPU (free quads). Palette tracking per group of 8 colours; animated tiles invalidated.
-- [ ] R1.4 Readback of the render target (`SITE SHOT` is blind in GPU mode) and a GPU CHECK (diff against the software replay).
-- [ ] R1.5 Water / per-line palette banks, VScroll/rotozoom layers, `INK_TINT/MASKED/UNMASKED`, `DrawAniTile` (cell invalidation),
+- [x] R1.4 Readback: `SITE SHOT` reads the GPU's output (checked). A pixel diff GPU CHECK is still to do.
+- [ ] R1.4b GPU CHECK: diff the GPU frame against the software replay of the same frame, report and write both images.
+- [ ] R1.5 (partly done: rotozoom sprites, masked inks, faces, circles, software layers for rotozoom/vscroll/water-split layers, animated tiles) Water / per-line palette banks, VScroll/rotozoom layers, `INK_TINT/MASKED/UNMASKED`, `DrawAniTile` (cell invalidation),
   rotozoom and deformed sprites, faces, circles, lines.
 - [x] R1.6 (2026-10-22, measured by Claude on the 2DS; owner not yet) Special Stage on the GPU: every frame of a whole run
   on the GPU (faces in runs, circles, the rotozoom floor as a software layer). ~9 fps -> 19-23 drawn fps with the frame
   skip; the CPU is the limit: logic ~5 ms, Draw3DScene (recording, lighting) 14-17 ms, face emission 8-9 ms, floor 7 ms.
   Next: build the GPU frame on core 1 while core 0 runs the next frame (the frame is a recorded list already).
+- [x] R1.6b (2026-10-22, measured by Claude on the 2DS) Special Stage floor on the GPU as tile runs: 48-60 fps (gpu-renderer.md "Rotozoom layers as tile runs"). 3D scenes as GPU instances done on `perf/special-stage` (`gpu3d`).
 - [ ] R1.7 Measure on the 2DS with `tools/perf-sweep.sh` against the software numbers below; keep the software path as fallback.
 - [ ] R1.8 Stereoscopic 3D (needs layers as separate draws).
 

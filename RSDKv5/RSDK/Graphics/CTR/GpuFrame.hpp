@@ -54,6 +54,8 @@ bool RecSprite(int32 x, int32 y, int32 width, int32 height, int32 sprX, int32 sp
 bool RecRoto(int32 x, int32 y, int32 pivotX, int32 pivotY, int32 width, int32 height, int32 sprX, int32 sprY, int32 scaleX, int32 scaleY,
              int32 direction, int16 rotation, int32 ink, int32 alpha, int32 sheetID);
 bool RecLayer(TileLayer *layer, int kind);
+// A CMD_SCENE3D with `bytes` of arena (GpuScene3D fills it); NULL when the buffers are full.
+uint8 *RecScene3D(uint32 bytes);
 
 // Statistics for the dev tools (commands of the last frame, how it was executed).
 struct Stats {

@@ -697,6 +697,10 @@ static void HandleSession(int ctrl)
                     DevTools::swDraw = v != 0;
                 else if (!strncmp(path, "flipcopy", 8))
                     DevTools::swFlipCopy = v != 0;
+                else if (!strncmp(path, "gpu3d", 5))
+                    DevTools::swGpu3D = v != 0;
+                else if (!strncmp(path, "depthmode", 9))
+                    GpuRender::depthMode = (unsigned)v & 2047;
                 else if (!strncmp(path, "gpurender", 9))
                     DevTools::swGpuRender = v != 0;
                 else if (!strncmp(path, "gpu", 3))
@@ -718,11 +722,68 @@ static void HandleSession(int ctrl)
                 else
                     Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|bottomui|syncdraw|vblank <value>");
             }
+            else if (!strcmp(sub, "MODELS")) {
+                // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
+                char list[FTP_LINE_MAX - 8];
+                unsigned n = 0;
+                for (int m = 0; m < MODEL_COUNT && n + 64 < sizeof(list); ++m) {
+                    const Model &md = modelList[m];
+                    if (!md.vertices || !md.vertCount)
+                        continue;
+                    int32 lo = 0, hi = 0, nlo = 0, nhi = 0;
+                    for (unsigned v = 0; v < (unsigned)md.vertCount * (md.frameCount ? md.frameCount : 1); ++v) {
+                        const ModelVertex &mv = md.vertices[v];
+                        lo = mv.x < lo ? mv.x : lo, lo = mv.y < lo ? mv.y : lo, lo = mv.z < lo ? mv.z : lo;
+                        hi = mv.x > hi ? mv.x : hi, hi = mv.y > hi ? mv.y : hi, hi = mv.z > hi ? mv.z : hi;
+                        nlo = mv.nx < nlo ? mv.nx : nlo, nlo = mv.ny < nlo ? mv.ny : nlo, nlo = mv.nz < nlo ? mv.nz : nlo;
+                        nhi = mv.nx > nhi ? mv.nx : nhi, nhi = mv.ny > nhi ? mv.ny : nhi, nhi = mv.nz > nhi ? mv.nz : nhi;
+                    }
+                    n += (unsigned)snprintf(list + n, sizeof(list) - n, "%d:%ux%u fl%u p[%ld,%ld] n[%ld,%ld] ", m, md.vertCount, md.frameCount, md.flags, (long)lo,
+                                            (long)hi, (long)nlo, (long)nhi);
+                }
+                list[n] = 0;
+                Reply(s, "200 %s", list);
+            }
             else if (!strcmp(sub, "CMDS")) {
                 // The next recorded frame's command list, written to debug/cmds.txt (needs the GPU mode or SET record 1)
                 GpuFrame::dumpPath    = "sdmc:/3ds/Sonic Mania 3DS/debug/cmds.txt";
                 GpuFrame::dumpRequest = true;
                 Reply(s, "200 next frame's commands go to debug/cmds.txt");
+            }
+            else if (!strcmp(sub, "LAYERS")) {
+                // Scene layers, palettes, line banks and scanlines, for offline analysis: debug/layers.bin. Per layer
+                // "LAYR", type, widthShift, heightShift, xsize, ysize, layout; then "PALS" fullPalette, "LINE"
+                // gfxLineBuffer, "SCAN" scanlines (last drawn), "TILE" tilesetPixels.
+                FILE *f = fopen("sdmc:/3ds/Sonic Mania 3DS/debug/layers.bin", "wb");
+                if (f) {
+                    for (int l = 0; l < LAYER_COUNT; ++l) {
+                        const TileLayer &tl = tileLayers[l];
+                        if (!tl.layout || !tl.xsize)
+                            continue;
+                        uint8 hdr[12] = { 'L', 'A', 'Y', 'R', (uint8)l, tl.type, tl.widthShift, tl.heightShift };
+                        memcpy(hdr + 8, &tl.xsize, 2), memcpy(hdr + 10, &tl.ysize, 2);
+                        fwrite(hdr, 1, 12, f);
+                        fwrite(tl.layout, 2, (size_t)tl.xsize * tl.ysize, f);
+                    }
+                    // Scanlines: the shared buffer holds whatever layer ran last, so run the first rotozoom layer's
+                    // callback again (debug only: it also sets the clip bounds and line banks, rewritten next frame).
+                    static ScanlineInfo lines[SCREEN_YSIZE];
+                    memcpy(lines, scanlines, sizeof(lines));
+                    for (int l = 0; l < LAYER_COUNT; ++l) {
+                        if (tileLayers[l].layout && tileLayers[l].type == LAYER_ROTOZOOM && tileLayers[l].scanlineCallback) {
+                            tileLayers[l].scanlineCallback(lines);
+                            break;
+                        }
+                    }
+                    fwrite("PALS", 1, 4, f), fwrite(fullPalette, 1, sizeof(fullPalette), f);
+                    fwrite("LINE", 1, 4, f), fwrite(gfxLineBuffer, 1, SCREEN_YSIZE, f);
+                    fwrite("SCAN", 1, 4, f), fwrite(lines, sizeof(ScanlineInfo), SCREEN_YSIZE, f);
+                    fwrite("TILE", 1, 4, f), fwrite(tilesetPixels, 1, TILESET_SIZE, f);
+                    fclose(f);
+                    Reply(s, "200 debug/layers.bin");
+                }
+                else
+                    Reply(s, "550 cannot write debug/layers.bin");
             }
             else if (!strcmp(sub, "ORDER")) {
                 Reply(s, "200 %s", sOrderLast);
@@ -734,6 +795,12 @@ static void HandleSession(int ctrl)
             else if (!strcmp(sub, "VBLANK")) {
                 DevTools::swVblankWait = path && atoi(path) != 0;
                 Reply(s, "200 vblank wait %d", (int)DevTools::swVblankWait);
+            }
+            else if (!strcmp(sub, "FREEZE")) {
+                // SITE FREEZE 1: the scene stops (no object updates) but every frame is still drawn, so the GPU and
+                // the CPU renderers can be compared on the same picture. FREEZE 0 resumes.
+                DevTools::freeze = path && atoi(path) != 0;
+                Reply(s, "200 freeze %d", (int)DevTools::freeze);
             }
             else if (!strcmp(sub, "INPUT")) {
                 // SITE INPUT <hex mask of 3DS keys, e.g. 10 = A, 10 = KEY_A bit>: held until set to 0.
@@ -757,13 +824,13 @@ static void HandleSession(int ctrl)
                 Reply(s, "200 %u sheets, %u KB at 8 bit (%u KB at 16 bit): %s", count, total >> 10, (total * 2) >> 10, list);
             }
             else if (!strcmp(sub, "STATE")) {
-                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f | cmds %u replayed %u gpu %u quads %u reason %u cmd %u tileconv %u sprconv %u layers %u tileq %u empty %u rowsout %u | renderer %s frames gpu %u cpu %u (last second %u/%u) why %s | atlas retries %u soft layers %u faces %u | refused %s",
+                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f | cmds %u replayed %u gpu %u quads %u reason %u cmd %u tileconv %u sprconv %u layers %u tileq %u empty %u rowsout %u | renderer %s frames gpu %u cpu %u (last second %u/%u) why %s | atlas retries %u tile evictions %u roto %u us %u quads soft layers %u faces %u | refused %s",
                       (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastSkipped, sLastFps, sLastFrameMs, sLastStageMs[0],
                       sLastStageMs[1], sLastStageMs[2], sLastStageMs[3], sLastStageMs[4], sLastStageMs[5], sLastStageMs[6], sLastStageMs[7],
                       sLastStageMs[8], sLastStageMs[9], sLastStageMs[10], sLastStageMs[11], sLastStageMs[12], GpuFrame::GetStats().commands, GpuFrame::GetStats().replayed, GpuFrame::GetStats().gpuFrames, GpuRender::GetStats().quads,
                       GpuRender::GetStats().reason, GpuRender::GetStats().unsupportedCmd, GpuRender::GetStats().tileConversions, GpuRender::GetStats().spriteConversions, GpuRender::GetStats().layerCmds,
                       GpuRender::GetStats().tileQuads, GpuRender::GetStats().emptyTiles, GpuRender::GetStats().rowsOut, DevTools::GpuMode() ? "gpu" : "cpu",
-                      sTotGpu, sTotCpu, sLastSecGpu, sLastSecCpu, sLastWhy ? sLastWhy : "-", GpuRender::GetStats().atlasRetries, GpuRender::GetStats().softLayers, GpuRender::GetStats().faces, GpuRender::LastRefusal());
+                      sTotGpu, sTotCpu, sLastSecGpu, sLastSecCpu, sLastWhy ? sLastWhy : "-", GpuRender::GetStats().atlasRetries, GpuRender::GetStats().tileEvictions, GpuRender::GetStats().rotoUs, GpuRender::GetStats().rotoQuads, GpuRender::GetStats().softLayers, GpuRender::GetStats().faces, GpuRender::LastRefusal());
             }
             else
                 Reply(s, "504 Unknown SITE command.");
@@ -949,6 +1016,7 @@ int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
 bool DevTools::swGpuRender = false;
+bool DevTools::swGpu3D  = false; // froze the console on its first try (2026-10-22): opt in with SITE SET gpu3d 1
 bool DevTools::swRecord = false; // off until the recorder has been checked (SITE SET record 1)
 bool DevTools::swBottomUi = true;
 bool DevTools::swSyncDraw = false;   // waiting for the previous GPU frame in FrameBegin cost 10 ms (46 fps instead of 60)
@@ -956,6 +1024,7 @@ bool DevTools::swVblankWait = false; // the clock paces the loop now (RenderDevi
 bool DevTools::swGpuPresent = false; // the renderer starts in CPU mode (SetGpuMode, the RENDERER button)
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
+bool DevTools::freeze         = false;
 
 static unsigned sMarks;
 static bool sMenuDirty = true;

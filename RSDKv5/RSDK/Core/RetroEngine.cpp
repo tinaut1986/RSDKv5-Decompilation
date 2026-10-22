@@ -418,6 +418,12 @@ void RSDK::ProcessEngine()
             break;
 
         case ENGINESTATE_REGULAR:
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+            if (DevTools::freeze) {
+                ProcessObjectDrawLists();
+                break;
+            }
+#endif
             ProcessInput();
             ProcessSceneTimer();
             ProcessObjects();

@@ -38,6 +38,8 @@ struct Stats {
     unsigned atlasRetries; // frames rebuilt after emptying a full sprite atlas
     unsigned softLayers;   // layers drawn by the software into a texture (last frame)
     unsigned faces;        // polygons emitted (last frame)
+    unsigned rotoUs, rotoQuads; // rotozoom layers as tile runs: build time (us) and quads (last frame)
+    unsigned tileEvictions; // times the full tile atlas gave back the cells not used in the frame (total)
 };
 const Stats &GetStats();
 // The last refusal as a short name for the dev tools ("FACE", "INK TINT", "WATER LINE"); NULL when the last
@@ -45,6 +47,9 @@ const Stats &GetStats();
 const char *ReasonName();
 // The last refused command with its parameters ("#12 type 7 kind 0 clip ... | p0 p1 ..."), for SITE STATE.
 const char *LastRefusal();
+// The depth set-up of the 3D scenes, to find the PICA's convention on the console: bit 0 nearer = lower z/w, bit 1
+// GPU_GREATER instead of GPU_LESS, bit 2 clear the depth buffer to 0 instead of the maximum. SITE SET depthmode N.
+extern unsigned depthMode;
 
 } // namespace GpuRender
 } // namespace RSDK

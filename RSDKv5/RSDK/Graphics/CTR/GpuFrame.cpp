@@ -2,6 +2,7 @@
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 #include "RSDK/Graphics/CTR/GpuFrameCmd.hpp"
 #include "RSDK/Graphics/CTR/GpuRender.hpp"
+#include "RSDK/Graphics/CTR/GpuScene3D.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS
 
@@ -129,6 +130,7 @@ void GpuFrame::Begin()
 {
     sRecorded  = false;
     sHazardWhy = NULL;
+    GpuScene3D::BeginFrame();
     if (!DEV_SW_RECORD || videoSettings.screenCount != 1 || !Alloc())
         return;
     sCount     = 0;
@@ -209,6 +211,7 @@ void GpuFrame::Flush()
                 DrawBlendedFace(v, colors, p[0], p[1], p[2]);
                 break;
             }
+            case CMD_SCENE3D: GpuScene3D::Replay(sArena + c.arena); break;
             case CMD_FACES: {
                 const uint8 *at = sArena + c.arena;
                 for (int32 f = 0; f < p[0]; ++f) {
@@ -255,7 +258,7 @@ void GpuFrame::Flush()
 
 static void DumpCommands()
 {
-    static const char *const kName[] = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE_OUTLINE", "FACE", "BLENDED_FACE", "SPRITE", "ROTO", "LAYER", "LINEBUF", "FACES", "BLENDED_FACES" };
+    static const char *const kName[] = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE_OUTLINE", "FACE", "BLENDED_FACE", "SPRITE", "ROTO", "LAYER", "LINEBUF", "FACES", "BLENDED_FACES", "SCENE3D" };
     FILE *f = fopen(dumpPath, "w");
     if (!f)
         return;
@@ -266,6 +269,10 @@ static void DumpCommands()
                 c.clip[2], c.clip[3], (long)c.pos[0], (long)c.pos[1]);
         for (int k = 0; k < 15; ++k)
             fprintf(f, " %ld", (long)c.p[k]);
+        if (c.type == CMD_LAYER) {
+            const TileLayer *l = (const TileLayer *)(uintptr_t)c.p[0];
+            fprintf(f, " | layer %ux%u tiles, shift %u/%u", l->xsize, l->ysize, l->widthShift, l->heightShift);
+        }
         fprintf(f, "\n");
     }
     fclose(f);
@@ -436,6 +443,12 @@ bool GpuFrame::RecRoto(int32 x, int32 y, int32 pivotX, int32 pivotY, int32 w, in
     c->p[0] = x, c->p[1] = y, c->p[2] = pivotX, c->p[3] = pivotY, c->p[4] = w, c->p[5] = h, c->p[6] = sprX, c->p[7] = sprY, c->p[8] = scaleX;
     c->p[9] = scaleY, c->p[10] = dir, c->p[11] = rot, c->p[12] = ink, c->p[13] = alpha, c->p[14] = sheet;
     return true;
+}
+
+uint8 *GpuFrame::RecScene3D(uint32 bytes)
+{
+    Cmd *c = BeginCmd(CMD_SCENE3D, bytes);
+    return c ? sArena + c->arena : NULL;
 }
 
 bool GpuFrame::RecLayer(TileLayer *layer, int kind)
