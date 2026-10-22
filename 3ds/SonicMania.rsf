@@ -1,6 +1,6 @@
 BasicInfo:
-  Title                   : "Sonic Mania"
-  ProductCode             : "CTR-P-SNMA" # You can make this whatever you want, it doesn't have to follow the Nintendo standard
+  Title                   : "Sonic Mania 3DS"
+  ProductCode             : "CTR-P-SM3D"
   Logo                    : Nintendo # Nintendo / Licensed / Distributed / iQue / iQueForSystem
 
 #RomFs:
@@ -9,7 +9,7 @@ BasicInfo:
 
 TitleInfo:
   Category                : Application
-  UniqueId                : 0x3082 #Something like 0x1337, but you can make it whatever you want, as long as it's a hexadecimal number (probably best to make it something actually unique though!)
+  UniqueId                : 0x5A230 # own title ID (the SaturnSH2x2 build uses 0x3082), so both can be installed
 
 Option:
   UseOnSD                 : true # true if App is to be installed to SD
