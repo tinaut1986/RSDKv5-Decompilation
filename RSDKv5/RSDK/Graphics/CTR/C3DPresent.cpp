@@ -24,7 +24,8 @@ static DVLB_s *sDvlb;
 static shaderProgram_s sProgram;
 static int sProjLoc;
 static C3D_Mtx sProj;
-static void *sStaging; // VRAM: the display-transfer engine reads the picture from here
+static void *sStaging; // linear memory: the CPU writes the picture here, the display-transfer engine reads it
+                       // (VRAM is not writable by the CPU from an installed title: the first try crashed in memcpy)
 static Vertex *sQuad;  // linear memory
 static C3D_BufInfo sBuf;
 
@@ -51,7 +52,7 @@ bool C3DPresent::Init()
     C3D_TexSetFilter(&sTex, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&sTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
 
-    sStaging = vramAlloc(SCREEN_W * SCREEN_H * 2);
+    sStaging = linearAlloc(SCREEN_W * SCREEN_H * 2);
     sQuad    = (Vertex *)linearAlloc(4 * sizeof(Vertex));
     if (!sStaging || !sQuad)
         return false;
