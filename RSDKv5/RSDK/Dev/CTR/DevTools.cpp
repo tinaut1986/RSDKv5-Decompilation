@@ -757,13 +757,13 @@ static void HandleSession(int ctrl)
                 Reply(s, "200 %u sheets, %u KB at 8 bit (%u KB at 16 bit): %s", count, total >> 10, (total * 2) >> 10, list);
             }
             else if (!strcmp(sub, "STATE")) {
-                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f | cmds %u replayed %u gpu %u quads %u reason %u cmd %u tileconv %u sprconv %u layers %u tileq %u empty %u rowsout %u | renderer %s frames gpu %u cpu %u (last second %u/%u) why %s | atlas retries %u | refused %s",
+                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f | cmds %u replayed %u gpu %u quads %u reason %u cmd %u tileconv %u sprconv %u layers %u tileq %u empty %u rowsout %u | renderer %s frames gpu %u cpu %u (last second %u/%u) why %s | atlas retries %u soft layers %u | refused %s",
                       (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastSkipped, sLastFps, sLastFrameMs, sLastStageMs[0],
                       sLastStageMs[1], sLastStageMs[2], sLastStageMs[3], sLastStageMs[4], sLastStageMs[5], sLastStageMs[6], sLastStageMs[7],
                       sLastStageMs[8], sLastStageMs[9], sLastStageMs[10], sLastStageMs[11], sLastStageMs[12], GpuFrame::GetStats().commands, GpuFrame::GetStats().replayed, GpuFrame::GetStats().gpuFrames, GpuRender::GetStats().quads,
                       GpuRender::GetStats().reason, GpuRender::GetStats().unsupportedCmd, GpuRender::GetStats().tileConversions, GpuRender::GetStats().spriteConversions, GpuRender::GetStats().layerCmds,
                       GpuRender::GetStats().tileQuads, GpuRender::GetStats().emptyTiles, GpuRender::GetStats().rowsOut, DevTools::GpuMode() ? "gpu" : "cpu",
-                      sTotGpu, sTotCpu, sLastSecGpu, sLastSecCpu, sLastWhy ? sLastWhy : "-", GpuRender::GetStats().atlasRetries, GpuRender::LastRefusal());
+                      sTotGpu, sTotCpu, sLastSecGpu, sLastSecCpu, sLastWhy ? sLastWhy : "-", GpuRender::GetStats().atlasRetries, GpuRender::GetStats().softLayers, GpuRender::LastRefusal());
             }
             else
                 Reply(s, "504 Unknown SITE command.");

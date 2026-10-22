@@ -46,7 +46,15 @@ struct Vtx {
     uint8 r, g, b, a;
 };
 
-enum Tex { TEX_TILE, TEX_SPRITE };
+enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT };
+
+// Software layers: a layer kind the GPU cannot draw (rotozoom, vscroll, a layer split by the water line) is drawn by
+// the engine's own function into screens[1] (unused on the 3DS), keyed with a colour no palette produces in practice,
+// and its rows are copied into this texture and drawn as one quad in their place in the frame.
+enum { SOFT_W = 512, SOFT_H = 256, SOFT_KEY = 0x0020, SOFT_JOBS = 8 };
+struct SoftJob {
+    int16 x1, y1, x2, y2, texY;
+};
 enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL };
 
 struct Batch {
@@ -71,8 +79,10 @@ struct Pending {
 };
 
 bool sReady, sFailed;
-C3D_Tex sTileTex, sSprTex;
-u16 *sTileData, *sSprData;
+C3D_Tex sTileTex, sSprTex, sSoftTex;
+u16 *sTileData, *sSprData, *sSoftData;
+SoftJob sSoftJobs[SOFT_JOBS];
+unsigned sSoftJobCount, sSoftRows;
 DVLB_s *sDvlb;
 shaderProgram_s sProgram;
 int sProjLoc;
@@ -204,6 +214,12 @@ bool Setup()
         return false;
     sTileData = (u16 *)sTileTex.data;
     sSprData  = (u16 *)sSprTex.data;
+    // Optional: without it the software layers are refused as before.
+    if (C3D_TexInit(&sSoftTex, SOFT_W, SOFT_H, GPU_RGBA5551)) {
+        sSoftData = (u16 *)sSoftTex.data;
+        C3D_TexSetFilter(&sSoftTex, GPU_NEAREST, GPU_NEAREST);
+        C3D_TexSetWrap(&sSoftTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    }
     memset(sTileData, 0, (size_t)TILE_ATLAS_W * TILE_ATLAS_H * 2);
     memset(sSprData, 0, (size_t)SPR_ATLAS_W * SPR_ATLAS_H * 2);
     C3D_TexSetFilter(&sTileTex, GPU_NEAREST, GPU_NEAREST);
@@ -490,7 +506,8 @@ bool AddQuad(uint8 tex, uint8 blend, float x0, float y0, float x1, float y1, flo
     Vtx *v = &sVbo[sCur][sQuadCount * 4];
     ++sQuadCount;
     // The atlas sizes are powers of two known here: no division per quad (the ARM11's VFP divides slowly).
-    const float iu = atlasW == TILE_ATLAS_W ? 1.0f / TILE_ATLAS_W : 1.0f / SPR_ATLAS_W, iv = atlasH == TILE_ATLAS_H ? 1.0f / TILE_ATLAS_H : 1.0f / SPR_ATLAS_H;
+    const float iu = atlasW == 512 ? 1.0f / 512 : atlasW == 1024 ? 1.0f / 1024 : 1.0f / atlasW;
+    const float iv = atlasH == 512 ? 1.0f / 512 : atlasH == 256 ? 1.0f / 256 : 1.0f / atlasH;
     // Texels are rows from the top; the PICA samples memory row 0 at v = 1.
     const float U0 = u0 * iu, U1 = u1 * iu, V0 = 1.0f - v0 * iv, V1 = 1.0f - v1 * iv;
     v[0] = { x0, y0, U0, V0, r, g, b, a };
@@ -895,6 +912,82 @@ bool EmitRect(const Cmd &c)
     return true;
 }
 
+bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int kind)
+{
+    if (!sSoftData)
+        return Refuse(GpuRender::REASON_UNSUPPORTED, 100 + kind);
+    const int x1 = c.clip[0] < 0 ? 0 : c.clip[0], x2 = c.clip[2] > screens[0].pitch ? screens[0].pitch : c.clip[2];
+    const int y1 = c.clip[1] < 0 ? 0 : c.clip[1], y2 = c.clip[3] > SCREEN_YSIZE ? SCREEN_YSIZE : c.clip[3];
+    if (x1 >= x2 || y1 >= y2)
+        return true;
+    const int h = y2 - y1;
+    if (sSoftJobCount >= SOFT_JOBS || sSoftRows + (unsigned)h > SOFT_H)
+        return Refuse(GpuRender::REASON_UNSUPPORTED, 100 + kind);
+
+    // The engine's function, on screen 1, with the state the layer was recorded with.
+    ScreenInfo &scr  = screens[1];
+    scr.size         = screens[0].size;
+    scr.center       = screens[0].center;
+    scr.pitch        = screens[0].pitch;
+    scr.position.x   = c.pos[0];
+    scr.position.y   = c.pos[1];
+    scr.clipBound_X1 = x1, scr.clipBound_Y1 = y1, scr.clipBound_X2 = x2, scr.clipBound_Y2 = y2;
+    for (int y = y1; y < y2; ++y)
+        for (int x = x1; x < x2; ++x)
+            scr.frameBuffer[y * scr.pitch + x] = SOFT_KEY;
+    memcpy(&scanlines[y1], sl, (size_t)h * sizeof(ScanlineInfo));
+    static uint8 keepLines[SCREEN_YSIZE];
+    memcpy(keepLines, gfxLineBuffer, sizeof(keepLines));
+    memcpy(gfxLineBuffer, sLineBuf, sizeof(keepLines));
+    ScreenInfo *const keepScreen = currentScreen;
+    const bool keepPending       = GpuFrame::pending;
+    currentScreen                = &scr;
+    GpuFrame::pending            = false; // the draw call must draw, not flush the frame being executed
+    switch (kind) {
+        case LAYER_HSCROLL: DrawLayerHScroll(layer); break;
+        case LAYER_VSCROLL: DrawLayerVScroll(layer); break;
+        case LAYER_ROTOZOOM: DrawLayerRotozoom(layer); break;
+        default: DrawLayerBasic(layer); break;
+    }
+    GpuFrame::pending = keepPending;
+    currentScreen     = keepScreen;
+    memcpy(gfxLineBuffer, keepLines, sizeof(keepLines));
+
+    const unsigned texY        = sSoftRows;
+    sSoftJobs[sSoftJobCount++] = { (int16)x1, (int16)y1, (int16)x2, (int16)y2, (int16)texY };
+    sSoftRows                  = (texY + (unsigned)h + 7) & ~7u; // jobs start on a block row
+    ++sStats.softLayers;
+    if (!AddQuad(TEX_SOFT, BLEND_NORMAL, (float)x1, (float)y1, (float)x2, (float)y2, (float)x1, (float)texY, (float)x2, (float)(texY + h), SOFT_W, SOFT_H, 255, 255,
+                 255, 255))
+        return Refuse(GpuRender::REASON_QUAD_LIMIT);
+    return true;
+}
+
+// Copies a software layer's rows from screen 1 into the texture (8x8 Morton blocks, the key colour transparent).
+void ConvertSoft(const SoftJob &j)
+{
+    const ScreenInfo &scr = screens[1];
+    const int h           = j.y2 - j.y1;
+    for (int ty = 0; ty < h; ty += 8)
+        for (int tx = j.x1 & ~7; tx < j.x2; tx += 8) {
+            u16 *blk = &sSoftData[(((j.texY + ty) >> 3) * (SOFT_W >> 3) + (tx >> 3)) << 6];
+            for (int yy = 0; yy < 8; ++yy) {
+                const int sy = j.y1 + ty + yy;
+                for (int xx = 0; xx < 8; ++xx) {
+                    const int sx = tx + xx;
+                    u16 texel    = 0;
+                    if (sy < j.y2 && sx >= j.x1 && sx < j.x2) {
+                        const uint16 c = scr.frameBuffer[sy * scr.pitch + sx];
+                        texel          = c == SOFT_KEY ? 0 : ToTexel(c);
+                    }
+                    blk[kMorton.v[yy * 8 + xx]] = texel;
+                }
+            }
+        }
+    const unsigned first = ((unsigned)j.texY >> 3) * (SOFT_W >> 3) * 64 * 2, rows8 = ((unsigned)h + 7) >> 3;
+    GSPGPU_FlushDataCache((u8 *)sSoftData + first, rows8 * (SOFT_W >> 3) * 64 * 2);
+}
+
 // One run of screen lines [dy, dy + n) that all show tile row `row` of the layer starting at pixel row `srcY` inside
 // it, with the layer's pixel column of screen column dx0 being `px`; screen columns [dx0, dx1).
 bool EmitTileRun(TileLayer *layer, unsigned bank, int row, int srcY, int dy, int n, int dx0, int dx1, int px)
@@ -958,7 +1051,7 @@ bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     const int y1 = c.clip[1], y2 = c.clip[3];
     uint8 bank;
     if (!UniformBank(y1, y2, &bank))
-        return Refuse(GpuRender::REASON_PALETTE_LINES);
+        return EmitSoftLayer(c, layer, sl, LAYER_HSCROLL); // lines in different palette banks: the water line
     // screens[0], not currentScreen: the draw loop has moved that on to screen 1 (never set up on the 3DS, pitch 0,
     // which left every tile run empty).
     const int pitch = screens[0].pitch;
@@ -1074,6 +1167,8 @@ bool GpuRender::Render(const Stream &stream)
     sPendingCount = 0;
     sFail.reason  = REASON_OK;
     sSprFull      = false;
+    sSoftJobCount = sSoftRows = 0;
+    sStats.softLayers = 0;
     ok            = true;
     memset(sLineBuf, 0, sizeof(sLineBuf));
 
@@ -1098,7 +1193,7 @@ bool GpuRender::Render(const Stream &stream)
                 else if (c.kind == LAYER_HSCROLL)
                     ok = EmitLayerHScroll(c, layer, sl);
                 else
-                    ok = Refuse(REASON_UNSUPPORTED, 100 + c.kind);
+                    ok = EmitSoftLayer(c, layer, sl, c.kind);
                 break;
             }
             default: ok = Refuse(REASON_UNSUPPORTED, c.type); break;
@@ -1161,6 +1256,8 @@ bool GpuRender::Render(const Stream &stream)
         else
             ConvertSprite(sPending[i]);
     }
+    for (unsigned i = 0; i < sSoftJobCount; ++i)
+        ConvertSoft(sSoftJobs[i]);
     if (sTileDirtyHi > sTileDirtyLo) {
         GSPGPU_FlushDataCache((u8 *)sTileData + sTileDirtyLo, sTileDirtyHi - sTileDirtyLo);
         ++sStats.atlasFlushes;
@@ -1195,7 +1292,7 @@ bool GpuRender::Render(const Stream &stream)
     for (unsigned b = 0; b < sBatchCount; ++b) {
         const Batch &bt = sBatches[b];
         if (curTex != bt.tex) {
-            C3D_TexBind(0, bt.tex == TEX_TILE ? &sTileTex : &sSprTex);
+            C3D_TexBind(0, bt.tex == TEX_TILE ? &sTileTex : bt.tex == TEX_SOFT ? &sSoftTex : &sSprTex);
             curTex = bt.tex;
         }
         if (curBlend != bt.blend || bt.blend == BLEND_FILL) {
