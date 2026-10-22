@@ -926,6 +926,9 @@ static void DrawStatus()
     else
         PrintRow(29, "");
     fflush(stdout);
+    // The console writes through the CPU cache; in GPU presentation mode nothing else flushes the screens
+    // every frame (the CPU flip does), so the menu flushes what it painted.
+    gfxFlushBuffers();
     sMenuDirty = false;
 }
 
