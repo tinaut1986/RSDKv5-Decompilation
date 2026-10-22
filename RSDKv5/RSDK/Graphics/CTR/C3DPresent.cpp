@@ -75,7 +75,8 @@ bool C3DPresent::Init()
     if (!InitCore())
         return false;
 
-    sTarget = C3D_RenderTargetCreate(SCREEN_H, SCREEN_W, GPU_RB_RGB565, (GPU_DEPTHBUF)-1);
+    // With a depth buffer for the GPU renderer's 3D scenes (192 KB of VRAM).
+    sTarget = C3D_RenderTargetCreate(SCREEN_H, SCREEN_W, GPU_RB_RGB565, GPU_RB_DEPTH16);
     if (!sTarget)
         return false;
     C3D_RenderTargetSetOutput(sTarget, GFX_TOP, GFX_LEFT,

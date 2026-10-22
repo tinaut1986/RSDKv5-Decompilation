@@ -29,6 +29,7 @@ enum CmdType : uint8 {
     // and for CMD_BLENDED_FACES uint32 colours[n].
     CMD_FACES,
     CMD_BLENDED_FACES,
+    CMD_SCENE3D, // a 3D scene's model instances (GpuScene3D::Head + Inst in the arena)
 };
 
 struct Cmd {

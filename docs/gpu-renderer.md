@@ -112,6 +112,24 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Circles and rings are polygons. A whole run, exit included, is GPU-only.
 - Cost per drawn frame (2DS): logic ~5, Draw3DScene ~15, face emission ~8, floor ~7 ms: the CPU is the limit.
 
+## 3D scenes as GPU model instances (perf/special-stage, 2026-10-22, NOT WORKING YET)
+
+- Why: in the Special Stage the CPU spends ~30 ms a frame on the engine's 3D (vertex transforms in AddModelToScene,
+  lighting and the face sort in Draw3DScene, face emission). legend-of-doom and sm-3ds got their Old 3DS speed by
+  cutting CPU work, not with core 1 (core 1 only does audio there; 80 % of core 1 slowed Doom and froze the 2DS).
+- Design (`GpuScene3D.cpp`, `GpuRender.cpp` "3D scenes", `scene3d.v.pica`): AddModelToScene / AddMeshFrameToScene in
+  S3D_SOLIDCOLOR_SCREEN and S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN store an instance (model, frames A/B and timer,
+  matrices, colour); Draw3DScene records one CMD_SCENE3D. The executor keeps each model in VRAM (all frames, int16
+  position + normal / 4, triangle indices, colours; ~850 KB for the Special Stage, which does not fit the linear heap)
+  and the shader interpolates, transforms, projects (X * 2^projX / Z + centre, homogeneous w = Z) and lights as the
+  software does. Depth buffer (GPU_RB_DEPTH16 on the top target) instead of the sort; each scene its own 1/64 of the
+  depth range. A refused frame replays the same engine calls (GpuScene3D::Replay).
+- First try on the 2DS: the console **froze** on entering the Special Stage (no ping: a hard hang, needs a power cycle).
+  Suspect: the VRAM copy (`C3D_SyncTextureCopy` with the size as line width); now dims 0 / flags 8 as citro3d's
+  C3D_TexLoadImage. The path is **off by default**: `SITE SET gpu3d 1` turns it on. `SITE SET depthmode 0..7` picks the
+  depth convention (bit 0 nearer = lower z/w, bit 1 GREATER, bit 2 clear to 0) until the right one is seen.
+- `SITE MODELS` lists the loaded models (vertices x frames, flags, position and normal ranges).
+
 ## Renderer mode and frame accounting (2026-10-22)
 
 - One switch, **RENDERER GPU/CPU** (bottom screen, text console cell, `SITE GPU 0|1`), saved as `gpumode` in

@@ -146,8 +146,17 @@ inline void MatrixCopy(Matrix *matDst, Matrix *matSrc) { memcpy(matDst, matSrc, 
 
 uint16 LoadMesh(const char *filepath, uint8 scope);
 uint16 Create3DScene(const char *name, uint16 faceCnt, uint8 scope);
+#if RETRO_PLATFORM == RETRO_3DS
+namespace GpuScene3D
+{
+void OnPrepare(uint16 scene); // the GPU instances of the scene go too (CTR/GpuScene3D.hpp)
+}
+#endif
 inline void Prepare3DScene(uint16 sceneID)
 {
+#if RETRO_PLATFORM == RETRO_3DS
+    GpuScene3D::OnPrepare(sceneID);
+#endif
     if (sceneID < SCENE3D_COUNT) {
         Scene3D *scn = &scene3DList[sceneID];
 

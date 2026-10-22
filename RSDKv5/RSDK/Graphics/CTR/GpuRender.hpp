@@ -45,6 +45,9 @@ const Stats &GetStats();
 const char *ReasonName();
 // The last refused command with its parameters ("#12 type 7 kind 0 clip ... | p0 p1 ..."), for SITE STATE.
 const char *LastRefusal();
+// The depth set-up of the 3D scenes, to find the PICA's convention on the console: bit 0 nearer = lower z/w, bit 1
+// GPU_GREATER instead of GPU_LESS, bit 2 clear the depth buffer to 0 instead of the maximum. SITE SET depthmode N.
+extern unsigned depthMode;
 
 } // namespace GpuRender
 } // namespace RSDK

@@ -11,6 +11,8 @@
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 #include "RSDK/Graphics/CTR/gpu_shbin.h"
+#include "RSDK/Graphics/CTR/scene3d_shbin.h"
+#include "RSDK/Graphics/CTR/GpuScene3D.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 
 // Dev tools timing of the GPU path: geometry build -> PCOPY, atlas conversions -> PXFER, the citro3d frame (the wait
@@ -37,7 +39,7 @@ enum {
     SPR_SLOTS    = 4096,
     SPR_MAX_PIXELS = 256 * 256,
     MAX_QUADS    = 8192,
-    MAX_BATCHES  = 64,
+    MAX_BATCHES  = 256,
     MAX_PENDING  = 2048,
     BANKS        = PALETTE_BANK_COUNT,
 };
@@ -51,7 +53,7 @@ struct Vtx {
 
 inline int16 Quarter(float p) { return (int16)(p >= 0 ? p * 4.0f + 0.5f : p * 4.0f - 0.5f); }
 
-enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT };
+enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D }; // TEX_3D: a 3D scene (Batch::first = index in sDraw3D)
 
 // Software layers: a layer kind the GPU cannot draw (rotozoom, vscroll, a layer split by the water line) is drawn by
 // the engine's own function into screens[1] (unused on the 3DS), keyed with a colour no palette produces in practice,
@@ -96,6 +98,34 @@ C3D_BufInfo sBufInfo;
 Vtx *sVbo[2];
 u16 *sIdx;
 unsigned sCur;
+
+// ---- 3D scenes (GpuScene3D, scene3d.v.pica)
+// A model's vertices (every frame: x, y, z, nx / 4, ny / 4, nz / 4 as int16), colours and triangle indices live in VRAM,
+// copied there once per scene content by the transfer engine (the CPU cannot write VRAM from an installed title).
+struct GModel {
+    u16 *vtx;
+    u8 *col; // RGBA bytes per vertex, NULL: the instance colour
+    u16 *idx;
+    u32 idxCount;
+    u16 vc;
+    bool tried, ok;
+};
+GModel sModels[MODEL_COUNT];
+unsigned sModelsVersion = ~0u;
+DVLB_s *s3Dvlb;
+shaderProgram_s s3Prog;
+bool s3Ready;
+struct {
+    int proj, wrow, nrow, lerp, scr, band, lit, dif, difs, spcs;
+} s3Loc;
+C3D_AttrInfo s3AttrCol, s3AttrFixed;
+struct Draw3D {
+    const GpuScene3D::Head *h;
+    const GpuScene3D::Inst *in;
+};
+enum { MAX_DRAW3D = 64 };
+Draw3D sDraw3D[MAX_DRAW3D];
+unsigned sDraw3DCount;
 
 // Per-frame build state
 unsigned sQuadCount;
@@ -255,6 +285,37 @@ bool Setup()
     AttrInfo_Init(&sAttr);
     AttrInfo_AddLoader(&sAttr, 0, GPU_SHORT, 4);         // x, y (quarter pixels), u, v (texels)
     AttrInfo_AddLoader(&sAttr, 1, GPU_UNSIGNED_BYTE, 4); // r, g, b, a
+
+    // The 3D scene program (optional: without it the scenes go to the software)
+    s3Dvlb = DVLB_ParseFile((u32 *)scene3d_shbin, sizeof(scene3d_shbin));
+    if (s3Dvlb) {
+        shaderProgramInit(&s3Prog);
+        shaderProgramSetVsh(&s3Prog, &s3Dvlb->DVLE[0]);
+        const shaderInstance_s *vs = s3Prog.vertexShader;
+        s3Loc.proj = shaderInstanceGetUniformLocation(vs, "projection");
+        s3Loc.wrow = shaderInstanceGetUniformLocation(vs, "wrow");
+        s3Loc.nrow = shaderInstanceGetUniformLocation(vs, "nrow");
+        s3Loc.lerp = shaderInstanceGetUniformLocation(vs, "lerp");
+        s3Loc.scr  = shaderInstanceGetUniformLocation(vs, "scr");
+        s3Loc.band = shaderInstanceGetUniformLocation(vs, "band");
+        s3Loc.lit  = shaderInstanceGetUniformLocation(vs, "lit");
+        s3Loc.dif  = shaderInstanceGetUniformLocation(vs, "dif");
+        s3Loc.difs = shaderInstanceGetUniformLocation(vs, "difs");
+        s3Loc.spcs = shaderInstanceGetUniformLocation(vs, "spcs");
+        for (int k = 0; k < 2; ++k) {
+            C3D_AttrInfo *a = k ? &s3AttrFixed : &s3AttrCol;
+            AttrInfo_Init(a);
+            AttrInfo_AddLoader(a, 0, GPU_SHORT, 3); // position, frame A
+            AttrInfo_AddLoader(a, 1, GPU_SHORT, 3); // normal / 4, frame A
+            AttrInfo_AddLoader(a, 2, GPU_SHORT, 3); // position, frame B
+            AttrInfo_AddLoader(a, 3, GPU_SHORT, 3); // normal / 4, frame B
+            if (k)
+                AttrInfo_AddFixed(a, 4); // colour of the instance
+            else
+                AttrInfo_AddLoader(a, 4, GPU_UNSIGNED_BYTE, 4);
+        }
+        s3Ready = true;
+    }
 
     ResetCaches();
     TrackPalette(true);
@@ -928,6 +989,207 @@ bool EmitBlendedFace(const Cmd &c, const uint8 *arena)
     return EmitPolygon(c, (const Vector2 *)arena, n, (const uint32 *)(arena + n * sizeof(Vector2)), 0, 0, 0, c.p[2], c.p[1]);
 }
 
+// ---------------------------------------------------------------- 3D scenes
+
+void FreeModels()
+{
+    for (GModel &g : sModels) {
+        if (g.vtx)
+            vramFree(g.vtx);
+        if (g.col)
+            vramFree(g.col);
+        if (g.idx)
+            vramFree(g.idx);
+    }
+    memset(sModels, 0, sizeof(sModels));
+}
+
+// Copies `bytes` (a multiple of 16) from linear memory to VRAM with the transfer engine, as citro3d's
+// C3D_TexLoadImage does for a VRAM texture (dimensions 0, flags 8: a plain texture copy). The first try passed the size
+// as the line width and the console froze on entering the Special Stage (not yet known which part hung).
+void CopyToVram(const void *src, void *dst, u32 bytes)
+{
+    GSPGPU_FlushDataCache(src, bytes);
+    C3D_SyncTextureCopy((u32 *)src, 0, (u32 *)dst, 0, bytes, 8);
+}
+
+// Fills a VRAM block of `bytes` through the 256 KB staging buffer, `fill` writing each chunk (offset, size, buffer).
+template <typename F> bool UploadVram(void *dst, u32 bytes, F fill)
+{
+    u8 *staging = (u8 *)C3DPresent::Staging();
+    if (!staging)
+        return false;
+    const u32 chunk = SOFT_W * SOFT_H * 2;
+    for (u32 off = 0; off < bytes; off += chunk) {
+        const u32 n = bytes - off < chunk ? bytes - off : chunk;
+        fill(off, n, staging);
+        CopyToVram(staging, (u8 *)dst + off, (n + 15) & ~15u);
+    }
+    return true;
+}
+
+bool EnsureModel(unsigned m)
+{
+    if (sModelsVersion != contentVersion) {
+        FreeModels();
+        sModelsVersion = contentVersion;
+    }
+    GModel &g = sModels[m];
+    if (g.tried)
+        return g.ok;
+    g.tried         = true;
+    const Model &md = modelList[m];
+    const unsigned frames = md.frameCount ? md.frameCount : 1, vc = md.vertCount;
+    if (!md.vertices || !md.indices || !vc || !md.indexCount || (md.faceVertCount != 3 && md.faceVertCount != 4))
+        return false;
+
+    // Vertices: 12 bytes each, every frame after the other.
+    const u32 vbytes = ((u32)vc * frames * 12 + 15) & ~15u;
+    g.vtx            = (u16 *)vramAlloc(vbytes);
+    // Triangles: a quad face becomes two.
+    const unsigned faces = md.indexCount / md.faceVertCount;
+    g.idxCount           = faces * (md.faceVertCount == 4 ? 6 : 3);
+    const u32 ibytes     = (g.idxCount * 2 + 15) & ~15u;
+    g.idx                = (u16 *)vramAlloc(ibytes);
+    const bool colors    = md.flags == 5 && md.colors; // MODEL_USENORMALS | MODEL_USECOLOURS: the software uses them
+    const u32 cbytes     = ((u32)vc * 4 + 15) & ~15u;
+    g.col                = colors ? (u8 *)vramAlloc(cbytes) : NULL;
+    if (!g.vtx || !g.idx || (colors && !g.col)) {
+        DEV_LOG("gpu3d: no VRAM for model %u (%u KB)", m, (unsigned)((vbytes + ibytes + cbytes) >> 10));
+        return false;
+    }
+    bool ok = UploadVram(g.vtx, vbytes, [&](u32 off, u32 n, u8 *buf) {
+        int16 *o = (int16 *)buf;
+        for (u32 i = 0; i < n / 2; ++i) {
+            const u32 e = off / 2 + i, v = e / 6, k = e % 6;
+            if (v >= (u32)vc * frames) {
+                o[i] = 0;
+                continue;
+            }
+            const ModelVertex &mv = md.vertices[v];
+            o[i] = (int16)(k == 0 ? mv.x : k == 1 ? mv.y : k == 2 ? mv.z : k == 3 ? mv.nx >> 2 : k == 4 ? mv.ny >> 2 : mv.nz >> 2);
+        }
+    });
+    ok = ok && UploadVram(g.idx, ibytes, [&](u32 off, u32 n, u8 *buf) {
+        u16 *o = (u16 *)buf;
+        for (u32 i = 0; i < n / 2; ++i) {
+            const u32 e = off / 2 + i;
+            if (e >= g.idxCount) {
+                o[i] = 0;
+                continue;
+            }
+            if (md.faceVertCount == 3)
+                o[i] = md.indices[e];
+            else {
+                static const u8 kQuad[6] = { 0, 1, 2, 0, 2, 3 };
+                o[i] = md.indices[(e / 6) * 4 + kQuad[e % 6]];
+            }
+        }
+    });
+    if (colors)
+        ok = ok && UploadVram(g.col, cbytes, [&](u32 off, u32 n, u8 *buf) {
+            for (u32 i = 0; i < n; ++i) {
+                const u32 e = off + i, v = e / 4, k = e % 4;
+                const uint32 c = v < vc ? md.colors[v].color : 0;
+                buf[i] = (u8)(k == 0 ? c >> 16 : k == 1 ? c >> 8 : k == 2 ? c : 0xFF);
+            }
+        });
+    g.vc = (u16)vc;
+    g.ok = ok;
+    if (ok)
+        DEV_LOG("gpu3d: model %u in VRAM (%u x %u vertices, %u triangles, %u KB)", m, vc, frames, (unsigned)(g.idxCount / 3),
+                (unsigned)((vbytes + ibytes + cbytes) >> 10));
+    return ok;
+}
+
+bool EmitScene3D(const Cmd &c, const uint8 *arena)
+{
+    const GpuScene3D::Head *h = (const GpuScene3D::Head *)arena;
+    if (!s3Ready || sDraw3DCount >= MAX_DRAW3D)
+        return Refuse(GpuRender::REASON_UNSUPPORTED, CMD_SCENE3D);
+    // Quads are not scissored: a scene under a clip smaller than the screen is left to the CPU.
+    if (c.clip[0] > 0 || c.clip[1] > 0 || c.clip[2] < screens[0].size.x || c.clip[3] < screens[0].size.y)
+        return Refuse(GpuRender::REASON_UNSUPPORTED, CMD_SCENE3D);
+    if (h->ink != INK_NONE && h->ink != INK_ALPHA && h->ink != INK_BLEND)
+        return Refuse(GpuRender::REASON_INK, (unsigned)h->ink);
+    const GpuScene3D::Inst *in = (const GpuScene3D::Inst *)(h + 1);
+    for (int32 i = 0; i < h->count; ++i)
+        if (in[i].model < 0 || in[i].model >= MODEL_COUNT || !EnsureModel((unsigned)in[i].model))
+            return Refuse(GpuRender::REASON_UNSUPPORTED, CMD_SCENE3D);
+    if (sBatchCount >= MAX_BATCHES)
+        return Refuse(GpuRender::REASON_QUAD_LIMIT);
+    sDraw3D[sDraw3DCount] = { h, in };
+    sBatches[sBatchCount++] = { TEX_3D, BLEND_NORMAL, sDraw3DCount++, 0, 0 };
+    sStats.faces += 0;
+    return true;
+}
+
+// Depth: each scene gets its own 1/64 of the depth range, later scenes nearer (the draw order between scenes and the
+// 2D around them is kept; inside a scene the depth test replaces the software's face sort).
+void Draw3DSceneGpu(unsigned k)
+{
+    const Draw3D &d           = sDraw3D[k];
+    const GpuScene3D::Head *h = d.h;
+    const bool shaded         = h->drawMode == S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN;
+    C3D_BindProgram(&s3Prog);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s3Loc.proj, (C3D_Mtx *)C3DPresent::Projection());
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, (float)(1 << h->projX), -(float)(1 << h->projY), (float)h->centerX, (float)h->centerY);
+    const unsigned mode = GpuRender::depthMode;
+    const float bandK   = (float)k / MAX_DRAW3D;
+    if (mode & 1)
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.band, -bandK, -256.0f / MAX_DRAW3D, 0, 0);
+    else
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.band, -1.0f + bandK, 256.0f / MAX_DRAW3D, 0, 0);
+    const float alpha = h->ink == INK_NONE ? 255.0f : h->ink == INK_BLEND ? 128.0f : (float)(h->alpha > 0xFF ? 0xFF : h->alpha < 0 ? 0 : h->alpha);
+    if (shaded) {
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.lit, 1.0f / 1024, 0, 0, alpha);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.dif, (float)h->diffuse[0], (float)h->diffuse[1], (float)h->diffuse[2], 0);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.difs, 1.0f / (1 << h->diffuseIntensity[0]), 1.0f / (1 << h->diffuseIntensity[1]),
+                      1.0f / (1 << h->diffuseIntensity[2]), 0);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.spcs, 1.0f / (1024.0f * (1 << h->specularIntensity[0])), 1.0f / (1024.0f * (1 << h->specularIntensity[1])),
+                      1.0f / (1024.0f * (1 << h->specularIntensity[2])), 0);
+    }
+    else {
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.lit, 0, 0, 0, alpha);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.dif, 1, 1, 1, 0);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.difs, 1, 1, 1, 0);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.spcs, 0, 0, 0, 0);
+    }
+    C3D_TexEnv *env = C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+    C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+    C3D_DepthTest(true, (mode & 2) ? GPU_GREATER : GPU_LESS, GPU_WRITE_ALL);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+
+    for (int32 i = 0; i < h->count; ++i) {
+        const GpuScene3D::Inst &in = d.in[i];
+        const GModel &g            = sModels[in.model];
+        for (int r = 0; r < 3; ++r)
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.wrow + r, in.world[r * 4 + 0] / 256.0f, in.world[r * 4 + 1] / 256.0f, in.world[r * 4 + 2] / 256.0f,
+                          (float)in.world[r * 4 + 3]);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.nrow, in.normal[3] * 4 / 256.0f, in.normal[4] * 4 / 256.0f, in.normal[5] * 4 / 256.0f, 0);
+        const float t = in.animated ? in.timer / 256.0f : 0.0f;
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.lerp, t, 1.0f - t, 0, 0);
+        const unsigned fa = in.animated ? (unsigned)in.frameA : 0, fb = in.animated ? (unsigned)in.frameB : 0;
+        C3D_BufInfo bi;
+        BufInfo_Init(&bi);
+        BufInfo_Add(&bi, (u8 *)g.vtx + fa * g.vc * 12, 12, 2, 0x10);
+        BufInfo_Add(&bi, (u8 *)g.vtx + fb * g.vc * 12, 12, 2, 0x32);
+        if (g.col) {
+            BufInfo_Add(&bi, g.col, 4, 1, 0x4);
+            C3D_SetAttrInfo(&s3AttrCol);
+        }
+        else {
+            C3D_SetAttrInfo(&s3AttrFixed);
+            C3D_FVec *fc = C3D_FixedAttribGetWritePtr(4);
+            fc->x = (float)((in.color >> 16) & 0xFF), fc->y = (float)((in.color >> 8) & 0xFF), fc->z = (float)(in.color & 0xFF), fc->w = 255.0f;
+        }
+        C3D_SetBufInfo(&bi);
+        C3D_DrawElements(GPU_TRIANGLES, (int)g.idxCount, C3D_UNSIGNED_SHORT, g.idx);
+    }
+}
+
 // FillScreen: every channel blended towards the colour with its own alpha (fades and flashes). The GPU's
 // constant-colour blend factor is per channel too: dst * (1 - alpha) + colour * alpha.
 bool EmitFill(const Cmd &c)
@@ -1182,12 +1444,14 @@ bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 
 } // namespace
 
+unsigned GpuRender::depthMode = 0;
+
 const GpuRender::Stats &GpuRender::GetStats() { return sStats; }
 const char *GpuRender::LastRefusal() { return sRefusal[0] ? sRefusal : "-"; }
 
 const char *GpuRender::ReasonName()
 {
-    static const char *const kCmd[]   = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE OUTLINE", "FACE", "BLENDED FACE", "SPRITE", "ROTO SPRITE", "LAYER", "LINEBUF", "FACES", "BLENDED FACES" };
+    static const char *const kCmd[]   = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE OUTLINE", "FACE", "BLENDED FACE", "SPRITE", "ROTO SPRITE", "LAYER", "LINEBUF", "FACES", "BLENDED FACES", "3D SCENE" };
     static const char *const kLayer[] = { "HSCROLL LAYER", "VSCROLL LAYER", "ROTOZOOM LAYER", "BASIC LAYER" };
     static const char *const kInk[]   = { "INK NONE", "INK BLEND", "INK ALPHA", "INK ADD", "INK SUB", "INK TINT", "INK MASKED", "INK UNMASKED" };
     const unsigned cmd = sStats.unsupportedCmd;
@@ -1261,6 +1525,7 @@ bool GpuRender::Render(const Stream &stream)
     sFail.reason  = REASON_OK;
     sSprFull      = false;
     sSoftJobCount = sSoftRows = 0;
+    sDraw3DCount  = 0;
     sStats.softLayers = 0;
     sStats.faces      = 0;
     ok            = true;
@@ -1274,6 +1539,7 @@ bool GpuRender::Render(const Stream &stream)
             case CMD_ROTO: ok = EmitRoto(c); break;
             case CMD_FACE: ok = EmitFace(c, stream.arena + c.arena); break;
             case CMD_BLENDED_FACE: ok = EmitBlendedFace(c, stream.arena + c.arena); break;
+            case CMD_SCENE3D: ok = EmitScene3D(c, stream.arena + c.arena); break;
             case CMD_FACES: {
                 const u64 t0 = svcGetSystemTick();
                 ok           = EmitFaces(c, stream.arena + c.arena);
@@ -1383,24 +1649,34 @@ bool GpuRender::Render(const Stream &stream)
     GPU_TIME(STAGE_PXFER, t);
     t = svcGetSystemTick();
 
-    C3D_RenderTargetClear(target, C3D_CLEAR_COLOR, 0x000000FF, 0);
+    // Depth only matters to the 3D scenes; its clear value is the far end for the depth mode in use.
+    C3D_RenderTargetClear(target, sDraw3DCount ? C3D_CLEAR_ALL : C3D_CLEAR_COLOR, 0x000000FF, (GpuRender::depthMode & 4) ? 0 : 0xFFFFFFFF);
     C3D_FrameDrawOn(target);
-    C3D_BindProgram(&sProgram);
-    C3D_SetAttrInfo(&sAttr);
-    BufInfo_Init(&sBufInfo);
-    BufInfo_Add(&sBufInfo, sVbo[sCur], sizeof(Vtx), 2, 0x10);
-    C3D_SetBufInfo(&sBufInfo);
-    C3D_TexEnv *env = C3D_GetTexEnv(0);
-    C3D_TexEnvInit(env);
-    C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0);
-    C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
-    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     C3D_CullFace(GPU_CULL_NONE);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, (C3D_Mtx *)C3DPresent::Projection());
+    auto bind2D = [&]() {
+        C3D_BindProgram(&sProgram);
+        C3D_SetAttrInfo(&sAttr);
+        BufInfo_Init(&sBufInfo);
+        BufInfo_Add(&sBufInfo, sVbo[sCur], sizeof(Vtx), 2, 0x10);
+        C3D_SetBufInfo(&sBufInfo);
+        C3D_TexEnv *env = C3D_GetTexEnv(0);
+        C3D_TexEnvInit(env);
+        C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0);
+        C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+        C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, (C3D_Mtx *)C3DPresent::Projection());
+    };
+    bind2D();
 
     int curBlend = -1, curTex = -1;
     for (unsigned b = 0; b < sBatchCount; ++b) {
         const Batch &bt = sBatches[b];
+        if (bt.tex == TEX_3D) {
+            Draw3DSceneGpu(bt.first);
+            bind2D(); // the 2D state again, textures and blending set anew
+            curBlend = curTex = -1;
+            continue;
+        }
         if (curTex != bt.tex) {
             C3D_TexBind(0, bt.tex == TEX_TILE ? &sTileTex : bt.tex == TEX_SOFT ? &sSoftTex : &sSprTex);
             const float w = bt.tex == TEX_TILE ? TILE_ATLAS_W : bt.tex == TEX_SOFT ? SOFT_W : SPR_ATLAS_W;

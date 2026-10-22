@@ -697,6 +697,10 @@ static void HandleSession(int ctrl)
                     DevTools::swDraw = v != 0;
                 else if (!strncmp(path, "flipcopy", 8))
                     DevTools::swFlipCopy = v != 0;
+                else if (!strncmp(path, "gpu3d", 5))
+                    DevTools::swGpu3D = v != 0;
+                else if (!strncmp(path, "depthmode", 9))
+                    GpuRender::depthMode = (unsigned)v & 7;
                 else if (!strncmp(path, "gpurender", 9))
                     DevTools::swGpuRender = v != 0;
                 else if (!strncmp(path, "gpu", 3))
@@ -717,6 +721,28 @@ static void HandleSession(int ctrl)
                 }
                 else
                     Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|bottomui|syncdraw|vblank <value>");
+            }
+            else if (!strcmp(sub, "MODELS")) {
+                // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
+                char list[FTP_LINE_MAX - 8];
+                unsigned n = 0;
+                for (int m = 0; m < MODEL_COUNT && n + 64 < sizeof(list); ++m) {
+                    const Model &md = modelList[m];
+                    if (!md.vertices || !md.vertCount)
+                        continue;
+                    int32 lo = 0, hi = 0, nlo = 0, nhi = 0;
+                    for (unsigned v = 0; v < (unsigned)md.vertCount * (md.frameCount ? md.frameCount : 1); ++v) {
+                        const ModelVertex &mv = md.vertices[v];
+                        lo = mv.x < lo ? mv.x : lo, lo = mv.y < lo ? mv.y : lo, lo = mv.z < lo ? mv.z : lo;
+                        hi = mv.x > hi ? mv.x : hi, hi = mv.y > hi ? mv.y : hi, hi = mv.z > hi ? mv.z : hi;
+                        nlo = mv.nx < nlo ? mv.nx : nlo, nlo = mv.ny < nlo ? mv.ny : nlo, nlo = mv.nz < nlo ? mv.nz : nlo;
+                        nhi = mv.nx > nhi ? mv.nx : nhi, nhi = mv.ny > nhi ? mv.ny : nhi, nhi = mv.nz > nhi ? mv.nz : nhi;
+                    }
+                    n += (unsigned)snprintf(list + n, sizeof(list) - n, "%d:%ux%u fl%u p[%ld,%ld] n[%ld,%ld] ", m, md.vertCount, md.frameCount, md.flags, (long)lo,
+                                            (long)hi, (long)nlo, (long)nhi);
+                }
+                list[n] = 0;
+                Reply(s, "200 %s", list);
             }
             else if (!strcmp(sub, "CMDS")) {
                 // The next recorded frame's command list, written to debug/cmds.txt (needs the GPU mode or SET record 1)
@@ -949,6 +975,7 @@ int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
 bool DevTools::swGpuRender = false;
+bool DevTools::swGpu3D  = false; // froze the console on its first try (2026-10-22): opt in with SITE SET gpu3d 1
 bool DevTools::swRecord = false; // off until the recorder has been checked (SITE SET record 1)
 bool DevTools::swBottomUi = true;
 bool DevTools::swSyncDraw = false;   // waiting for the previous GPU frame in FrameBegin cost 10 ms (46 fps instead of 60)
