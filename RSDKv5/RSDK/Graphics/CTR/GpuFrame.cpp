@@ -269,6 +269,10 @@ static void DumpCommands()
                 c.clip[2], c.clip[3], (long)c.pos[0], (long)c.pos[1]);
         for (int k = 0; k < 15; ++k)
             fprintf(f, " %ld", (long)c.p[k]);
+        if (c.type == CMD_LAYER) {
+            const TileLayer *l = (const TileLayer *)(uintptr_t)c.p[0];
+            fprintf(f, " | layer %ux%u tiles, shift %u/%u", l->xsize, l->ysize, l->widthShift, l->heightShift);
+        }
         fprintf(f, "\n");
     }
     fclose(f);
