@@ -84,6 +84,13 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   `cmd 0` = `CMD_FILL` before FILL support was added).
 - Everything is off by default and resets at boot (`record`, `gpurender` are not saved in `dev-settings.ini`).
 
+### One reading of the new counters (end of session, scene unknown, draw order `L6 S5 L1 S62 R1 S16`)
+
+`reason 2 cmd 102` (a layer of kind 2 = rotozoom, unsupported: correct refusal), but also `layers 2 tileq 390 empty 0
+rowsout 0`: the first two layers **did** emit 390 tile quads before the refusal. So layer emission is not dead; the
+earlier GHZ reading (`quads 22`, `tileconv 0`, `reason 0`) may have been a frame with no layers at all (transition) or a
+different bug. **Re-measure in Green Hill 1 while running right** before trusting any of the suspects below.
+
 ## Suspects for "layers emit nothing"
 
 1. `EmitLayerBasic/EmitLayerHScroll` use `layer->layout`, `xsize/ysize`, `widthShift` and the `ScanlineInfo` copy: check
