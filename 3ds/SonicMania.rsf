@@ -57,7 +57,7 @@ AccessControlInfo:
 
   # Process Settings
   MemoryType                    : Application # Application/System/Base
-  SystemMode                    : 64MB # 64MB(Default)/96MB/80MB/72MB/32MB
+  SystemMode                    : 80MB # Old 3DS/2DS: 80 MB, as in legend-of-doom-3ds (96 MB crashed the 2DS HOME menu there)
   IdealProcessor                : 0
   AffinityMask                  : 1
   Priority                      : 16

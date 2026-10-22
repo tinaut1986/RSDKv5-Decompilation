@@ -708,6 +708,30 @@ DevTools::StageScope::~StageScope() { StageAdd(stage, svcGetSystemTick() - start
 
 void DevTools::StageAdd(Stage stage, uint64 ticks) { sStageTicks[stage] += ticks; }
 
+void DevTools::Log(const char *fmt, ...)
+{
+    static FILE *log;
+    if (!log) {
+        mkdir("sdmc:/3ds", 0777);
+        mkdir("sdmc:/3ds/Sonic Mania 3DS", 0777);
+        mkdir(kDir, 0777);
+        char path[160];
+        snprintf(path, sizeof(path), "%s/log.txt", kDir);
+        log = fopen(path, "w");
+        if (!log)
+            return;
+    }
+    char line[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+    struct mallinfo mi = mallinfo();
+    fprintf(log, "[%6llu ms] %s  (heap used %u KB, linear free %u KB)\n", (unsigned long long)(svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000)), line,
+            (unsigned)(mi.uordblks >> 10), (unsigned)(linearSpaceFree() >> 10));
+    fflush(log);
+}
+
 static void OpenCsv()
 {
     mkdir("sdmc:/3ds", 0777);

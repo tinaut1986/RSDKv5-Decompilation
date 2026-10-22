@@ -29,6 +29,10 @@ void Shutdown();
 
 void StageAdd(Stage stage, uint64 ticks);
 
+// Appends one line to sdmc:/3ds/Sonic Mania 3DS/debug/log.txt (flushed at once, so it survives a
+// crash or an exit to the HOME menu); also valid before Init().
+void Log(const char *fmt, ...);
+
 struct StageScope {
     Stage stage;
     uint64 start;
@@ -40,10 +44,12 @@ struct StageScope {
 } // namespace RSDK
 
 #define DEV_STAGE(stage) RSDK::DevTools::StageScope devStageScope(RSDK::DevTools::stage)
+#define DEV_LOG(...)     RSDK::DevTools::Log(__VA_ARGS__)
 
 #else
 
 #define DEV_STAGE(stage)
+#define DEV_LOG(...)
 
 #endif
 

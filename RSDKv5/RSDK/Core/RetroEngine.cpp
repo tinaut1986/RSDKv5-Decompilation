@@ -25,15 +25,19 @@ RetroEngine RSDK::engine = RetroEngine();
 
 int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
 {
+    DEV_LOG("RunRetroEngine start");
     ParseArguments(argc, argv);
 
     if (engine.consoleEnabled)
         InitConsole();
     RenderDevice::isRunning = false;
 
-    if (InitStorage()) {
+    const bool storageOk = InitStorage();
+    DEV_LOG("InitStorage: %s", storageOk ? "ok" : "FAILED");
+    if (storageOk) {
         SKU::InitUserCore();
         LoadSettingsINI();
+        DEV_LOG("settings loaded, data pack %s", useDataPack ? "found" : "NOT FOUND");
 
 #if !RETRO_USE_ORIGINAL_CODE
         // temp fix till i properly figure out what exactly went wrong here
@@ -89,6 +93,7 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         }
 
         InitEngine();
+        DEV_LOG("InitEngine done, initialized=%d", (int)engine.initialized);
 #if RETRO_USE_MOD_LOADER
         // we confirmed the game actually is valid & running, lets start some callbacks
         videoSettings.shaderID = shader;
@@ -103,6 +108,7 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
             // No render device, throw a "QUIT" msg onto the message loop and call it a day :)
             SendQuitMsg();
         }
+        DEV_LOG("RenderDevice::Init done, running=%d", (int)RenderDevice::isRunning);
 #endif
     }
 
@@ -336,6 +342,8 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
 #endif
         }
     }
+
+    DEV_LOG("main loop ended: isRunning=%d", (int)RenderDevice::isRunning);
 
     // Shutdown
 
