@@ -159,6 +159,8 @@ RSDK_SOURCES += \
 	RSDKv5/RSDK/Graphics/Animation    		\
 	RSDKv5/RSDK/Graphics/Sprite       		\
 	RSDKv5/RSDK/Graphics/Palette      		\
+	RSDKv5/RSDK/Graphics/Backend/RenderBackend \
+	RSDKv5/RSDK/Cache/Cache      			\
 	RSDKv5/RSDK/Graphics/Video     			\
 	RSDKv5/RSDK/Audio/Audio        			\
 	RSDKv5/RSDK/Input/Input        			\
