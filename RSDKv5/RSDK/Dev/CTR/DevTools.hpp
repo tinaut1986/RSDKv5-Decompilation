@@ -54,6 +54,9 @@ struct Stats {
 void GetStats(Stats *out);
 const char *FtpStatus(); // "192.168.1.141:5000" or why the server is off
 void Mark();             // writes a mark into log.txt and the perf CSV
+// The switches survive between sessions: sdmc:/3ds/Sonic Mania 3DS/dev-settings.ini, written on every change
+// and read at start. DRAW LISTS is not saved: off it leaves a blank picture, which is a poor thing to wake up to.
+void SaveSettings();
 // While a CIA arrives or installs: 0 when nothing is going on, else the phase (1 receiving, 2 installing,
 // 3 restart countdown), the title to show, how far along it is (0..1, or -1 when unknown) and, in phase 3,
 // the seconds left.

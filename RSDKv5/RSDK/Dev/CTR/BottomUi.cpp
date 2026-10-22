@@ -205,6 +205,7 @@ void BottomUi::Update()
     }
     if ((down & KEY_TOUCH) && hit >= 0) {
         kButtons[hit].tap();
+        DevTools::SaveSettings();
         sDirty = true;
     }
     if (hit != sPressed) {

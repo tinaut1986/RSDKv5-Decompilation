@@ -688,8 +688,10 @@ static void HandleSession(int ctrl)
                     DevTools::swVblankWait = v != 0;
                 else
                     ok = false;
-                if (ok)
+                if (ok) {
+                    DevTools::SaveSettings();
                     Reply(s, "200 %s", path);
+                }
                 else
                     Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|syncdraw|vblank <value>");
             }
@@ -1046,8 +1048,47 @@ int DevTools::InstallNotice(char *title, unsigned cap, float *progress, unsigned
     return phase;
 }
 
+static const char *kSettingsPath = "sdmc:/3ds/Sonic Mania 3DS/dev-settings.ini";
+
+void DevTools::SaveSettings()
+{
+    mkdir("sdmc:/3ds", 0777);
+    mkdir("sdmc:/3ds/Sonic Mania 3DS", 0777);
+    FILE *f = fopen(kSettingsPath, "w");
+    if (!f)
+        return;
+    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpu=%d\nsyncdraw=%d\nvblank=%d\n", (int)swFrameSkip, swMaxSkip, (int)swFlipCopy,
+            (int)swGpuPresent, (int)swSyncDraw, (int)swVblankWait);
+    fclose(f);
+}
+
+static void LoadSettings()
+{
+    FILE *f = fopen(kSettingsPath, "r");
+    if (!f)
+        return;
+    char key[24];
+    int v;
+    while (fscanf(f, " %23[^=]=%d", key, &v) == 2) {
+        if (!strcmp(key, "frameskip"))
+            DevTools::swFrameSkip = v != 0;
+        else if (!strcmp(key, "maxskip"))
+            DevTools::swMaxSkip = v < 1 ? 1 : v > 4 ? 4 : v;
+        else if (!strcmp(key, "flipcopy"))
+            DevTools::swFlipCopy = v != 0;
+        else if (!strcmp(key, "gpu"))
+            DevTools::swGpuPresent = v != 0;
+        else if (!strcmp(key, "syncdraw"))
+            DevTools::swSyncDraw = v != 0;
+        else if (!strcmp(key, "vblank"))
+            DevTools::swVblankWait = v != 0;
+    }
+    fclose(f);
+}
+
 void DevTools::Init()
 {
+    LoadSettings();
     StartServer();
     OpenCsv();
     BottomUi::Init(); // the graphical bottom screen; the text console menu stays as the fallback
