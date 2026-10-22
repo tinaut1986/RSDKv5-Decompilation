@@ -1,3 +1,5 @@
+#include "RSDK/Dev/CTR/BottomUi.hpp"
+
 using namespace RSDK;
 
 InputState mappings[12];
@@ -45,7 +47,9 @@ void RSDK::SKU::InputDeviceCTR::UpdateInput()
 
   hidTouchRead(&touchPos);
 
-  if (RSDK::engineDebugMode) {
+  // A touch toggled the libctru text console (consoleClear wiped the bottom screen: it flashed on every tap and
+  // kept clearing while a finger moved). Not while the graphical bottom screen owns it.
+  if (RSDK::engineDebugMode && !RSDK::BottomUi::Ready()) {
     if (touchPos.px != touchPosPrev.px || touchPos.py != touchPosPrev.py) {
       printToConsole = !printToConsole;
 

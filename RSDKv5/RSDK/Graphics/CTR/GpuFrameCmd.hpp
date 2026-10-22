@@ -30,11 +30,13 @@ enum CmdType : uint8 {
     CMD_FACES,
     CMD_BLENDED_FACES,
     CMD_SCENE3D, // a 3D scene's model instances (GpuScene3D::Head + Inst in the arena)
+    CMD_PALETTE, // fullPalette changed while recording (a boss flashing, Super Sonic): the new one in the arena
 };
 
 struct Cmd {
     uint8 type;
     uint8 kind;    // layer type
+    uint8 group;   // sceneInfo.currentDrawGroup when recorded (stereoscopic depth)
     int16 clip[4]; // clipBound_X1, Y1, X2, Y2 when the call was made
     int32 pos[2];  // currentScreen->position
     int32 p[15];   // parameters, per type
@@ -46,6 +48,7 @@ struct Stream {
     const Cmd *cmds;
     unsigned count;
     const uint8 *arena;
+    const uint16 (*basePalette)[256]; // the palette the frame started with when it changed while recording, else NULL
 };
 
 // Bumped by every palette change / tile change / scene load: textures made from older data are stale.

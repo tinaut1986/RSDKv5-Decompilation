@@ -30,6 +30,11 @@ bool Ready();
 struct C3D_RenderTarget_tag;
 void *Target(); // C3D_RenderTarget*
 void *Projection(); // C3D_Mtx*
+// The right eye's target (created on first use; NULL if it cannot be) and the top screen's 3D mode: on while both
+// eyes are drawn (the 3D slider, or DEBUG FORCE 3D), off otherwise.
+void *TargetRight();
+void SetStereo(bool on);
+bool Stereo();
 // The 512x256 linear staging buffer (16-bit texels): free for the GPU renderer, which does not present through it.
 void *Staging();
 

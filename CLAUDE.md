@@ -85,7 +85,7 @@ tools/site.sh CMDS                          # next recorded frame's command list
 tools/site.sh MODELS                        # loaded 3D models (vertices x frames, flags, ranges)
 tools/site.sh "SET gpu3d 1"                 # 3D scenes as GPU model instances (perf/special-stage; off at boot)
 tools/site.sh "SET depthmode N"             # renderer debug bits (docs/gpu-renderer.md: depth convention, mask views)
-tools/shot.sh top|bottom out.png            # screenshot (reads what the GPU drew too)
+tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU drew too; right = right eye in 3D)
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
 ```
 

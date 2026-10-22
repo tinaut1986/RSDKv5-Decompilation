@@ -2,6 +2,7 @@
 #define SCREEN_YSIZE_3DS (240)
 
 #define SCREEN_REFRESH (59.94f)
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 
 using namespace RSDK;
 
@@ -78,6 +79,8 @@ void RenderDevice::FlipScreen()
   u16 *dst = (uint16*) gfxGetFramebuffer(GFX_TOP, GFX_LEFT, 0, 0);
 
   if (!CheckForFrameSkip()) {
+    if (!drawnByGpu)
+      BottomUi::DrawTopOverlaySoft(screens[0].frameBuffer, screens[0].pitch); // OPTIONS > SHOW FPS
     switch (videoSettings.screenCount) {
       default:
       case 0:
@@ -102,6 +105,7 @@ void RenderDevice::FlipScreen()
     }
 
     if (!(drawnByGpu || (DEV_SW_GPUPRESENT && C3DPresent::Ready()))) {
+      C3DPresent::SetStereo(false); // the CPU copy fills the left eye only
       gfxFlushBuffers();
       gfxSwapBuffers();
     }
@@ -204,7 +208,10 @@ void RenderDevice::UpdateFPSCap()
 #endif
   }
   const u64 late = now > sNextTick ? now - sNextTick : 0;
-  sSkipThisPass = DEV_SW_FRAMESKIP && late > TICKS_PER_FRAME && sSkipRun < DEV_SW_MAXSKIP;
+  static unsigned pass;
+  ++pass;
+  // LOCK 30: every other pass is not drawn (the logic keeps its 60 ticks); otherwise a late pass may be skipped.
+  sSkipThisPass = DEV_SW_LOCK30 ? (pass & 1) != 0 : DEV_SW_FRAMESKIP && late > TICKS_PER_FRAME && sSkipRun < DEV_SW_MAXSKIP;
   sSkipRun = sSkipThisPass ? sSkipRun + 1 : 0;
   if (sSkipThisPass)
     DEV_COUNT_SKIP();

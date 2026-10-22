@@ -144,6 +144,47 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   window texture of the floor rendered by the GPU and sampled with one quad a line (needs a window per fog bank or a
   combiner lerp between banks 0 and 7, and VRAM).
 
+## Session 3 (2026-10-22, evening): stereo, lines, palettes, atlas, bottom screen
+
+- **Stereoscopic 3D** (slider, or DEBUG FORCE 3D to measure it on a 2DS): every batch carries a depth (`Batch::depth`,
+  pixels of disparity at the full slider); `CmdDepth`: tile layers by parallax (factor 1.0 on the screen plane, far
+  backgrounds up to 6 px behind), draw groups 12+ (HUD) 2 px in front. The frame is drawn per eye into the left and
+  right targets (`C3DPresent::TargetRight`, `SetStereo` -> `gfxSet3D`), the projection shifted by +-depth/2 per batch.
+  2DS: Green Hill 60 with FORCE 3D, Special Stage 39-43 (GPU-bound: models and the floor twice).
+- **GPU command buffer 256 KB**: one eye of the Special Stage takes ~26-46 %; with two eyes 128 KB overflowed and froze
+  the 2DS (libctru panic, reproduced in Azahar). `SITE STATE` shows `cmdbuf N%` (peak); the right eye is skipped
+  (`eyes dropped`) rather than overflow.
+- **LINE** (`EmitLine`): the software's clipping and Bresenham steps, pixels gathered into horizontal / vertical runs.
+- **PALETTE**: a palette write while recording (a boss flashing, Super Sonic, `Decoration` additive) no longer sends
+  the frame to the CPU. `PaletteWillChange` (the hazard macro, called before the write) keeps the palette the frame
+  started with; the next recorded command is preceded by `CMD_PALETTE` (a 4 KB snapshot). The executor tracks the
+  real banks from the base palette and maps a bank that differs in a snapshot to a virtual bank 8..15
+  (`BANKS = 16`, `sBankMap`, `ApplySnapshot`), handed out in order of appearance so frames reuse their atlas copies.
+  The software replay applies the snapshots too. `SetPaletteMask` keeps the old hazard (`GPUFRAME_MASK_HAZARD`).
+  Sprite key: bank bits 53-56, sheet 57-62 (ConvertSprite reads the sheet from the key: keep both in step).
+- **Sprite atlas packing**: a sprite only went to a shelf of its own height (+8); the title's many heights filled the
+  atlas with half-empty shelves (ATLAS FULL several times a second). With no room for a new shelf, any taller shelf
+  with room is used. Title retries 85 -> 9 in Azahar, no CPU frames.
+- **Out of quads**: a frame that runs out of quads with rotozoom tile runs is retried once with those layers in software
+  (`quad retries`). `gpu3d` is on by default and saved (off, the Special Stage's faces overflowed: 6 fps).
+- **Exit from HOME hung** in "closing" (C3D_Fini waiting for a frame HOME never acknowledged). As in sm-3ds: an APT hook
+  drains the queue with an empty frame on suspend/sleep, and the teardown runs on a thread with a 1 s timeout.
+- **CIA install "out of memory"** in big stages (the heap is ~51.8 MB used and a 128 KB malloc failed): the installer
+  uses a static 32 KB buffer. `SITE STATE` shows heap used and linear free.
+- **Bottom screen** (`BottomUi.cpp`): tabs GAME (run info via `GameInfo.c`, compiled as game code), OPTIONS (FRAMES
+  AUTO / LOCK 30 / NO SKIP, SHOW FPS corner with a mini-screen icon, TOP HUD shown / auto / hidden, RENDERER), DEBUG
+  (the old view + 3D SCENES, FORCE 3D). FPS counter on the top screen in the 5x7 font of the other ports (`UiFont.hpp`),
+  drawn by citro2d in GPU frames and into the software picture in CPU frames. TOP HUD AUTO skips the HUD class's draw
+  while the GAME tab is open (`DevTools::HideEntityClass`). The engine's debug-mode touch toggled the libctru console
+  (consoleClear wiped the bottom screen on every tap): off while the graphical screen is up.
+- **Loading box**: boot and every stage load draw a box on the bottom screen from inside the loaders (step, file, bar,
+  seconds; `BottomUi::LoadBegin/Phase/Item/Detail/End`). The render device now starts before `InitEngine` (as the mod
+  loader's path does) so the boot shows it.
+- Tools: `SITE FREEZE 0|1`, `SITE LAYERS`, `SITE GOTO <Object> [dx]` (moves the player; the camera bounds kill him far
+  away: not useful yet), `SITE SET tab|fps|hud|lock30|force3d`, `tools/shot.sh right`.
+- Still CPU: INK TINT (the pause menu's grey: needs a copy of the frame into a texture), WATER LINE / HSCROLL LAYER split
+  by the water line (seen by the owner in a later stage).
+
 ## 3D scenes as GPU model instances (perf/special-stage, 2026-10-22: works, off by default until merged)
 
 - Why: in the Special Stage the CPU spends ~30 ms a frame on the engine's 3D (vertex transforms in AddModelToScene,

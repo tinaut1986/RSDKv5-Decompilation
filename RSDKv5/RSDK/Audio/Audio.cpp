@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 
 using namespace RSDK;
 
@@ -450,6 +451,7 @@ void RSDK::LoadSfxToSlot(char *filename, uint8 slot, uint8 plays, uint8 scope)
 
 void RSDK::LoadSfx(char *filename, uint8 plays, uint8 scope)
 {
+    BottomUi::LoadDetail(filename);
     // Find an empty sound slot.
     uint16 id = -1;
     for (uint32 i = 0; i < SFX_COUNT; ++i) {

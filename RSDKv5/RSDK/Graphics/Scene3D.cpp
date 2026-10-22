@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 #include "RSDK/Graphics/CTR/GpuScene3D.hpp"
@@ -381,6 +382,7 @@ void RSDK::MatrixInverse(Matrix *dest, Matrix *matrix)
 
 uint16 RSDK::LoadMesh(const char *filename, uint8 scope)
 {
+    BottomUi::LoadDetail(filename);
     if (!scope || scope > SCOPE_STAGE)
         return -1;
 

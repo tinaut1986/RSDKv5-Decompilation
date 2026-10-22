@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
@@ -93,8 +94,17 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
             return 0;
         }
 
+#if RETRO_PLATFORM == RETRO_3DS && !RETRO_USE_MOD_LOADER
+        // The screens first (as the mod loader's path does), so the boot can show what it is loading.
+        const bool renderOk = RenderDevice::Init();
+        DEV_LOG("RenderDevice::Init (early) done, ok=%d", (int)renderOk);
+        BottomUi::LoadBegin("Starting Sonic Mania");
+#endif
         InitEngine();
         DEV_LOG("InitEngine done, initialized=%d", (int)engine.initialized);
+#if RETRO_PLATFORM == RETRO_3DS && !RETRO_USE_MOD_LOADER
+        BottomUi::LoadEnd();
+#endif
 #if RETRO_USE_MOD_LOADER
         // we confirmed the game actually is valid & running, lets start some callbacks
         videoSettings.shaderID = shader;
@@ -102,7 +112,11 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         RenderDevice::SetWindowTitle();
         RenderDevice::lastShaderID = -1;
 #else
+#if RETRO_PLATFORM == RETRO_3DS
+        if (renderOk) {
+#else
         if (RenderDevice::Init()) {
+#endif
             RenderDevice::isRunning = true;
         }
         else {
@@ -387,10 +401,14 @@ void RSDK::ProcessEngine()
                 if (devMenu.modsChanged)
                     RefreshModFolders();
 #endif
+#if RETRO_PLATFORM == RETRO_3DS
+                BottomUi::LoadBegin(sceneInfo.listData[sceneInfo.listPos].name);
+#endif
                 LoadSceneFolder();
                 LoadSceneAssets();
                 InitObjects();
 #if RETRO_PLATFORM == RETRO_3DS
+                BottomUi::LoadEnd();
                 GpuFrame::InvalidateContent();
 #endif
 
@@ -484,9 +502,15 @@ void RSDK::ProcessEngine()
             if (devMenu.modsChanged)
                 RefreshModFolders();
 #endif
+#if RETRO_PLATFORM == RETRO_3DS
+            BottomUi::LoadBegin(sceneInfo.listData[sceneInfo.listPos].name);
+#endif
             LoadSceneFolder();
             LoadSceneAssets();
             InitObjects();
+#if RETRO_PLATFORM == RETRO_3DS
+            BottomUi::LoadEnd();
+#endif
 
 #if RETRO_REV02
 #if !RETRO_USE_ORIGINAL_CODE
@@ -1060,6 +1084,7 @@ void RSDK::LoadGameConfig()
     FileInfo info;
     InitFileInfo(&info);
 
+    BottomUi::LoadPhase("Game config", 0.0f, 0.1f);
     if (LoadFile(&info, "Data/Game/GameConfig.bin", FMODE_RB)) {
         char buffer[0x100];
         uint32 sig = ReadInt32(&info, false);
@@ -1123,7 +1148,9 @@ void RSDK::LoadGameConfig()
         }
 
         uint8 sfxCnt = ReadInt8(&info);
+        BottomUi::LoadPhase("Sound effects", 0.1f, 0.9f);
         for (int32 i = 0; i < sfxCnt; ++i) {
+            BottomUi::LoadItem(i, sfxCnt);
             ReadString(&info, buffer);
             uint8 maxConcurrentPlays = ReadInt8(&info);
             LoadSfx(buffer, maxConcurrentPlays, SCOPE_GLOBAL);

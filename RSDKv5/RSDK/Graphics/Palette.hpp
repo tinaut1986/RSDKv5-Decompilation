@@ -71,7 +71,7 @@ inline void SetPaletteEntry(uint8 bankID, uint8 index, uint32 color)
 
 inline void SetPaletteMask(uint32 color)
 {
-    GPUFRAME_PALETTE_HAZARD();
+    GPUFRAME_MASK_HAZARD();
     maskColor = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
 }
 

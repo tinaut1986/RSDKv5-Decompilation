@@ -6,8 +6,9 @@
   (v1 done) -> stereoscopic 3D. **Technical detail and next steps of R1: [`docs/gpu-renderer.md`](gpu-renderer.md).**
 - **Where R1 stands (end of 2026-10-22):** the GPU renderer works and is what the owner plays with (`SITE GPU 1` / the
   RENDERER button, saved in `dev-settings.ini`; CPU stays the default at a first boot). On the 2DS: Green Hill 1 60 fps,
-  title and main menu all on the GPU, Special Stage 48-60 fps with `SITE SET gpu3d 1` (~17 without; floor as tile runs). **Next: the bottom screen
-  tabs (options, game info, force 3D) asked by the owner**, then merge `perf/special-stage`. Full
+  title and main menu all on the GPU, Special Stage 48-60 fps with `SITE SET gpu3d 1` (~17 without; floor as tile runs). Bottom screen tabs, loading box,
+  stereo/FORCE 3D, LINE and PALETTE on the GPU done on `feat/bottom-tabs` (owner-checked on the 2DS). **Next (owner's
+  list): savestates tab, in-game updates by channel, language, bottom-screen themes, INK TINT (pause), water line.** Full
   detail, next steps and lessons: [`docs/gpu-renderer.md`](gpu-renderer.md).
 - **Active release line**: `release/v0.1.0`, on `origin`.
 - **Console**: the owner's Old 2DS at `192.168.1.141` (DHCP: ping first; `tools/site.sh -i IP`). The build on it is the
@@ -21,7 +22,8 @@
 |---|---|
 | `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
 | `release/v0.1.0` | Holds, merged: build/docs, dev tools, GPU presentation, bottom UI, clock pacing + frame skip, persistent switches, draw-order tooling (owner-checked); `feat/gpu-renderer` (renderer: layers, sprites, rotozoom sprites, RENDERER switch, frame counters, clean exit, scrolling bottom screen); `feat/gpu-faces` (faces, chunked big sprites, atlas retry, software layers); `feat/gpu-special-stage` (Special Stage through faces on the GPU). All seen by the owner on the 2DS. |
-| `perf/special-stage` | **active, not merged**: 3D scenes as GPU model instances (`gpu3d`, off by default), 128 KB command buffer, 24-bit depth + stencil, masked inks (stencil), faster tile conversion, sprite key with 16-bit Y, chunks cut to the frame, `tools/azahar.sh`, rotozoom layers as tile runs (Special Stage floor, title island), tile atlas eviction, `SITE FREEZE`/`LAYERS`. The owner saw the menu, Green Hill's waterfall and the Special Stage working; still to look at: the title's logo shine and the collapsing floors. Merge when the owner says so. |
+| `feat/bottom-tabs` | **active**, cut from `perf/special-stage`: bottom-screen tabs (GAME, OPTIONS, DEBUG), top FPS counter, loading box, stereo 3D / FORCE 3D, LINE and PALETTE on the GPU, atlas packing, HOME-exit fix, installer buffer. Owner checked it on the 2DS (2026-10-22). |
+| `perf/special-stage` | **not merged**: 3D scenes as GPU model instances (`gpu3d`, off by default), 128 KB command buffer, 24-bit depth + stencil, masked inks (stencil), faster tile conversion, sprite key with 16-bit Y, chunks cut to the frame, `tools/azahar.sh`, rotozoom layers as tile runs (Special Stage floor, title island), tile atlas eviction, `SITE FREEZE`/`LAYERS`. The owner saw the menu, Green Hill's waterfall and the Special Stage working; still to look at: the title's logo shine and the collapsing floors. Merge when the owner says so. |
 | `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage` | merged into the release; may be deleted. |
 | `feat/loading-screen` | bottom-screen loading indicator; **not confirmed by the owner, not merged**; conflicts in spirit with `BottomUi` (text console). |
 | `feat/render-backend` | `gfx-rewrite` base, unused (superseded by record/replay). Reference or delete. |
