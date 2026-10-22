@@ -10,6 +10,15 @@
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 #include "RSDK/Graphics/CTR/gpu_shbin.h"
+#include "RSDK/Dev/CTR/DevTools.hpp"
+
+// Dev tools timing of the GPU path: geometry build -> PCOPY, atlas conversions -> PXFER, the citro3d frame (the wait
+// for the previous GPU frame, the submit) -> PFRAME.
+#if MANIA_DEV_TOOLS
+#define GPU_TIME(stage, since) RSDK::DevTools::StageAdd(RSDK::DevTools::stage, svcGetSystemTick() - (since))
+#else
+#define GPU_TIME(stage, since) ((void)0)
+#endif
 
 using namespace RSDK;
 using namespace RSDK::GpuFrame;
@@ -89,12 +98,15 @@ GpuRender::Stats sStats;
 // The comparison catches every writer of fullPalette, hooked or not.
 uint32 sGen = 1;
 uint16 sPalShadow[BANKS][PALETTE_BANK_SIZE];
+u16 sTexPal[BANKS][PALETTE_BANK_SIZE]; // the palette as atlas texels (index 0 transparent), kept with the shadow
 uint32 sGroupGen[BANKS][32];
 
 // Tile cache: one cell per (bank, tile id)
 int16 sTileCell[BANKS][TILE_IDS];
 uint32 sTileStamp[BANKS][TILE_IDS];
 uint32 sTileGroups[TILE_IDS]; // palette groups the tile's pixels use (valid once converted)
+uint32 sTileHash[TILE_COUNT];  // content of each base tile when DrawAniTile last touched it (it rewrites unchanged frames too)
+bool sSprFull;                 // the last ATLAS_FULL came from the sprite atlas
 unsigned sTileCellsUsed;
 
 // Sprite cache: shelves of 8-pixel granularity
@@ -123,6 +135,18 @@ inline u16 ToTexel(uint16 c565)
     return (u16)((r << 11) | ((g >> 1) << 6) | (b << 1) | 1);
 }
 
+// Morton offset of (x, y) inside an 8x8 block, indexed y * 8 + x.
+struct MortonTable {
+    uint8 v[64];
+    MortonTable()
+    {
+        for (unsigned y = 0; y < 8; ++y)
+            for (unsigned x = 0; x < 8; ++x)
+                v[y * 8 + x] = (uint8)Morton(x, y);
+    }
+};
+const MortonTable kMorton;
+
 inline void Put(u16 *base, unsigned atlasW, unsigned X, unsigned Y, u16 texel)
 {
     base[((((Y >> 3) * (atlasW >> 3) + (X >> 3)) << 6) | Morton(X & 7, Y & 7))] = texel;
@@ -138,12 +162,8 @@ inline void Dirty(unsigned &lo, unsigned &hi, unsigned atlasW, unsigned X, unsig
         hi = last;
 }
 
-void ResetCaches()
+void ResetSprites()
 {
-    memset(sTileCell, 0xFF, sizeof(sTileCell)); // -1
-    memset(sTileStamp, 0, sizeof(sTileStamp));
-    sTileCellsUsed = 0;
-    ++sGen; // everything converted from now on is newer than any group change so far
     memset(sSlots, 0, sizeof(sSlots));
     sShelfCount = sSlotsUsed = 0;
     sShelfNextY = 0;
@@ -157,6 +177,18 @@ void ResetCaches()
     sSprDirtyLo = 0;
     sSprDirtyHi = 8 * 8 * 2;
 }
+
+void ResetCaches()
+{
+    memset(sTileCell, 0xFF, sizeof(sTileCell)); // -1
+    memset(sTileStamp, 0, sizeof(sTileStamp));
+    memset(sTileHash, 0, sizeof(sTileHash));
+    sTileCellsUsed = 0;
+    ++sGen; // everything converted from now on is newer than any group change so far
+    ResetSprites();
+}
+
+void TrackPalette(bool all = false);
 
 bool Setup()
 {
@@ -203,6 +235,7 @@ bool Setup()
     AttrInfo_AddLoader(&sAttr, 1, GPU_UNSIGNED_BYTE, 4); // r, g, b, a
 
     ResetCaches();
+    TrackPalette(true);
     sReady  = true;
     sFailed = false;
     return true;
@@ -256,17 +289,21 @@ bool GroupsChanged(unsigned bank, uint32 groups, uint32 stamp)
 }
 
 // Compares the palette with the last frame's and stamps the groups that changed with this frame's generation.
-void TrackPalette()
+// `all` refreshes every bank (at start: a bank that never changes would keep an empty texel table).
+void TrackPalette(bool all)
 {
     ++sGen;
     for (unsigned b = 0; b < BANKS; ++b) {
         const uint32 *now = (const uint32 *)fullPalette[b], *was = (const uint32 *)sPalShadow[b];
-        if (!memcmp(now, was, sizeof(sPalShadow[b])))
+        if (!all && !memcmp(now, was, sizeof(sPalShadow[b])))
             continue;
         for (unsigned g = 0; g < 32; ++g) // a group is 8 colours, 4 words
             if (now[g * 4] != was[g * 4] || now[g * 4 + 1] != was[g * 4 + 1] || now[g * 4 + 2] != was[g * 4 + 2] || now[g * 4 + 3] != was[g * 4 + 3])
                 sGroupGen[b][g] = sGen;
         memcpy(sPalShadow[b], fullPalette[b], sizeof(sPalShadow[b]));
+        sTexPal[b][0] = 0;
+        for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i)
+            sTexPal[b][i] = ToTexel(fullPalette[b][i]);
     }
 }
 
@@ -284,7 +321,15 @@ int EnsureTile(unsigned id, unsigned bank)
         sTileStamp[bank][id] = 0;
     }
     const uint32 stamp = sTileStamp[bank][id];
-    if (!stamp || (stamp != sGen && GroupsChanged(bank, sTileGroups[id], stamp))) {
+    if (stamp == sGen)
+        return cell;
+    // Unchanged colours: the copy is as good as one made now, so it takes this generation and the tile's other
+    // uses this frame (the same water tile on many lines) stop at the test above.
+    if (stamp && !GroupsChanged(bank, sTileGroups[id], stamp)) {
+        sTileStamp[bank][id] = sGen;
+        return cell;
+    }
+    {
         if (sPendingCount >= MAX_PENDING)
             return -3;
         sTileStamp[bank][id] = sGen;
@@ -321,11 +366,15 @@ bool AllocSprite(unsigned w8, unsigned h8, unsigned *x, unsigned *y)
     return true;
 }
 
+unsigned sBadData;   // which check of EnsureSprite failed (GpuRender::ReasonName)
+char sRefusal[160]; // the last refused command (GpuRender::LastRefusal)
+
 SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, int h, int *refuse)
 {
-    *refuse = 0;
-    if (sheet >= SURFACE_COUNT || !gfxSurface[sheet].pixels || sprX < 0 || sprY < 0 || w <= 0 || h <= 0 || sprX >= 16384 || sprY >= 16384 || w >= 2048 || h >= 2048 ||
-        bank >= BANKS) {
+    *refuse   = 0;
+    sBadData  = sheet >= SURFACE_COUNT ? 1 : !gfxSurface[sheet].pixels ? 2 : (sprX < 0 || sprY < 0) ? 3 : (w <= 0 || h <= 0) ? 4
+                : (sprX >= 16384 || sprY >= 16384 || w >= 2048 || h >= 2048) ? 5 : bank >= BANKS ? 6 : 0;
+    if (sBadData) {
         *refuse = GpuRender::REASON_BAD_DATA;
         return NULL;
     }
@@ -338,7 +387,9 @@ SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, 
     for (unsigned probe = 0; probe < SPR_SLOTS; ++probe, i = (i + 1) % SPR_SLOTS) {
         SprSlot &s = sSlots[i];
         if (s.key == key) {
-            if (!s.stamp || (s.stamp != sGen && GroupsChanged(bank, s.groups, s.stamp))) {
+            if (s.stamp && s.stamp != sGen && !GroupsChanged(bank, s.groups, s.stamp))
+                s.stamp = sGen; // still good: see EnsureTile
+            if (s.stamp != sGen) {
                 if (sPendingCount >= MAX_PENDING) {
                     *refuse = GpuRender::REASON_QUAD_LIMIT;
                     return NULL;
@@ -350,13 +401,15 @@ SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, 
         }
         if (!s.key) {
             if (sSlotsUsed >= SPR_SLOTS * 3 / 4 || sPendingCount >= MAX_PENDING) {
-                *refuse = GpuRender::REASON_ATLAS_FULL;
+                sSprFull = true;
+                *refuse  = GpuRender::REASON_ATLAS_FULL;
                 return NULL;
             }
             const unsigned w8 = (w + 7) & ~7u, h8 = (h + 7) & ~7u;
             unsigned ax, ay;
             if (!AllocSprite(w8, h8, &ax, &ay)) {
-                *refuse = GpuRender::REASON_ATLAS_FULL;
+                sSprFull = true;
+                *refuse  = GpuRender::REASON_ATLAS_FULL;
                 return NULL;
             }
             s.key  = key;
@@ -378,12 +431,20 @@ void ConvertTile(const Pending &p)
     const uint8 *src = &tilesetPixels[TILE_DATASIZE * p.id];
     const uint16 *pal = fullPalette[p.bank];
     const unsigned X = (p.cell % (TILE_ATLAS_W / 16)) * 16, Y = (p.cell / (TILE_ATLAS_W / 16)) * 16;
-    uint32 groups = 0;
-    for (unsigned y = 0; y < 16; ++y)
-        for (unsigned x = 0; x < 16; ++x) {
-            const unsigned idx = src[y * 16 + x];
-            groups |= (idx ? 1u : 0u) << (idx >> 3);
-            Put(sTileData, TILE_ATLAS_W, X + x, Y + y, idx ? ToTexel(pal[idx]) : 0);
+    (void)pal;
+    const u16 *tex = sTexPal[p.bank];
+    uint32 groups  = 0;
+    // Four 8x8 blocks, each 64 consecutive texels in Morton order.
+    for (unsigned by = 0; by < 2; ++by)
+        for (unsigned bx = 0; bx < 2; ++bx) {
+            u16 *blk        = &sTileData[(((Y >> 3) + by) * (TILE_ATLAS_W >> 3) + (X >> 3) + bx) << 6];
+            const uint8 *sp = src + by * 8 * 16 + bx * 8;
+            for (unsigned y = 0; y < 8; ++y)
+                for (unsigned x = 0; x < 8; ++x) {
+                    const unsigned idx = sp[y * 16 + x];
+                    groups |= (idx ? 1u : 0u) << (idx >> 3);
+                    blk[kMorton.v[y * 8 + x]] = tex[idx];
+                }
         }
     sTileGroups[p.id] = groups;
     Dirty(sTileDirtyLo, sTileDirtyHi, TILE_ATLAS_W, X, Y, 16, 16);
@@ -428,7 +489,8 @@ bool AddQuad(uint8 tex, uint8 blend, float x0, float y0, float x1, float y1, flo
     ++sBatches[sBatchCount - 1].count;
     Vtx *v = &sVbo[sCur][sQuadCount * 4];
     ++sQuadCount;
-    const float iu = 1.0f / atlasW, iv = 1.0f / atlasH;
+    // The atlas sizes are powers of two known here: no division per quad (the ARM11's VFP divides slowly).
+    const float iu = atlasW == TILE_ATLAS_W ? 1.0f / TILE_ATLAS_W : 1.0f / SPR_ATLAS_W, iv = atlasH == TILE_ATLAS_H ? 1.0f / TILE_ATLAS_H : 1.0f / SPR_ATLAS_H;
     // Texels are rows from the top; the PICA samples memory row 0 at v = 1.
     const float U0 = u0 * iu, U1 = u1 * iu, V0 = 1.0f - v0 * iv, V1 = 1.0f - v1 * iv;
     v[0] = { x0, y0, U0, V0, r, g, b, a };
@@ -477,6 +539,56 @@ bool SpriteInk(int32 ink, int32 *alpha, uint8 *blend, bool *skip)
     }
 }
 
+// A sprite too big for one atlas entry (menu pictures, wide parallax pieces): the part on screen is cut into chunks of
+// CHUNK x CHUNK sheet pixels aligned on the sheet, each cached as a sprite of its own, so frames reuse them.
+enum { CHUNK = 128 };
+
+bool EmitSpriteChunked(const Cmd &c, int32 X0, int32 Y0, int32 W0, int32 H0, int32 sprX0, int32 sprY0, int32 direction, int32 sheetID, uint8 blend,
+                       int32 alpha)
+{
+    const bool fx = direction == FLIP_X || direction == FLIP_XY, fy = direction == FLIP_Y || direction == FLIP_XY;
+    // The visible screen rectangle, then the sheet range it shows.
+    const int32 vx0 = X0 > c.clip[0] ? X0 : c.clip[0], vx1 = X0 + W0 < c.clip[2] ? X0 + W0 : c.clip[2];
+    const int32 vy0 = Y0 > c.clip[1] ? Y0 : c.clip[1], vy1 = Y0 + H0 < c.clip[3] ? Y0 + H0 : c.clip[3];
+    if (vx0 >= vx1 || vy0 >= vy1)
+        return true;
+    const int32 su0 = fx ? sprX0 + (X0 + W0 - vx1) : sprX0 + (vx0 - X0), su1 = su0 + (vx1 - vx0);
+    const int32 sv0 = fy ? sprY0 + (Y0 + H0 - vy1) : sprY0 + (vy0 - Y0), sv1 = sv0 + (vy1 - vy0);
+    uint8 bank;
+    if (!UniformBank(vy0, vy1, &bank))
+        return Refuse(GpuRender::REASON_PALETTE_LINES);
+    const GFXSurface &g = gfxSurface[sheetID < SURFACE_COUNT ? sheetID : 0];
+    for (int32 cv = sv0 - (sv0 % CHUNK); cv < sv1; cv += CHUNK) {
+        for (int32 cu = su0 - (su0 % CHUNK); cu < su1; cu += CHUNK) {
+            // The whole chunk is cached (clamped to the sheet), the visible part of it is drawn.
+            const int32 cw = cu + CHUNK <= g.width ? CHUNK : g.width - cu, ch = cv + CHUNK <= g.height ? CHUNK : g.height - cv;
+            const int32 u0 = su0 > cu ? su0 : cu, u1 = su1 < cu + cw ? su1 : cu + cw;
+            const int32 v0 = sv0 > cv ? sv0 : cv, v1 = sv1 < cv + ch ? sv1 : cv + ch;
+            if (u0 >= u1 || v0 >= v1)
+                continue;
+            int refuse;
+            SprSlot *slot = EnsureSprite((unsigned)sheetID, bank, cu, cv, cw, ch, &refuse);
+            if (!slot)
+                return Refuse((GpuRender::Reason)refuse);
+            const float dx0 = (float)(fx ? X0 + (sprX0 + W0 - u1) : X0 + (u0 - sprX0)), dx1 = dx0 + (float)(u1 - u0);
+            const float dy0 = (float)(fy ? Y0 + (sprY0 + H0 - v1) : Y0 + (v0 - sprY0)), dy1 = dy0 + (float)(v1 - v0);
+            float tu0 = (float)(slot->x + (u0 - cu)), tu1 = (float)(slot->x + (u1 - cu));
+            float tv0 = (float)(slot->y + (v0 - cv)), tv1 = (float)(slot->y + (v1 - cv));
+            if (fx) {
+                const float t = tu0;
+                tu0 = tu1, tu1 = t;
+            }
+            if (fy) {
+                const float t = tv0;
+                tv0 = tv1, tv1 = t;
+            }
+            if (!AddQuad(TEX_SPRITE, blend, dx0, dy0, dx1, dy1, tu0, tv0, tu1, tv1, SPR_ATLAS_W, SPR_ATLAS_H, 255, 255, 255, (uint8)alpha))
+                return Refuse(GpuRender::REASON_QUAD_LIMIT);
+        }
+    }
+    return true;
+}
+
 bool EmitSprite(const Cmd &c)
 {
     const int32 *p = c.p;
@@ -511,6 +623,9 @@ bool EmitSprite(const Cmd &c)
             break;
         default: return Refuse(GpuRender::REASON_INK, (unsigned)ink);
     }
+
+    if (w0 * h0 > SPR_MAX_PIXELS || w0 > 512 || h0 > 256)
+        return EmitSpriteChunked(c, x, y, w0, h0, sprX0, sprY0, direction, sheetID, blend, alpha);
 
     int32 widthFlip = width, heightFlip = height;
     if (width + x > c.clip[2])
@@ -634,6 +749,75 @@ bool EmitRoto(const Cmd &c)
     return true;
 }
 
+// The RGB565 the software renderer would store for a 24-bit colour, widened back to 8 bits by bit replication.
+void Widen565(uint32 color, uint8 *r, uint8 *g, uint8 *b)
+{
+    const uint16 c16  = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
+    const unsigned r5 = c16 >> 11, g6 = (c16 >> 5) & 0x3F, b5 = c16 & 0x1F;
+    *r = (uint8)((r5 << 3) | (r5 >> 2)), *g = (uint8)((g6 << 2) | (g6 >> 4)), *b = (uint8)((b5 << 3) | (b5 >> 2));
+}
+
+// DrawFace / DrawBlendedFace: a convex polygon (vertices in 16.16 screen coordinates) as a fan of triangles over the
+// solid block of the sprite atlas, each triangle a quad with its last corner repeated. `colors` is NULL for one flat
+// colour (r, g, b), else 0xRRGGBB per vertex, which the GPU interpolates as the software does along the edges.
+bool EmitPolygon(const Cmd &c, const Vector2 *v, int32 n, const uint32 *colors, uint8 r, uint8 g, uint8 b, int32 ink, int32 alpha)
+{
+    if (n < 3)
+        return true;
+    uint8 blend;
+    bool skip;
+    if (!SpriteInk(ink, &alpha, &blend, &skip))
+        return false;
+    if (skip)
+        return true;
+    float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
+    for (int32 i = 0; i < n; ++i) {
+        const float x = v[i].x / 65536.0f, y = v[i].y / 65536.0f;
+        minX = x < minX ? x : minX, maxX = x > maxX ? x : maxX;
+        minY = y < minY ? y : minY, maxY = y > maxY ? y : maxY;
+    }
+    if (maxX <= c.clip[0] || minX >= c.clip[2] || maxY <= c.clip[1] || minY >= c.clip[3])
+        return true;
+    if ((minX < c.clip[0] && c.clip[0] > 0) || (minY < c.clip[1] && c.clip[1] > 0) || (maxX > c.clip[2] && c.clip[2] < screens[0].size.x)
+        || (maxY > c.clip[3] && c.clip[3] < screens[0].size.y))
+        return Refuse(GpuRender::REASON_UNSUPPORTED, colors ? CMD_BLENDED_FACE : CMD_FACE);
+
+    uint8 vr[64], vg[64], vb[64];
+    for (int32 i = 0; i < n; ++i) {
+        if (colors)
+            Widen565(colors[i], &vr[i], &vg[i], &vb[i]);
+        else
+            vr[i] = r, vg[i] = g, vb[i] = b;
+    }
+    for (int32 i = 1; i + 1 < n; i += 2) {
+        // Two triangles per quad where the fan allows it: (0, i, i + 1, i + 2), else (0, i, i + 1, i + 1).
+        const int32 k[4] = { 0, i, i + 1, i + 2 < n ? i + 2 : i + 1 };
+        float px[4], py[4];
+        const float tu[4] = { 4, 4, 4, 4 }, tv[4] = { 4, 4, 4, 4 };
+        for (int j = 0; j < 4; ++j)
+            px[j] = v[k[j]].x / 65536.0f, py[j] = v[k[j]].y / 65536.0f;
+        if (!AddQuadFree(TEX_SPRITE, blend, px, py, tu, tv, SPR_ATLAS_W, SPR_ATLAS_H, vr[0], vg[0], vb[0], (uint8)alpha))
+            return Refuse(GpuRender::REASON_QUAD_LIMIT);
+        Vtx *q = &sVbo[sCur][(sQuadCount - 1) * 4];
+        for (int j = 0; j < 4; ++j)
+            q[j].r = vr[k[j]], q[j].g = vg[k[j]], q[j].b = vb[k[j]];
+    }
+    return true;
+}
+
+bool EmitFace(const Cmd &c, const uint8 *arena)
+{
+    uint8 r, g, b;
+    Widen565(((uint32)c.p[1] << 16) | ((uint32)c.p[2] << 8) | (uint32)c.p[3], &r, &g, &b);
+    return EmitPolygon(c, (const Vector2 *)arena, c.p[0], NULL, r, g, b, c.p[5], c.p[4]);
+}
+
+bool EmitBlendedFace(const Cmd &c, const uint8 *arena)
+{
+    const int32 n = c.p[0];
+    return EmitPolygon(c, (const Vector2 *)arena, n, (const uint32 *)(arena + n * sizeof(Vector2)), 0, 0, 0, c.p[2], c.p[1]);
+}
+
 // FillScreen: every channel blended towards the colour with its own alpha (fades and flashes). The GPU's
 // constant-colour blend factor is per channel too: dst * (1 - alpha) + colour * alpha.
 bool EmitFill(const Cmd &c)
@@ -719,13 +903,16 @@ bool EmitTileRun(TileLayer *layer, unsigned bank, int row, int srcY, int dy, int
         ++sStats.rowsOut;
         return true;
     } // outside the layout: nothing is drawn (the software reads garbage; this is the sane reading)
-    int sx = dx0;
-    while (sx < dx1) {
+    int sx  = dx0;
+    int col = ((dx0 + px) >> 4) % layer->xsize; // one division per run; the ARM11 has no divide instruction
+    if (col < 0)
+        col += layer->xsize;
+    const uint16 *rowLayout = &layer->layout[row << layer->widthShift];
+    for (; sx < dx1; col = col + 1 == layer->xsize ? 0 : col + 1) {
         const int X     = sx + px;
-        const int col   = (X >> 4) % layer->xsize;
         const int inX   = X & 15;
         const int w     = (16 - inX) < (dx1 - sx) ? (16 - inX) : (dx1 - sx);
-        const uint16 t  = layer->layout[col + (row << layer->widthShift)];
+        const uint16 t  = rowLayout[col];
         if (t >= 0xFFFF)
             ++sStats.emptyTiles;
         if (t < 0xFFFF) {
@@ -810,6 +997,7 @@ bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 } // namespace
 
 const GpuRender::Stats &GpuRender::GetStats() { return sStats; }
+const char *GpuRender::LastRefusal() { return sRefusal[0] ? sRefusal : "-"; }
 
 const char *GpuRender::ReasonName()
 {
@@ -830,13 +1018,17 @@ const char *GpuRender::ReasonName()
         case REASON_ATLAS_FULL: return "ATLAS FULL";
         case REASON_QUAD_LIMIT: return "QUAD LIMIT";
         case REASON_SPRITE_SIZE: return "SPRITE SIZE";
-        case REASON_BAD_DATA: return "BAD DATA";
+        case REASON_BAD_DATA: {
+            static const char *const kBad[] = { "BAD DATA", "BAD SHEET ID", "SHEET NOT LOADED", "NEGATIVE SPRITE POS", "EMPTY SPRITE", "SPRITE TOO BIG", "BAD BANK" };
+            return sBadData < sizeof(kBad) / sizeof(kBad[0]) ? kBad[sBadData] : "BAD DATA";
+        }
     }
     return "?";
 }
 
 bool GpuRender::Render(const Stream &stream)
 {
+    const u64 tStart = svcGetSystemTick();
     sStats.reason = REASON_OK;
     sStats.layerCmds = sStats.tileQuads = sStats.emptyTiles = sStats.rowsOut = 0;
     if (!Setup()) {
@@ -857,6 +1049,15 @@ bool GpuRender::Render(const Stream &stream)
             while (bits) {
                 const unsigned t = w * 32 + (unsigned)__builtin_ctz(bits);
                 bits &= bits - 1;
+                // FNV-1a of the base tile: DrawAniTile rewrites tiles every frame, mostly with the same picture.
+                const uint32 *px = (const uint32 *)&tilesetPixels[t * TILE_DATASIZE];
+                uint32 h         = 2166136261u;
+                for (unsigned k = 0; k < TILE_DATASIZE / 4; ++k)
+                    h = (h ^ px[k]) * 16777619u;
+                h |= 1; // 0 means "not hashed yet"
+                if (h == sTileHash[t])
+                    continue;
+                sTileHash[t] = h;
                 for (unsigned b = 0; b < BANKS; ++b)
                     for (unsigned v = 0; v < 4; ++v)
                         sTileStamp[b][t + v * TILE_COUNT] = 0;
@@ -864,20 +1065,26 @@ bool GpuRender::Render(const Stream &stream)
         }
     }
 
-    sCur        = (sCur + 1) & 1;
-    sQuadCount  = 0;
-    sBatchCount = 0;
+    sCur = (sCur + 1) & 1;
+    bool ok;
+    unsigned i = 0;
+    for (int attempt = 0;; ++attempt) {
+    sQuadCount    = 0;
+    sBatchCount   = 0;
     sPendingCount = 0;
-    sFail.reason = REASON_OK;
-    bool ok = true;
+    sFail.reason  = REASON_OK;
+    sSprFull      = false;
+    ok            = true;
     memset(sLineBuf, 0, sizeof(sLineBuf));
 
-    for (unsigned i = 0; i < stream.count && ok; ++i) {
+    for (i = 0; i < stream.count && ok; ++i) {
         const Cmd &c = stream.cmds[i];
         switch (c.type) {
             case CMD_LINEBUF: memcpy(sLineBuf, stream.arena + c.arena, sizeof(sLineBuf)); break;
             case CMD_SPRITE: ok = EmitSprite(c); break;
             case CMD_ROTO: ok = EmitRoto(c); break;
+            case CMD_FACE: ok = EmitFace(c, stream.arena + c.arena); break;
+            case CMD_BLENDED_FACE: ok = EmitBlendedFace(c, stream.arena + c.arena); break;
             case CMD_RECT: ok = EmitRect(c); break;
             case CMD_FILL: ok = EmitFill(c); break;
             case CMD_LAYER: {
@@ -897,7 +1104,24 @@ bool GpuRender::Render(const Stream &stream)
             default: ok = Refuse(REASON_UNSUPPORTED, c.type); break;
         }
     }
+    // The sprite atlas filled up mid-frame: empty it and build the frame once more from scratch (the tiles queued so
+    // far go back to unconverted, the sprites are all new).
+    if (ok || !sSprFull || attempt > 0)
+        break;
+    for (unsigned k = 0; k < sPendingCount; ++k)
+        if (sPending[k].kind == 0)
+            sTileStamp[sPending[k].bank][sPending[k].id] = 0;
+    ResetSprites();
+    ++sStats.atlasRetries;
+    }
     if (!ok) {
+        // What was refused, for SITE STATE: the command and its parameters.
+        if (i > 0) {
+            const Cmd &f = stream.cmds[i - 1];
+            int n = snprintf(sRefusal, sizeof(sRefusal), "#%u type %u kind %u clip %d %d %d %d |", i - 1, f.type, f.kind, f.clip[0], f.clip[1], f.clip[2], f.clip[3]);
+            for (int k = 0; k < 15 && n > 0 && n < (int)sizeof(sRefusal); ++k)
+                n += snprintf(sRefusal + n, sizeof(sRefusal) - n, " %ld", (long)f.p[k]);
+        }
         // The conversions this frame queued are dropped with it: mark them unconverted again, or the cells would
         // keep whatever they held (the cache trusts its stamps until a colour the entry uses changes).
         for (unsigned i = 0; i < sPendingCount; ++i) {
@@ -910,17 +1134,25 @@ bool GpuRender::Render(const Stream &stream)
         sStats.reason         = sFail.reason;
         sStats.unsupportedCmd = sFail.cmd;
         if (sFail.reason == REASON_ATLAS_FULL) {
-            ResetCaches(); // start over next frame
+            // Start over next frame: only the sprites when their atlas filled up (the tiles stay valid).
+            if (sSprFull)
+                ResetSprites();
+            else
+                ResetCaches();
             sSeenContent = contentVersion;
         }
         return false;
     }
 
     // ---- the frame is decided: textures, then geometry
+    GPU_TIME(STAGE_PCOPY, tStart);
+    u64 t = svcGetSystemTick();
     C3D_RenderTarget *target = (C3D_RenderTarget *)C3DPresent::Target();
     // Without SYNCDRAW, which waits for the next vblank (up to 16 ms): FrameBegin already waits until the GPU has
     // finished the previous frame, so the atlas cells rewritten below are no longer being read.
     C3D_FrameBegin(0);
+    GPU_TIME(STAGE_PFRAME, t);
+    t            = svcGetSystemTick();
     sTileDirtyLo = sSprDirtyLo = ~0u;
     sTileDirtyHi = sSprDirtyHi = 0;
     for (unsigned i = 0; i < sPendingCount; ++i) {
@@ -941,6 +1173,8 @@ bool GpuRender::Render(const Stream &stream)
     GSPGPU_FlushDataCache(sSprData, 8 * 8 * 2 * 8);
     GSPGPU_FlushDataCache(sVbo[sCur], sizeof(Vtx) * 4 * sQuadCount);
     sStats.quads = sQuadCount;
+    GPU_TIME(STAGE_PXFER, t);
+    t = svcGetSystemTick();
 
     C3D_RenderTargetClear(target, C3D_CLEAR_COLOR, 0x000000FF, 0);
     C3D_FrameDrawOn(target);
@@ -979,6 +1213,7 @@ bool GpuRender::Render(const Stream &stream)
         C3D_DrawElements(GPU_TRIANGLES, (int)(bt.count * 6), C3D_UNSIGNED_SHORT, sIdx + bt.first * 6);
     }
     C3D_FrameEnd(0);
+    GPU_TIME(STAGE_PFRAME, t);
     return true;
 }
 
