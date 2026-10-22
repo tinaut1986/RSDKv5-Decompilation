@@ -77,7 +77,7 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   counters with the reason of every CPU frame (bottom screen, `SITE STATE`, CSV, log). Not yet checked on the console.
 - [x] R1.3c Rotozoom sprites on the GPU (free quads). Palette tracking per group of 8 colours; animated tiles invalidated.
 - [x] R1.4 Readback: `SITE SHOT` reads the GPU's output (checked). A pixel diff GPU CHECK is still to do.
-- [ ] R1.4b GPU CHECK (diff against the software replay) of the render target (`SITE SHOT` is blind in GPU mode) and a GPU CHECK (diff against the software replay).
+- [ ] R1.4b GPU CHECK: diff the GPU frame against the software replay of the same frame, report and write both images.
 - [ ] R1.5 (partly done: rotozoom sprites, masked inks, faces, circles, software layers for rotozoom/vscroll/water-split layers, animated tiles) Water / per-line palette banks, VScroll/rotozoom layers, `INK_TINT/MASKED/UNMASKED`, `DrawAniTile` (cell invalidation),
   rotozoom and deformed sprites, faces, circles, lines.
 - [x] R1.6 (2026-10-22, measured by Claude on the 2DS; owner not yet) Special Stage on the GPU: every frame of a whole run
