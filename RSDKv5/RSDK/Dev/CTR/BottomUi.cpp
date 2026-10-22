@@ -52,7 +52,7 @@ static const Button kButtons[] = {
     { "FRAME SKIP", TapFrameSkip, ValFrameSkip }, { "MAX SKIPPED", TapMaxSkip, ValMaxSkip }, { "DRAW LISTS", TapDraw, ValDraw },
     { "FLIP COPY", TapFlip, ValFlip },            { "PRESENT", TapPresent, ValPresent },     { "LOG MARK", TapMark, ValMark },
 };
-enum { BTN_COUNT = sizeof(kButtons) / sizeof(kButtons[0]), BTN_COLS = 2, BTN_W = 150, BTN_H = 34, BTN_GAP = 6, BTN_TOP = 120 };
+enum { BTN_COUNT = sizeof(kButtons) / sizeof(kButtons[0]), BTN_COLS = 2, BTN_W = 150, BTN_H = 32, BTN_GAP = 5, BTN_TOP = 112 };
 
 static void ButtonRect(int i, float *x, float *y)
 {
@@ -77,6 +77,8 @@ static void Draw()
     C2D_TextBufClear(sTextBuf);
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
     C2D_Prepare();
+    // The top-screen presentation turns blending off and the state is sticky: citro2d's glyph alpha needs it.
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
     C2D_TargetClear(sTarget, Rgb(14, 18, 24));
     C2D_SceneBegin(sTarget);
 
@@ -111,7 +113,7 @@ static void Draw()
     snprintf(line, sizeof(line), "update %.1f   draw %.1f   flip %.1f", st.stageMs[0], st.stageMs[1], st.stageMs[2]);
     Text(line, 8, 88, 0.42f, Rgb(200, 205, 210));
     snprintf(line, sizeof(line), "layers %.1f  sprites %.1f  3d %.1f  faces %.1f", st.stageMs[3], st.stageMs[4], st.stageMs[7], st.stageMs[6]);
-    Text(line, 8, 100, 0.38f, Rgb(140, 150, 160));
+    Text(line, 8, 99, 0.38f, Rgb(140, 150, 160));
     snprintf(line, sizeof(line), "FTP %s", DevTools::FtpStatus());
     Text(line, 8, 224, 0.4f, Rgb(120, 200, 140));
 
@@ -153,11 +155,13 @@ void BottomUi::Init()
     // The bottom screen is the UI's now (the text console lives in the same framebuffer): RGB565 like the top.
     gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
     gfxSetDoubleBuffering(GFX_BOTTOM, false);
-    sTarget = C3D_RenderTargetCreate(H, W, GPU_RB_RGB565, GPU_RB_DEPTH16);
+    // RGBA8 like the other ports: the clear colour and the alpha blending of citro2d's text expect it; the
+    // transfer to the screen converts to RGB565.
+    sTarget = C3D_RenderTargetCreate(H, W, GPU_RB_RGBA8, GPU_RB_DEPTH16);
     if (!sTarget)
         return;
     C3D_RenderTargetSetOutput(sTarget, GFX_BOTTOM, GFX_LEFT,
-                              GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
+                              GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
                                   GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
     sTextBuf = C2D_TextBufNew(2048);
     if (!sTextBuf)
