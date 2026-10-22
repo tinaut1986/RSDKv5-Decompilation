@@ -39,6 +39,10 @@ int16 sEndClip[4];
 bool sRecorded;         // this frame's draw lists were recorded (Begin got going)
 const char *sHazardWhy; // the first hazard of this frame
 const char *sLastWhy;   // why the last presented frame was not drawn by the GPU
+// Palette changes while recording: the palette before the first one (what the frame started with), and whether
+// the stream still needs a snapshot of the current one before its next command.
+uint16 sBasePal[PALETTE_BANK_COUNT][PALETTE_BANK_SIZE];
+bool sPalBase, sPalDirty;
 
 bool Alloc()
 {
@@ -77,6 +81,7 @@ Cmd *NewCmd(CmdType type, uint32 arenaBytes = 0)
     Cmd *c = &sCmds[sCount++];
     memset(c, 0, sizeof(*c));
     c->type    = type;
+    c->group   = (uint8)sceneInfo.currentDrawGroup;
     c->clip[0] = (int16)currentScreen->clipBound_X1;
     c->clip[1] = (int16)currentScreen->clipBound_Y1;
     c->clip[2] = (int16)currentScreen->clipBound_X2;
@@ -107,9 +112,22 @@ bool SyncLineBuffer()
     return true;
 }
 
+// The palette as it is now, after the writes PaletteWillChange announced.
+bool SyncPalette()
+{
+    if (!sPalDirty)
+        return true;
+    sPalDirty = false;
+    Cmd *c    = NewCmd(CMD_PALETTE, sizeof(fullPalette));
+    if (!c)
+        return false;
+    memcpy(sArena + c->arena, fullPalette, sizeof(fullPalette));
+    return true;
+}
+
 Cmd *BeginCmd(CmdType type, uint32 arenaBytes = 0)
 {
-    if (!SyncLineBuffer())
+    if (!SyncLineBuffer() || !SyncPalette())
         return NULL;
     return NewCmd(type, arenaBytes);
 }
@@ -126,10 +144,22 @@ void SetClip(const int16 *clip)
 
 const GpuFrame::Stats &GpuFrame::GetStats() { return sStats; }
 
+void GpuFrame::PaletteWillChange()
+{
+    // Called before the write: the first time in a frame the palette is still the one the frame started with.
+    if (!sPalBase) {
+        memcpy(sBasePal, fullPalette, sizeof(sBasePal));
+        sPalBase = true;
+    }
+    if (active)
+        sPalDirty = true;
+}
+
 void GpuFrame::Begin()
 {
     sRecorded  = false;
     sHazardWhy = NULL;
+    sPalBase = sPalDirty = false;
     GpuScene3D::BeginFrame();
     if (!DEV_SW_RECORD || videoSettings.screenCount != 1 || !Alloc())
         return;
@@ -188,11 +218,22 @@ void GpuFrame::Flush()
     // screen 0 whatever currentScreen says now (the draw loop moved it on; Present runs later).
     ScreenInfo *const keepScreen = currentScreen;
     currentScreen                = &screens[0];
+    // With palette changes inside the frame, each command is drawn with the palette it was recorded with.
+    static uint16 keepPal[PALETTE_BANK_COUNT][PALETTE_BANK_SIZE];
+    const bool palettes = sPalBase;
+    if (palettes) {
+        memcpy(keepPal, fullPalette, sizeof(keepPal));
+        memcpy(fullPalette, sBasePal, sizeof(keepPal));
+    }
     for (unsigned i = 0; i < sCount; ++i) {
         const Cmd &c = sCmds[i];
         const int32 *p = c.p;
         if (c.type == CMD_LINEBUF) {
             memcpy(gfxLineBuffer, sArena + c.arena, sizeof(sLineBuf));
+            continue;
+        }
+        if (c.type == CMD_PALETTE) {
+            memcpy(fullPalette, sArena + c.arena, sizeof(keepPal));
             continue;
         }
         SetClip(c.clip);
@@ -253,12 +294,15 @@ void GpuFrame::Flush()
     }
     SetClip(sEndClip);
     currentScreen = keepScreen;
+    if (palettes)
+        memcpy(fullPalette, keepPal, sizeof(keepPal)); // the palette as the game left it
+    sPalBase = sPalDirty = false; // the rest of the frame (after a hazard) draws immediately
     sCount = sArenaUsed = 0;
 }
 
 static void DumpCommands()
 {
-    static const char *const kName[] = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE_OUTLINE", "FACE", "BLENDED_FACE", "SPRITE", "ROTO", "LAYER", "LINEBUF", "FACES", "BLENDED_FACES", "SCENE3D" };
+    static const char *const kName[] = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE_OUTLINE", "FACE", "BLENDED_FACE", "SPRITE", "ROTO", "LAYER", "LINEBUF", "FACES", "BLENDED_FACES", "SCENE3D", "PALETTE" };
     FILE *f = fopen(dumpPath, "w");
     if (!f)
         return;
@@ -271,8 +315,19 @@ static void DumpCommands()
             fprintf(f, " %ld", (long)c.p[k]);
         if (c.type == CMD_LAYER) {
             const TileLayer *l = (const TileLayer *)(uintptr_t)c.p[0];
-            fprintf(f, " | layer %ux%u tiles, shift %u/%u", l->xsize, l->ysize, l->widthShift, l->heightShift);
+            fprintf(f, " | layer %ux%u tiles, shift %u/%u, parallax %ld, group %u", l->xsize, l->ysize, l->widthShift, l->heightShift,
+                    (long)l->parallaxFactor, c.group);
         }
+        if (c.type == CMD_SCENE3D) {
+            // per instance: model and the world matrix's translation (X, Y, Z: Z is the depth the projection divides by)
+            const GpuScene3D::Head *h = (const GpuScene3D::Head *)(sArena + c.arena);
+            const GpuScene3D::Inst *in = (const GpuScene3D::Inst *)(h + 1);
+            fprintf(f, " | group %u, %d instances:", c.group, (int)h->count);
+            for (int32 k = 0; k < h->count && k < 12; ++k)
+                fprintf(f, " m%d(%ld,%ld,%ld)", in[k].model, (long)in[k].world[3], (long)in[k].world[7], (long)in[k].world[11]);
+        }
+        else if (c.type != CMD_LAYER)
+            fprintf(f, " | group %u", c.group);
         fprintf(f, "\n");
     }
     fclose(f);
@@ -294,7 +349,7 @@ bool GpuFrame::Present()
     else if (!pending)
         sLastWhy = "EMPTY FRAME";
     else {
-        const Stream stream = { sCmds, sCount, sArena };
+        const Stream stream = { sCmds, sCount, sArena, sPalBase ? (const uint16(*)[256])sBasePal : NULL };
         if (GpuRender::Render(stream)) {
             pending = false;
             sCount = sArenaUsed = 0;

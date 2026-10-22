@@ -93,11 +93,20 @@ extern bool freeze;       // skip the objects' update, keep drawing (SITE FREEZE
 extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy (part of the GPU mode)
 extern bool swGpuRender;   // execute recorded frames on the GPU (needs swRecord and swGpuPresent)
 extern bool swRecord;      // record draw calls per frame and execute them at the flip (GpuFrame)
-extern bool swGpu3D;       // 3D scenes as GPU model instances (GpuScene3D); off: their faces as before. Off at boot.
+extern bool swGpu3D;       // 3D scenes as GPU model instances (GpuScene3D); off: their faces as before. On by default, saved.
 extern bool swBottomUi;    // redraw the bottom screen (off to measure its cost)
 extern bool swSyncDraw;    // C3D_FrameBegin waits for the previous GPU frame (experiment switch)
 extern bool swVblankWait;  // gspWaitForVBlank after the present (experiment switch)
 extern unsigned skipCount; // passes whose drawing was skipped since the last second
+
+// Player options of the bottom screen (OPTIONS tab), saved with the switches.
+extern bool swLock30;      // FRAMES LOCK 30: draw every other pass (logic stays at 60)
+extern int optFps;         // SHOW FPS on the top screen: 0 off, 1 top left, 2 top right, 3 bottom left, 4 bottom right
+extern int optHud;         // TOP HUD: 0 shown, 1 auto (hidden while the GAME tab is open), 2 hidden
+extern int uiTab;          // the bottom screen's open tab (BottomUi::Tab)
+extern bool swForce3D;     // DEBUG FORCE 3D: draw both eyes as if the slider were up (cost on an Old 2DS); not saved
+// True when entities of this (stage) class must not be drawn: the game's HUD under TOP HUD hidden / auto.
+bool HideEntityClass(uint16 classID);
 
 // Appends one line to sdmc:/3ds/Sonic Mania 3DS/debug/log.txt (flushed at once, so it survives a
 // crash or an exit to the HOME menu); also valid before Init().
@@ -136,6 +145,9 @@ struct StageScope {
 #define DEV_SW_GPU3D     RSDK::DevTools::swGpu3D
 #define DEV_SW_SYNCDRAW  RSDK::DevTools::swSyncDraw
 #define DEV_SW_VBLANK    RSDK::DevTools::swVblankWait
+#define DEV_SW_LOCK30    RSDK::DevTools::swLock30
+#define DEV_SW_FORCE3D   RSDK::DevTools::swForce3D
+#define DEV_HIDE_CLASS(id) RSDK::DevTools::HideEntityClass(id)
 #define DEV_COUNT_SKIP() (++RSDK::DevTools::skipCount)
 #else
 #define DEV_SW_FRAMESKIP true
@@ -148,6 +160,9 @@ struct StageScope {
 #define DEV_SW_GPU3D     false
 #define DEV_SW_SYNCDRAW  true
 #define DEV_SW_VBLANK    true
+#define DEV_SW_LOCK30    false
+#define DEV_SW_FORCE3D   false
+#define DEV_HIDE_CLASS(id) false
 #define DEV_COUNT_SKIP() ((void)0)
 #endif
 

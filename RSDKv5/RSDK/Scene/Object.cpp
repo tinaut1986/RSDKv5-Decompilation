@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
@@ -365,10 +366,12 @@ void RSDK::InitObjects()
     sceneInfo.createSlot = ENTITY_COUNT - 0x100;
     cameraCount          = 0;
 
+    BottomUi::LoadPhase("Objects", 0.5f, 1.0f);
     for (int32 o = 0; o < sceneInfo.classCount; ++o) {
 #if RETRO_USE_MOD_LOADER
         currentObjectID = o;
 #endif
+        BottomUi::LoadItem(o, sceneInfo.classCount);
 
         if (objectClassList[stageObjectIDs[o]].stageLoad)
             objectClassList[stageObjectIDs[o]].stageLoad();
@@ -827,7 +830,11 @@ void RSDK::ProcessObjectDrawLists()
                         sceneInfo.entitySlot = list->entries[i];
                         validDraw            = false;
                         sceneInfo.entity     = &objectEntityList[list->entries[i]];
+#if RETRO_PLATFORM == RETRO_3DS
+                        if (sceneInfo.entity->visible && !DEV_HIDE_CLASS(sceneInfo.entity->classID)) {
+#else
                         if (sceneInfo.entity->visible) {
+#endif
                             if (objectClassList[stageObjectIDs[sceneInfo.entity->classID]].draw)
                                 objectClassList[stageObjectIDs[sceneInfo.entity->classID]].draw();
 

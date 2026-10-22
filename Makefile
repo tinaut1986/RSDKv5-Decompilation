@@ -199,6 +199,10 @@ else
 # execute Game/objectmake.py?
 include $(GAME_NAME)/Objects.cfg
 endif
+ifeq ($(PLATFORM),3DS)
+# The bottom screen's view of the run (reads the game's state; compiled as game code)
+GAME_SOURCES += RSDKv5/RSDK/Dev/CTR/GameInfo
+endif
 endif
 
 RSDK_PATH = $(OUTDIR)/$(RSDK_NAME)$(RSDK_SUFFIX)

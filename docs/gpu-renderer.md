@@ -144,6 +144,72 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   window texture of the floor rendered by the GPU and sampled with one quad a line (needs a window per fog bank or a
   combiner lerp between banks 0 and 7, and VRAM).
 
+## Session 3 (2026-10-22, evening): stereo, lines, palettes, atlas, bottom screen
+
+- **Stereoscopic 3D** (slider, or DEBUG FORCE 3D to measure it on a 2DS): every batch carries a depth (`Batch::depth`,
+  pixels of disparity at the full slider); `CmdDepth`: tile layers by parallax (factor 1.0 on the screen plane, far
+  backgrounds up to 6 px behind), draw groups 12+ (HUD) 2 px in front. The frame is drawn per eye into the left and
+  right targets (`C3DPresent::TargetRight`, `SetStereo` -> `gfxSet3D`), the projection shifted by +-depth/2 per batch.
+  2DS: Green Hill 60 with FORCE 3D, Special Stage 39-43 (GPU-bound: models and the floor twice).
+- **GPU command buffer 256 KB**: one eye of the Special Stage takes ~26-46 %; with two eyes 128 KB overflowed and froze
+  the 2DS (libctru panic, reproduced in Azahar). `SITE STATE` shows `cmdbuf N%` (peak); the right eye is skipped
+  (`eyes dropped`) rather than overflow.
+- **LINE** (`EmitLine`): the software's clipping and Bresenham steps, pixels gathered into horizontal / vertical runs.
+- **PALETTE**: a palette write while recording (a boss flashing, Super Sonic, `Decoration` additive) no longer sends
+  the frame to the CPU. `PaletteWillChange` (the hazard macro, called before the write) keeps the palette the frame
+  started with; the next recorded command is preceded by `CMD_PALETTE` (a 4 KB snapshot). The executor tracks the
+  real banks from the base palette and maps a bank that differs in a snapshot to a virtual bank 8..15
+  (`BANKS = 16`, `sBankMap`, `ApplySnapshot`), handed out in order of appearance so frames reuse their atlas copies.
+  The software replay applies the snapshots too. `SetPaletteMask` keeps the old hazard (`GPUFRAME_MASK_HAZARD`).
+  Sprite key: bank bits 53-56, sheet 57-62 (ConvertSprite reads the sheet from the key: keep both in step).
+- **Sprite atlas packing**: a sprite only went to a shelf of its own height (+8); the title's many heights filled the
+  atlas with half-empty shelves (ATLAS FULL several times a second). With no room for a new shelf, any taller shelf
+  with room is used. Title retries 85 -> 9 in Azahar, no CPU frames.
+- **Out of quads**: a frame that runs out of quads with rotozoom tile runs is retried once with those layers in software
+  (`quad retries`). `gpu3d` is on by default and saved (off, the Special Stage's faces overflowed: 6 fps).
+- **Exit from HOME hung** in "closing" (C3D_Fini waiting for a frame HOME never acknowledged). As in sm-3ds: an APT hook
+  drains the queue with an empty frame on suspend/sleep, and the teardown runs on a thread with a 1 s timeout.
+- **CIA install "out of memory"** in big stages (the heap is ~51.8 MB used and a 128 KB malloc failed): the installer
+  uses a static 32 KB buffer. `SITE STATE` shows heap used and linear free.
+- **Bottom screen** (`BottomUi.cpp`): tabs GAME (run info via `GameInfo.c`, compiled as game code), OPTIONS (FRAMES
+  AUTO / LOCK 30 / NO SKIP, SHOW FPS corner with a mini-screen icon, TOP HUD shown / auto / hidden, RENDERER), DEBUG
+  (the old view + 3D SCENES, FORCE 3D). FPS counter on the top screen in the 5x7 font of the other ports (`UiFont.hpp`),
+  drawn by citro2d in GPU frames and into the software picture in CPU frames. TOP HUD AUTO skips the HUD class's draw
+  while the GAME tab is open (`DevTools::HideEntityClass`). The engine's debug-mode touch toggled the libctru console
+  (consoleClear wiped the bottom screen on every tap): off while the graphical screen is up.
+- **Loading box**: boot and every stage load draw a box on the bottom screen from inside the loaders (step, file, bar,
+  seconds; `BottomUi::LoadBegin/Phase/Item/Detail/End`). The render device now starts before `InitEngine` (as the mod
+  loader's path does) so the boot shows it.
+- Tools: `SITE FREEZE 0|1`, `SITE LAYERS`, `SITE GOTO <Object> [dx]` (moves the player; the camera bounds kill him far
+  away: not useful yet), `SITE SET tab|fps|hud|lock30|force3d`, `tools/shot.sh right`.
+- Still CPU: INK TINT (the pause menu's grey: needs a copy of the frame into a texture), WATER LINE / HSCROLL LAYER split
+  by the water line (seen by the owner in a later stage).
+
+## Session 3, later (2026-10-23): water line, scissor, stereo depth in the Special Stage
+
+- **Water line**: a sprite, a big (chunked) sprite or an HScroll layer whose lines use more than one palette bank is
+  emitted once per run of lines with one bank (`PerBankRun`, the command's clip cut to the run). A rotated sprite
+  across it is scissored per run.
+- **Scissor**: batches carry a scissor rectangle (`Batch::scissor`, table `sScissors`, `ScissorFor`); rotated
+  sprites and 3D scenes under a clip smaller than the screen are scissored instead of refused. The target is turned:
+  screen (x0, y0, x1, y1) -> `C3D_SetScissor(240 - y1, 400 - x1, 240 - y0, 400 - x0)` (both axes backwards; checked
+  with `SITE SET depthmode 1024`, which scissors everything to the top-left quarter).
+- **3D scenes**: MAX_DRAW3D 64 -> 256 (the second Special Stage draws up to ~60 scenes a frame; over 64 the frame
+  went to the CPU as "3D SCENE"); MAX_BATCHES 512. `SITE REFUSED` prints the last refused command (the STATE line is
+  cut by the FTP line limit) and how often rotozoom layers went to the software.
+- **Stereo depth in the Special Stage** (scene folder UFO*): 3D models shift per vertex in `scene3d.v.pica`
+  (uniform `eye`: shift * clamp(1 - Zc / Z, -0.5, 1), Zc = 41000, the player's Z); the floor gets a depth band per line
+  from the walk's step (the lines at y 200 on the screen plane, the horizon the farthest; a batch per band); the sky
+  layers are the farthest; the track's scaled sprites (rings, spheres) take Z = 0x1000000 / scale (same projection as
+  the models); an item box's wireframe cage (lines) takes the depth of its contents sprite, which is scaled
+  0x2000000 / Z (`UfoDepths`, a pass over the frame's commands). 2D batches shift by whole pixels per eye: a fraction
+  moved the 1-pixel floor runs' samples onto the next atlas cell (stray texels only in 3D).
+- **Soft-layer texture in VRAM**: in linear memory (240 KB free once the command buffer is 256 KB) it failed to
+  allocate and every rotozoom layer sent to the software was refused (ROTOZOOM LAYER, New 3DS). The second Special
+  Stage's floor goes over 6000 quads often and takes that path (issue #7).
+- Installs: the New 3DS (192.168.1.133) runs the dev build too; `./build_3ds.sh --install 192.168.1.133` works there
+  (it rewrites `.3ds_ftp_ip`: set it back to the 2DS).
+
 ## 3D scenes as GPU model instances (perf/special-stage, 2026-10-22: works, off by default until merged)
 
 - Why: in the Special Stage the CPU spends ~30 ms a frame on the engine's 3D (vertex transforms in AddModelToScene,
@@ -212,19 +278,31 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 
 ## Next steps (suggested order)
 
-1. Special Stage floor: done (tile runs, above). Next there: the empty-block bitmap, then measure the GPU side.
-2. Merge `perf/special-stage` once the owner has looked at the Special Stage, the title (logo shine) and the
-   collapsing floors on the 2DS; then make `gpu3d` on by default (or drop the switch).
-3. Sweep every zone in GPU mode (Azahar for pictures and reasons, the 2DS for timings): `tools/perf-sweep.sh` with
-   `SITE STATE`'s reasons and the `render (5 s...)` lines of `log.txt`; fix by frequency. Water zones first.
-4. Sprite atlas: still fills now and then in the title and the menu (`atlas retries` in `SITE STATE`): evict least used
-   entries instead of emptying it.
-5. A 30 fps lock option (as sm-3ds / legend-of-doom: logic at 60, every other frame drawn) for heavy scenes.
-6. Stereoscopic 3D: the command list keeps layers and sprites apart and the target has a depth buffer; submit the frame
-   twice with a per-layer offset. Measure the GPU time first (the Special Stage would draw its models twice).
+Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
+
+1. #1 Save states tab (the owner wants it to reach spots quickly; `SITE GOTO` kills the player far away: the camera
+   bounds do not follow).
+2. #5 INK_TINT on the GPU (the pause menu's grey: copy the frame into a texture mid-frame, combiner grey).
+3. #7 Special Stage: 60 fps turning and with 3D; the second stage's floor over 6000 quads goes to the software
+   (~9 ms); 1/32-texel floor coordinates leave a few wrong pixels (1/64 with an offset).
+4. #2 in-game updates by channel (needs releases first: PLAN B0.3), #3 language, #4 bottom-screen themes, #8 the
+   bottom screen and options in production builds.
+5. Sweep every zone in GPU mode (Azahar for pictures and `SITE REFUSED`, the 2DS for timings) and fix by frequency.
+6. Sprite atlas: evict least used entries instead of emptying it (retries are rare since the shelf fallback).
+7. Stereo elsewhere: zones use layer parallax and draw groups only (playfield on the screen plane); tune STEREO_FAR
+   (6 px) with the owner on the New 3DS.
 
 ## Lessons (read before touching this)
 
+- **Linear memory is the scarcest thing** (240 KB free with the 256 KB GPU command buffer): new GPU buffers go to VRAM
+  when only the GPU and the transfer engine touch them (the soft-layer texture moved there). The heap is ~51.8 MB used
+  in a stage: avoid big mallocs at run time (the CIA installer now uses a static buffer).
+- **`make` misses included .cpp files** (CTRRenderDevice.cpp is included by Drawing.cpp, CTRInputDevice.cpp by Input.cpp):
+  after changing them, `rm -rf bin`.
+- **Stereo**: 2D batches must shift by whole pixels (fractions move 1-pixel quads' samples onto the next atlas cell).
+- **The GPU command buffer** overflowing panics libctru (a frozen console): watch `cmdbuf N%` in `SITE STATE` after
+  anything that adds per-draw uniforms (the second Special Stage with 3D reaches ~90 %; the right eye is dropped rather
+  than overflow).
 - **`currentScreen` has already moved on** when `FlipScreen` runs (the draw loop does `currentScreen++`). Replays must
   set `currentScreen = &screens[0]` (they do now); anything reading screen state after the draw loop must use `screens[0]`.
 - **Do not change `SCREEN_XMAX`** (tried 1280 -> 400 to free linear memory): the top screen came out garbled/blank even

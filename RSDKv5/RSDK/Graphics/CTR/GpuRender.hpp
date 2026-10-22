@@ -36,9 +36,13 @@ struct Stats {
     unsigned layerCmds, tileQuads, emptyTiles, rowsOut; // diagnostics
     unsigned reason, unsupportedCmd;
     unsigned atlasRetries; // frames rebuilt after emptying a full sprite atlas
+    unsigned quadRetries;  // frames rebuilt with rotozoom layers in software after running out of quads
     unsigned softLayers;   // layers drawn by the software into a texture (last frame)
     unsigned faces;        // polygons emitted (last frame)
+    unsigned rotoSoftRuns, rotoSoftQuads; // rotozoom layers sent to the software: too many runs / quads (total)
     unsigned rotoUs, rotoQuads; // rotozoom layers as tile runs: build time (us) and quads (last frame)
+    unsigned eyesDropped;   // right eyes not drawn because the command buffer would not hold them (total)
+    unsigned cmdBufPct;     // most of the GPU command buffer a frame has used (%), since boot
     unsigned tileEvictions; // times the full tile atlas gave back the cells not used in the frame (total)
 };
 const Stats &GetStats();

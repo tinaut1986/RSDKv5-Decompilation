@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 #include "RSDK/Graphics/CTR/gpu_shbin.h"
 #include "RSDK/Graphics/CTR/scene3d_shbin.h"
@@ -39,9 +40,10 @@ enum {
     SPR_SLOTS    = 4096,
     SPR_MAX_PIXELS = 256 * 256,
     MAX_QUADS    = 8192,
-    MAX_BATCHES  = 256,
+    MAX_BATCHES  = 512,
     MAX_PENDING  = 2048,
-    BANKS        = PALETTE_BANK_COUNT,
+    REAL_BANKS   = PALETTE_BANK_COUNT,
+    BANKS        = PALETTE_BANK_COUNT * 2, // 8..15: palette snapshots taken inside a frame (CMD_PALETTE)
 };
 
 // 12 bytes: position in quarter pixels and texel coordinates as 16-bit integers (gpu.v.pica scales them), so the
@@ -72,7 +74,46 @@ struct Batch {
     uint8 tex, blend;
     unsigned first, count; // quads
     uint32 constant;       // BLEND_FILL: the per-channel alpha (R, G, B in the low bytes)
+    int8 depth;            // stereoscopic disparity in pixels at the full slider (+ behind the screen, - in front)
+    uint8 scissor;         // index in sScissors (0: none)
 };
+
+// Scissor rectangles (screen pixels x0, y0, x1, y1) of this frame: a rotated sprite or a 3D scene under a clip smaller
+// than the screen, or cut at the water line into runs of one palette bank. sScissor is the one emitters use now.
+enum { MAX_SCISSORS = 64 };
+int16 sScissors[MAX_SCISSORS][4];
+unsigned sScissorCount;
+uint8 sScissor;
+
+// Sets sScissor to the clip rectangle when it is smaller than the screen; false when the table is full.
+bool ScissorFor(const int16 *clip)
+{
+    sScissor = 0;
+    if (clip[0] <= 0 && clip[1] <= 0 && clip[2] >= screens[0].size.x && clip[3] >= screens[0].size.y)
+        return true;
+    for (unsigned i = 1; i < sScissorCount; ++i)
+        if (!memcmp(sScissors[i], clip, sizeof(sScissors[i]))) {
+            sScissor = (uint8)i;
+            return true;
+        }
+    if (sScissorCount >= MAX_SCISSORS)
+        return false;
+    memcpy(sScissors[sScissorCount], clip, sizeof(sScissors[0]));
+    sScissor = (uint8)sScissorCount++;
+    return true;
+}
+
+// Stereoscopic 3D: the frame is drawn once per eye, each batch shifted by half its depth the eye's way.
+bool sStereo;  // this frame is drawn for both eyes (the 3D slider is up, or DEBUG FORCE 3D)
+bool sUfoStage; // a Special Stage (scene folder UFO*): depths of its own
+float sSlider; // 0..1
+int8 sDepth;   // depth of the command being emitted (0 when not stereo: no extra batches)
+float sEyeShift; // the eye being drawn: half the full disparity, signed (- left eye), times the slider (0: no 3D)
+// Stereo depth scale: pixels of disparity at the full slider for the farthest things (a far background, the horizon).
+enum { STEREO_FAR = 6 };
+// The Special Stage's 3D scenes: the player's model is at Z ~ 41000 (SITE CMDS); things there sit on the screen plane.
+const float STEREO_ZC = 41000.0f;
+bool sRotoSoft; // this attempt draws rotozoom layers in software (the tile runs ran out of quads)
 
 struct SprSlot {
     uint64 key; // 0 = free
@@ -120,14 +161,14 @@ DVLB_s *s3Dvlb;
 shaderProgram_s s3Prog;
 bool s3Ready;
 struct {
-    int proj, wrow, nrow, lerp, scr, band, lit, dif, difs, spcs;
+    int proj, wrow, nrow, lerp, scr, band, lit, dif, difs, spcs, eye;
 } s3Loc;
 C3D_AttrInfo s3AttrCol, s3AttrFixed;
 struct Draw3D {
     const GpuScene3D::Head *h;
     const GpuScene3D::Inst *in;
 };
-enum { MAX_DRAW3D = 64 };
+enum { MAX_DRAW3D = 256 }; // the second Special Stage draws over 64 scenes a frame (one per model group)
 Draw3D sDraw3D[MAX_DRAW3D];
 unsigned sDraw3DCount;
 
@@ -149,6 +190,11 @@ uint32 sGen = 1;
 uint16 sPalShadow[BANKS][PALETTE_BANK_SIZE];
 u16 sTexPal[BANKS][PALETTE_BANK_SIZE]; // the palette as atlas texels (index 0 transparent), kept with the shadow
 uint32 sGroupGen[BANKS][32];
+// The bank a command's palette bank stands for: itself, or the virtual bank (8..15) holding the snapshot that bank had
+// when the command was recorded. Virtual banks are handed out in order of appearance each frame, so a boss flashing
+// the same way every frame keeps its atlas copies.
+uint8 sBankMap[REAL_BANKS];
+unsigned sVirtUsed;
 
 // Tile cache: one cell per (bank, tile id)
 int16 sTileCell[BANKS][TILE_IDS];
@@ -242,7 +288,7 @@ void ResetCaches()
     ResetSprites();
 }
 
-void TrackPalette(bool all = false);
+void TrackPalette(bool all = false, const uint16 (*base)[256] = NULL);
 
 bool Setup()
 {
@@ -258,8 +304,9 @@ bool Setup()
         return false;
     sTileData = (u16 *)sTileTex.data;
     sSprData  = (u16 *)sSprTex.data;
-    // Optional: without it the software layers are refused as before.
-    if (C3D_TexInit(&sSoftTex, SOFT_W, SOFT_H, GPU_RGBA5551)) {
+    // Optional: without it the software layers are refused as before. In VRAM: only the GPU reads it and the transfer
+    // engine fills it, and the linear heap had no 256 KB left for it (ROTOZOOM LAYER frames in the Special Stage).
+    if (C3D_TexInitVRAM(&sSoftTex, SOFT_W, SOFT_H, GPU_RGBA5551) || C3D_TexInit(&sSoftTex, SOFT_W, SOFT_H, GPU_RGBA5551)) {
         sSoftData = (u16 *)sSoftTex.data;
         C3D_TexSetFilter(&sSoftTex, GPU_NEAREST, GPU_NEAREST);
         C3D_TexSetWrap(&sSoftTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
@@ -311,6 +358,7 @@ bool Setup()
         s3Loc.dif  = shaderInstanceGetUniformLocation(vs, "dif");
         s3Loc.difs = shaderInstanceGetUniformLocation(vs, "difs");
         s3Loc.spcs = shaderInstanceGetUniformLocation(vs, "spcs");
+        s3Loc.eye  = shaderInstanceGetUniformLocation(vs, "eye");
         for (int k = 0; k < 2; ++k) {
             C3D_AttrInfo *a = k ? &s3AttrFixed : &s3AttrCol;
             AttrInfo_Init(a);
@@ -366,6 +414,26 @@ bool UniformBank(int y0, int y1, uint8 *bank)
     return true;
 }
 
+// The water line: lines y0..y1 use more than one palette bank. `emit` is called once per run of lines with one bank,
+// with the command's clip cut to that run (it then sees one bank, and draws only those lines).
+template <typename Emit> bool PerBankRun(const Cmd &c, int y0, int y1, Emit emit)
+{
+    y0 = y0 < 0 ? 0 : y0;
+    y1 = y1 > SCREEN_YSIZE ? SCREEN_YSIZE : y1;
+    for (int ya = y0; ya < y1;) {
+        int yb = ya + 1;
+        while (yb < y1 && sLineBuf[yb] == sLineBuf[ya])
+            ++yb;
+        Cmd cc    = c;
+        cc.clip[1] = (int16)(ya > c.clip[1] ? ya : c.clip[1]);
+        cc.clip[3] = (int16)(yb < c.clip[3] ? yb : c.clip[3]);
+        if (cc.clip[1] < cc.clip[3] && !emit(cc))
+            return false;
+        ya = yb;
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------- caches
 
 // The palette groups set in `groups` changed after generation `stamp`.
@@ -382,21 +450,50 @@ bool GroupsChanged(unsigned bank, uint32 groups, uint32 stamp)
 
 // Compares the palette with the last frame's and stamps the groups that changed with this frame's generation.
 // `all` refreshes every bank (at start: a bank that never changes would keep an empty texel table).
-void TrackPalette(bool all)
+// Bank b of the cache now holds `pal`: the groups that changed get this generation.
+void TrackBank(unsigned b, const uint16 *pal, bool all)
+{
+    const uint32 *now = (const uint32 *)pal, *was = (const uint32 *)sPalShadow[b];
+    if (!all && !memcmp(now, was, sizeof(sPalShadow[b])))
+        return;
+    for (unsigned g = 0; g < 32; ++g) // a group is 8 colours, 4 words
+        if (all || now[g * 4] != was[g * 4] || now[g * 4 + 1] != was[g * 4 + 1] || now[g * 4 + 2] != was[g * 4 + 2] || now[g * 4 + 3] != was[g * 4 + 3])
+            sGroupGen[b][g] = sGen;
+    memcpy(sPalShadow[b], pal, sizeof(sPalShadow[b]));
+    sTexPal[b][0] = 0;
+    for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i)
+        sTexPal[b][i] = ToTexel(pal[i]);
+}
+
+// `base`: the palette the frame started with (it changed while recording), else the current one.
+void TrackPalette(bool all, const uint16 (*base)[256])
 {
     ++sGen;
-    for (unsigned b = 0; b < BANKS; ++b) {
-        const uint32 *now = (const uint32 *)fullPalette[b], *was = (const uint32 *)sPalShadow[b];
-        if (!all && !memcmp(now, was, sizeof(sPalShadow[b])))
+    for (unsigned b = 0; b < (all ? (unsigned)BANKS : (unsigned)REAL_BANKS); ++b)
+        TrackBank(b, base ? base[b % REAL_BANKS] : fullPalette[b % REAL_BANKS], all);
+}
+
+// CMD_PALETTE: each bank that differs from what the frame started with maps to a virtual bank holding it.
+bool ApplySnapshot(const uint16 (*pal)[256])
+{
+    for (unsigned b = 0; b < REAL_BANKS; ++b) {
+        if (!memcmp(pal[b], sPalShadow[b], sizeof(sPalShadow[b]))) {
+            sBankMap[b] = (uint8)b;
             continue;
-        for (unsigned g = 0; g < 32; ++g) // a group is 8 colours, 4 words
-            if (now[g * 4] != was[g * 4] || now[g * 4 + 1] != was[g * 4 + 1] || now[g * 4 + 2] != was[g * 4 + 2] || now[g * 4 + 3] != was[g * 4 + 3])
-                sGroupGen[b][g] = sGen;
-        memcpy(sPalShadow[b], fullPalette[b], sizeof(sPalShadow[b]));
-        sTexPal[b][0] = 0;
-        for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i)
-            sTexPal[b][i] = ToTexel(fullPalette[b][i]);
+        }
+        unsigned v = REAL_BANKS;
+        for (; v < REAL_BANKS + sVirtUsed; ++v) // the same snapshot again (Super Sonic's colours, then restored)
+            if (!memcmp(pal[b], sPalShadow[v], sizeof(sPalShadow[v])))
+                break;
+        if (v == REAL_BANKS + sVirtUsed) {
+            if (sVirtUsed >= BANKS - REAL_BANKS)
+                return false;
+            ++sVirtUsed;
+            TrackBank(v, pal[b], false);
+        }
+        sBankMap[b] = (uint8)v;
     }
+    return true;
 }
 
 // The tile atlas is full: give back the cells of every (bank, tile) not used in this frame. The Special Stage floor
@@ -416,6 +513,8 @@ void EvictTiles()
 // Atlas cell of a tile with the palette bank applied; queues its conversion when it is new or stale.
 int EnsureTile(unsigned id, unsigned bank)
 {
+    if (bank < REAL_BANKS)
+        bank = sBankMap[bank];
     if (id >= TILE_IDS || bank >= BANKS)
         return -1;
     int cell = sTileCell[bank][id];
@@ -451,9 +550,9 @@ int EnsureTile(unsigned id, unsigned bank)
 
 uint64 SprKey(unsigned sheet, unsigned bank, unsigned sprX, unsigned sprY, unsigned w, unsigned h)
 {
-    // bit 0 set (0 is a free slot), sprY bits 1-16, sprX 17-30, h 31-41, w 42-52, bank 53-55, sheet 56-62. sprY has 16
+    // bit 0 set (0 is a free slot), sprY bits 1-16, sprX 17-30, h 31-41, w 42-52, bank 53-56, sheet 57-62. sprY has 16
     // bits: sheet 0 is the whole tileset as a 16-pixel-wide column (65536 rows), which the collapsing floors draw from.
-    return 1ull | ((uint64)sheet << 56) | ((uint64)bank << 53) | ((uint64)w << 42) | ((uint64)h << 31) | ((uint64)sprX << 17) | ((uint64)sprY << 1);
+    return 1ull | ((uint64)sheet << 57) | ((uint64)bank << 53) | ((uint64)w << 42) | ((uint64)h << 31) | ((uint64)sprX << 17) | ((uint64)sprY << 1);
 }
 
 // Shelf allocation in 8-pixel units; false when the atlas is full.
@@ -465,9 +564,18 @@ bool AllocSprite(unsigned w8, unsigned h8, unsigned *x, unsigned *y)
         if (sh.h >= h8 && sh.h <= h8 + 8 && sh.xUsed + w8 <= SPR_ATLAS_W && (best < 0 || sh.h < sShelves[best].h))
             best = (int)s;
     }
-    if (best < 0) {
-        if (sShelfNextY + h8 > SPR_ATLAS_H || sShelfCount >= SPR_ATLAS_H / 8)
+    if (best < 0 && (sShelfNextY + h8 > SPR_ATLAS_H || sShelfCount >= SPR_ATLAS_H / 8)) {
+        // No room for a new shelf: any taller shelf with room will do (it wastes its extra height, but the atlas
+        // filled up with half-empty shelves of many heights in the title screen: ATLAS FULL several times a second).
+        for (unsigned s = 0; s < sShelfCount; ++s) {
+            Shelf &sh = sShelves[s];
+            if (sh.h >= h8 && sh.xUsed + w8 <= SPR_ATLAS_W && (best < 0 || sh.h < sShelves[best].h))
+                best = (int)s;
+        }
+        if (best < 0)
             return false;
+    }
+    if (best < 0) {
         sShelves[sShelfCount] = { sShelfNextY, (uint16)h8, 0 };
         sShelfNextY += (uint16)h8;
         best = (int)sShelfCount++;
@@ -484,6 +592,8 @@ char sRefusal[160]; // the last refused command (GpuRender::LastRefusal)
 SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, int h, int *refuse)
 {
     *refuse   = 0;
+    if (bank < REAL_BANKS)
+        bank = sBankMap[bank];
     sBadData  = sheet >= SURFACE_COUNT ? 1 : !gfxSurface[sheet].pixels ? 2 : (sprX < 0 || sprY < 0) ? 3 : (w <= 0 || h <= 0) ? 4
                 : (sprX >= 16384 || sprY >= 65536 || w >= 2048 || h >= 2048) ? 5 : bank >= BANKS ? 6 : 0;
     if (sBadData) {
@@ -570,9 +680,9 @@ void ConvertSprite(const Pending &p)
 {
     SprSlot &s = sSlots[p.id];
     // The key holds the sheet position: unpack it.
-    const unsigned sheet = (unsigned)(s.key >> 56), sprX = (unsigned)((s.key >> 17) & 0x3FFF), sprY = (unsigned)((s.key >> 1) & 0xFFFF);
+    const unsigned sheet = (unsigned)(s.key >> 57), sprX = (unsigned)((s.key >> 17) & 0x3FFF), sprY = (unsigned)((s.key >> 1) & 0xFFFF);
     const GFXSurface &g  = gfxSurface[sheet];
-    const uint16 *pal    = fullPalette[p.bank];
+    const uint16 *pal    = sPalShadow[p.bank]; // the bank as the frame used it (a virtual one: a snapshot)
     uint32 groups        = 0;
     for (unsigned y = 0; y < s.h; ++y)
         for (unsigned x = 0; x < s.w; ++x) {
@@ -596,10 +706,11 @@ bool AddQuad(uint8 tex, uint8 blend, float x0, float y0, float x1, float y1, flo
 {
     if (sQuadCount >= MAX_QUADS)
         return false;
-    if (!sBatchCount || sBatches[sBatchCount - 1].tex != tex || sBatches[sBatchCount - 1].blend != blend || blend == BLEND_FILL) {
+    if (!sBatchCount || sBatches[sBatchCount - 1].tex != tex || sBatches[sBatchCount - 1].blend != blend || blend == BLEND_FILL ||
+        sBatches[sBatchCount - 1].depth != sDepth || sBatches[sBatchCount - 1].scissor != sScissor) {
         if (sBatchCount >= MAX_BATCHES)
             return false;
-        sBatches[sBatchCount++] = { tex, blend, sQuadCount, 0, constant };
+        sBatches[sBatchCount++] = { tex, blend, sQuadCount, 0, constant, sDepth, sScissor };
     }
     ++sBatches[sBatchCount - 1].count;
     Vtx *v = &sVbo[sCur][sQuadCount * 4];
@@ -619,10 +730,11 @@ inline bool AddTileQuad(int x0, int y0, int x1, int y1, int u0, int v0, int u1, 
 {
     if (sQuadCount >= MAX_QUADS)
         return false;
-    if (!sBatchCount || sBatches[sBatchCount - 1].tex != TEX_TILE || sBatches[sBatchCount - 1].blend != BLEND_NORMAL) {
+    if (!sBatchCount || sBatches[sBatchCount - 1].tex != TEX_TILE || sBatches[sBatchCount - 1].blend != BLEND_NORMAL ||
+        sBatches[sBatchCount - 1].depth != sDepth || sBatches[sBatchCount - 1].scissor != sScissor) {
         if (sBatchCount >= MAX_BATCHES)
             return false;
-        sBatches[sBatchCount++] = { TEX_TILE, BLEND_NORMAL, sQuadCount, 0, 0 };
+        sBatches[sBatchCount++] = { TEX_TILE, BLEND_NORMAL, sQuadCount, 0, 0, sDepth, sScissor };
     }
     ++sBatches[sBatchCount - 1].count;
     Vtx *v                     = &sVbo[sCur][sQuadCount++ * 4];
@@ -691,7 +803,9 @@ bool EmitSpriteChunked(const Cmd &c, int32 X0, int32 Y0, int32 W0, int32 H0, int
     const int32 sv0 = fy ? sprY0 + (Y0 + H0 - vy1) : sprY0 + (vy0 - Y0), sv1 = sv0 + (vy1 - vy0);
     uint8 bank;
     if (!UniformBank(vy0, vy1, &bank))
-        return Refuse(GpuRender::REASON_PALETTE_LINES);
+        return PerBankRun(c, vy0, vy1, [&](const Cmd &cc) {
+            return EmitSpriteChunked(cc, X0, Y0, W0, H0, sprX0, sprY0, direction, sheetID, blend, alpha);
+        });
     const GFXSurface &g = gfxSurface[sheetID < SURFACE_COUNT ? sheetID : 0];
     for (int32 cv = sv0 - (sv0 % CHUNK); cv < sv1; cv += CHUNK) {
         for (int32 cu = su0 - (su0 % CHUNK); cu < su1; cu += CHUNK) {
@@ -792,7 +906,7 @@ bool EmitSprite(const Cmd &c)
 
     uint8 bank;
     if (!UniformBank(y, y + height, &bank))
-        return Refuse(GpuRender::REASON_PALETTE_LINES);
+        return PerBankRun(c, y, y + height, [](const Cmd &cc) { return EmitSprite(cc); });
     int refuse;
     SprSlot *slot = EnsureSprite((unsigned)sheetID, bank, sprX0, sprY0, w0, h0, &refuse);
     if (!slot)
@@ -869,14 +983,17 @@ bool EmitRoto(const Cmd &c)
     }
     if (maxX <= c.clip[0] || minX >= c.clip[2] || maxY <= c.clip[1] || minY >= c.clip[3])
         return true; // off the clip rectangle
-    // Quads are not scissored: a sprite crossing a clip rectangle smaller than the screen is left to the CPU.
-    if ((minX < c.clip[0] && c.clip[0] > 0) || (minY < c.clip[1] && c.clip[1] > 0) || (maxX > c.clip[2] && c.clip[2] < screens[0].size.x)
-        || (maxY > c.clip[3] && c.clip[3] < screens[0].size.y))
-        return Refuse(GpuRender::REASON_UNSUPPORTED, CMD_ROTO);
-
+    // Lines in more than one palette bank (the water line): once per run of one bank, each scissored to its lines.
+    // (Only the lines inside the clip count: a run's call sees its own clip, all one bank.)
+    const int by0 = (int)minY > c.clip[1] ? (int)minY : c.clip[1], by1 = (int)maxY + 1 < c.clip[3] ? (int)maxY + 1 : c.clip[3];
     uint8 bank;
-    if (!UniformBank((int)minY, (int)maxY + 1, &bank))
-        return Refuse(GpuRender::REASON_PALETTE_LINES);
+    if (!UniformBank(by0, by1, &bank))
+        return PerBankRun(c, by0, by1, [](const Cmd &cc) { return EmitRoto(cc); });
+    // A sprite crossing a clip rectangle smaller than the screen is scissored to it.
+    const bool crosses = (minX < c.clip[0] && c.clip[0] > 0) || (minY < c.clip[1] && c.clip[1] > 0) ||
+                         (maxX > c.clip[2] && c.clip[2] < screens[0].size.x) || (maxY > c.clip[3] && c.clip[3] < screens[0].size.y);
+    if (crosses && !ScissorFor(c.clip))
+        return Refuse(GpuRender::REASON_UNSUPPORTED, CMD_ROTO);
     int refuse;
     SprSlot *slot = EnsureSprite((unsigned)sheetID, bank, sprX, sprY, width, height, &refuse);
     if (!slot)
@@ -885,7 +1002,9 @@ bool EmitRoto(const Cmd &c)
         tu[i] = slot->x + (rx[i] - pivotX);
         tv[i] = slot->y + (ry[i] - pivotY);
     }
-    if (!AddQuadFree(TEX_SPRITE, blend, px, py, tu, tv, SPR_ATLAS_W, SPR_ATLAS_H, 255, 255, 255, (uint8)alpha))
+    const bool added = AddQuadFree(TEX_SPRITE, blend, px, py, tu, tv, SPR_ATLAS_W, SPR_ATLAS_H, 255, 255, 255, (uint8)alpha);
+    sScissor         = 0;
+    if (!added)
         return Refuse(GpuRender::REASON_QUAD_LIMIT);
     return true;
 }
@@ -1100,8 +1219,10 @@ bool EnsureModel(unsigned m)
     g.tried         = true;
     const Model &md = modelList[m];
     const unsigned frames = md.frameCount ? md.frameCount : 1, vc = md.vertCount;
-    if (!md.vertices || !md.indices || !vc || !md.indexCount || (md.faceVertCount != 3 && md.faceVertCount != 4))
+    if (!md.vertices || !md.indices || !vc || !md.indexCount || (md.faceVertCount != 3 && md.faceVertCount != 4)) {
+        DEV_LOG("gpu3d: model %u not drawable (vertices %u, indices %u, face size %u)", m, vc, (unsigned)md.indexCount, (unsigned)md.faceVertCount);
         return false;
+    }
 
     // Vertices: 12 bytes each, every frame after the other.
     const u32 vbytes = ((u32)vc * frames * 12 + 15) & ~15u;
@@ -1167,8 +1288,8 @@ bool EmitScene3D(const Cmd &c, const uint8 *arena)
     const GpuScene3D::Head *h = (const GpuScene3D::Head *)arena;
     if (!s3Ready || sDraw3DCount >= MAX_DRAW3D)
         return Refuse(GpuRender::REASON_UNSUPPORTED, CMD_SCENE3D);
-    // Quads are not scissored: a scene under a clip smaller than the screen is left to the CPU.
-    if (c.clip[0] > 0 || c.clip[1] > 0 || c.clip[2] < screens[0].size.x || c.clip[3] < screens[0].size.y)
+    // Under a clip smaller than the screen: scissored
+    if (!ScissorFor(c.clip))
         return Refuse(GpuRender::REASON_UNSUPPORTED, CMD_SCENE3D);
     if (h->ink != INK_NONE && h->ink != INK_ALPHA && h->ink != INK_BLEND)
         return Refuse(GpuRender::REASON_INK, (unsigned)h->ink);
@@ -1179,7 +1300,8 @@ bool EmitScene3D(const Cmd &c, const uint8 *arena)
     if (sBatchCount >= MAX_BATCHES)
         return Refuse(GpuRender::REASON_QUAD_LIMIT);
     sDraw3D[sDraw3DCount] = { h, in };
-    sBatches[sBatchCount++] = { TEX_3D, BLEND_NORMAL, sDraw3DCount++, 0, 0 };
+    sBatches[sBatchCount++] = { TEX_3D, BLEND_NORMAL, sDraw3DCount++, 0, 0, 0, sScissor };
+    sScissor                = 0;
     sStats.faces += 0;
     return true;
 }
@@ -1217,6 +1339,8 @@ void Draw3DSceneGpu(unsigned k)
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.difs, 1, 1, 1, 0);
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.spcs, 0, 0, 0, 0);
     }
+    // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it)
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, STEREO_ZC, -0.5f, 1.0f);
     C3D_TexEnv *env = C3D_GetTexEnv(0);
     C3D_TexEnvInit(env);
     C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
@@ -1331,6 +1455,183 @@ bool EmitRect(const Cmd &c)
                  (uint8)alpha))
         return Refuse(GpuRender::REASON_QUAD_LIMIT);
     return true;
+}
+
+// DrawLine: the software's clipping and Bresenham steps, pixel for pixel, with the pixels gathered into horizontal or
+// vertical runs, one quad each (the Special Stage's wireframe item boxes, the giant ring's portal).
+struct LineRuns {
+    int x0, y0, len;
+    bool vertical;
+    uint8 blend, r, g, b, a;
+    bool ok = true;
+    void Flush()
+    {
+        if (len <= 0 || !ok)
+            return;
+        const float x1 = vertical ? x0 + 1.0f : (float)(x0 + len), y1 = vertical ? (float)(y0 + len) : y0 + 1.0f;
+        if (!AddQuad(TEX_SPRITE, blend, (float)x0, (float)y0, x1, y1, 4.0f, 4.0f, 4.0f, 4.0f, SPR_ATLAS_W, SPR_ATLAS_H, r, g, b, a))
+            ok = false;
+        len = 0;
+    }
+    void Put(int x, int y)
+    {
+        if (len) {
+            // Extends the run when the pixel continues it (a 1-pixel run may turn into either kind)
+            if (len == 1 && y == y0 && x == x0 + 1) {
+                vertical = false, ++len;
+                return;
+            }
+            if (len == 1 && x == x0 && (y == y0 + 1 || y == y0 - 1)) {
+                vertical = true, ++len;
+                if (y < y0)
+                    y0 = y;
+                return;
+            }
+            if (!vertical && y == y0 && x == x0 + len) {
+                ++len;
+                return;
+            }
+            if (vertical && x == x0 && (y == y0 + len || y == y0 - 1)) {
+                if (y < y0)
+                    y0 = y;
+                ++len;
+                return;
+            }
+            Flush();
+        }
+        x0 = x, y0 = y, len = 1, vertical = false;
+    }
+};
+
+bool EmitLine(const Cmd &c)
+{
+    const int32 *p = c.p;
+    const uint32 color = (uint32)p[4];
+    int32 alpha = p[5], ink = p[6];
+    const bool screenRelative = p[7] != 0;
+    uint8 blend = BLEND_NORMAL;
+    switch (ink) {
+        case INK_NONE: alpha = 0xFF; break;
+        case INK_BLEND: alpha = 0x80; break;
+        case INK_ALPHA:
+            if (alpha > 0xFF)
+                alpha = 0xFF;
+            else if (alpha <= 0)
+                return true;
+            break;
+        case INK_ADD:
+        case INK_SUB:
+            blend = ink == INK_ADD ? BLEND_ADD : BLEND_SUB;
+            if (alpha > 0xFF)
+                alpha = 0xFF;
+            else if (alpha <= 0)
+                return true;
+            break;
+        default: return Refuse(GpuRender::REASON_INK, (unsigned)ink); // masked, tint: not for lines yet
+    }
+    int32 drawX1 = p[0], drawY1 = p[1], drawX2 = p[2], drawY2 = p[3];
+    if (!screenRelative) {
+        drawX1 = FROM_FIXED(p[0]) - c.pos[0];
+        drawY1 = FROM_FIXED(p[1]) - c.pos[1];
+        drawX2 = FROM_FIXED(p[2]) - c.pos[0];
+        drawY2 = FROM_FIXED(p[3]) - c.pos[1];
+    }
+    const int32 cx1 = c.clip[0], cy1 = c.clip[1], cx2 = c.clip[2], cy2 = c.clip[3];
+    auto outcode = [&](int32 x, int32 y, bool strict) {
+        int32 f = 0;
+        if (strict ? x >= cx2 : x > cx2)
+            f = 2;
+        else if (x < cx1)
+            f = 1;
+        if (strict ? y >= cy2 : y > cy2)
+            f |= 8;
+        else if (y < cy1)
+            f |= 4;
+        return f;
+    };
+    int32 flags1 = outcode(drawX1, drawY1, true), flags2 = outcode(drawX2, drawY2, true);
+    while (flags1 || flags2) {
+        if (flags1 & flags2)
+            return true;
+        const int32 curFlags = flags1 ? flags1 : flags2;
+        int32 x = 0, y = 0;
+        if (curFlags & 8) {
+            int32 div = drawY2 - drawY1;
+            if (!div)
+                div = 1;
+            x = drawX1 + ((drawX2 - drawX1) * (((cy2 - drawY1) << 8) / div) >> 8);
+            y = cy2;
+        }
+        else if (curFlags & 4) {
+            int32 div = drawY2 - drawY1;
+            if (!div)
+                div = 1;
+            x = drawX1 + ((drawX2 - drawX1) * (((cy1 - drawY1) << 8) / div) >> 8);
+            y = cy1;
+        }
+        else if (curFlags & 2) {
+            int32 div = drawX2 - drawX1;
+            if (!div)
+                div = 1;
+            x = cx2;
+            y = drawY1 + ((drawY2 - drawY1) * (((cx2 - drawX1) << 8) / div) >> 8);
+        }
+        else if (curFlags & 1) {
+            int32 div = drawX2 - drawX1;
+            if (!div)
+                div = 1;
+            x = cx1;
+            y = drawY1 + ((drawY2 - drawY1) * (((cx1 - drawX1) << 8) / div) >> 8);
+        }
+        if (curFlags == flags1)
+            drawX1 = x, drawY1 = y, flags1 = outcode(x, y, false);
+        else
+            drawX2 = x, drawY2 = y, flags2 = outcode(x, y, false);
+    }
+    auto clampTo = [](int32 v, int32 lo, int32 hi) { return v > hi ? hi : v < lo ? lo : v; };
+    drawX1 = clampTo(drawX1, cx1, cx2), drawY1 = clampTo(drawY1, cy1, cy2);
+    drawX2 = clampTo(drawX2, cx1, cx2), drawY2 = clampTo(drawY2, cy1, cy2);
+
+    const int32 sizeX = abs(drawX2 - drawX1), sizeY = abs(drawY2 - drawY1);
+    const int32 max = sizeY;
+    int32 hSize     = sizeX <= sizeY ? -sizeY >> 2 : sizeX >> 2;
+    if (drawX2 < drawX1) {
+        int32 v = drawX1;
+        drawX1 = drawX2, drawX2 = v;
+        v = drawY1, drawY1 = drawY2, drawY2 = v;
+    }
+
+    const uint16 c16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
+    const unsigned r5 = c16 >> 11, g6 = (c16 >> 5) & 0x3F, b5 = c16 & 0x1F;
+    LineRuns runs;
+    runs.len = 0, runs.blend = blend, runs.a = (uint8)alpha;
+    runs.r = (uint8)((r5 << 3) | (r5 >> 2)), runs.g = (uint8)((g6 << 2) | (g6 >> 4)), runs.b = (uint8)((b5 << 3) | (b5 >> 2));
+    // The pixels the software writes: the frame buffer pointer stays inside the screen, so do the steps (capped).
+    int guard = 4096;
+    if (drawY1 > drawY2) {
+        while ((drawX1 < drawX2 || drawY1 >= drawY2) && --guard > 0) {
+            runs.Put(drawX1, drawY1);
+            if (hSize > -sizeX)
+                hSize -= max, ++drawX1;
+            if (hSize < max)
+                --drawY1, hSize += sizeX;
+        }
+    }
+    else {
+        while (--guard > 0) {
+            runs.Put(drawX1, drawY1);
+            if (drawX1 < drawX2 || drawY1 < drawY2) {
+                if (hSize > -sizeX)
+                    hSize -= max, ++drawX1;
+                if (hSize < max)
+                    hSize += sizeX, ++drawY1;
+            }
+            else
+                break;
+        }
+    }
+    runs.Flush();
+    return runs.ok ? true : Refuse(GpuRender::REASON_QUAD_LIMIT);
 }
 
 bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int kind)
@@ -1522,17 +1823,30 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
         const uint32 ax = (uint32)(s.deform.x < 0 ? -s.deform.x : s.deform.x), ay = (uint32)(s.deform.y < 0 ? -s.deform.y : s.deform.y);
         estimate += (uint32)(((uint64)(ax + ay) * (uint32)lineSize) >> 20) + 2;
     }
-    if (estimate > ROTO_MAX_RUNS)
+    if (estimate > ROTO_MAX_RUNS) {
+        ++sStats.rotoSoftRuns;
         return EmitSoftLayer(c, layer, sl, LAYER_ROTOZOOM);
+    }
     // The layer's quads go into one batch; counts are kept in locals (stores through the vertex pointer would make the
     // compiler reload every global after each one).
-    if (!sBatchCount || sBatches[sBatchCount - 1].tex != TEX_TILE_FINE || sBatches[sBatchCount - 1].blend != BLEND_NORMAL) {
+    if (!sBatchCount || sBatches[sBatchCount - 1].tex != TEX_TILE_FINE || sBatches[sBatchCount - 1].blend != BLEND_NORMAL ||
+        sBatches[sBatchCount - 1].depth != sDepth || sBatches[sBatchCount - 1].scissor != sScissor) {
         if (sBatchCount >= MAX_BATCHES)
             return Refuse(GpuRender::REASON_QUAD_LIMIT);
-        sBatches[sBatchCount++] = { TEX_TILE_FINE, BLEND_NORMAL, sQuadCount, 0, 0 };
+        sBatches[sBatchCount++] = { TEX_TILE_FINE, BLEND_NORMAL, sQuadCount, 0, 0, sDepth, sScissor };
     }
-    Batch &batch          = sBatches[sBatchCount - 1];
+    Batch *batch          = &sBatches[sBatchCount - 1];
+    unsigned batchFirst   = sQuadCount; // quads of the open batch start here
+    const Batch keep0     = *batch;     // the batch as it was, and how many there were (for the fallback below)
+    const unsigned keepBatches = sBatchCount;
     const unsigned first0 = sQuadCount;
+    // Stereo: each line's depth from its distance (the walk's step grows with it), the lines at the player's feet
+    // (line 200, the Special Stage camera's) on the screen plane, the horizon the farthest.
+    float feet = 0;
+    if (sStereo) {
+        const int fy = 200 < y1 ? y1 : 200 >= y2 ? y2 - 1 : 200;
+        feet         = sqrtf((float)first[fy - y1].deform.x * first[fy - y1].deform.x + (float)first[fy - y1].deform.y * first[fy - y1].deform.y);
+    }
     const unsigned limit  = first0 + ROTO_MAX_QUADS < MAX_QUADS ? first0 + ROTO_MAX_QUADS : MAX_QUADS;
     unsigned q            = first0, empty = 0;
     uint32 *w             = (uint32 *)&sVbo[sCur][q * 4];
@@ -1551,6 +1865,27 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
         const unsigned bank   = sLineBuf[y];
         const int32 dx = s.deform.x, dy = s.deform.y;
         const int hx = dx >> 12, hy = dy >> 12; // half a pixel step in 1/32 texel
+        if (sStereo && feet > 0) {
+            const float d = sqrtf((float)dx * dx + (float)dy * dy);
+            float f       = d > 0 ? 1.0f - feet / d : 1.0f;
+            f             = f < -0.5f ? -0.5f : f > 1.0f ? 1.0f : f;
+            const int8 depth = (int8)(f * STEREO_FAR + (f < 0 ? -0.5f : 0.5f));
+            if (depth != batch->depth) {
+                // A batch per depth band: close this one, open the next
+                batch->count += q - batchFirst;
+                if (batch->count == 0)
+                    batch->depth = depth;
+                else {
+                    if (sBatchCount >= MAX_BATCHES) {
+                        sQuadCount = q;
+                        return Refuse(GpuRender::REASON_QUAD_LIMIT);
+                    }
+                    sBatches[sBatchCount++] = { TEX_TILE_FINE, BLEND_NORMAL, q, 0, 0, depth, 0 };
+                    batch                   = &sBatches[sBatchCount - 1];
+                }
+                batchFirst = q;
+            }
+        }
         uint32 px = (uint32)s.position.x, py = (uint32)s.position.y; // wraps as the software's int32 does
         const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
         RotoAxis ax, ay;
@@ -1572,7 +1907,7 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
                 if (memoKey[slot] != key) {
                     const int cell = EnsureTile(t & 0xFFF, bank);
                     if (cell < 0) {
-                        batch.count += q - first0, sQuadCount = q;
+                        batch->count += q - batchFirst, sQuadCount = q;
                         return Refuse(cell == -2 ? GpuRender::REASON_ATLAS_FULL : GpuRender::REASON_TILE_RANGE);
                     }
                     memoKey[slot] = key;
@@ -1580,8 +1915,11 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
                 }
                 if (q >= limit) {
                     // Too many: drop this layer's quads and let the software draw it.
-                    sQuadCount = first0;
-                    if (!batch.count)
+                    ++sStats.rotoSoftQuads;
+                    sQuadCount                  = first0;
+                    sBatchCount                 = keepBatches;
+                    sBatches[sBatchCount - 1]   = keep0;
+                    if (!keep0.count)
                         --sBatchCount;
                     return EmitSoftLayer(c, layer, sl, LAYER_ROTOZOOM);
                 }
@@ -1610,11 +1948,11 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
             cx = end;
         }
     }
-    batch.count += q - first0;
+    batch->count += q - batchFirst;
     sStats.tileQuads += q - first0;
     sStats.emptyTiles += empty;
     sQuadCount = q;
-    if (!batch.count)
+    if (!batch->count && batch == &sBatches[sBatchCount - 1])
         --sBatchCount;
     return true;
 }
@@ -1623,8 +1961,8 @@ bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 {
     const int y1 = c.clip[1], y2 = c.clip[3];
     uint8 bank;
-    if (!UniformBank(y1, y2, &bank))
-        return EmitSoftLayer(c, layer, sl, LAYER_HSCROLL); // lines in different palette banks: the water line
+    if (!UniformBank(y1, y2, &bank)) // lines in different palette banks (the water line): once per run of one bank
+        return PerBankRun(c, y1, y2, [&](const Cmd &cc) { return EmitLayerHScroll(cc, layer, sl + (cc.clip[1] - y1)); });
     // screens[0], not currentScreen: the draw loop has moved that on to screen 1 (never set up on the 3DS, pitch 0,
     // which left every tile run empty).
     const int pitch = screens[0].pitch;
@@ -1725,7 +2063,7 @@ const char *GpuRender::LastRefusal() { return sRefusal[0] ? sRefusal : "-"; }
 
 const char *GpuRender::ReasonName()
 {
-    static const char *const kCmd[]   = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE OUTLINE", "FACE", "BLENDED FACE", "SPRITE", "ROTO SPRITE", "LAYER", "LINEBUF", "FACES", "BLENDED FACES", "3D SCENE" };
+    static const char *const kCmd[]   = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE OUTLINE", "FACE", "BLENDED FACE", "SPRITE", "ROTO SPRITE", "LAYER", "LINEBUF", "FACES", "BLENDED FACES", "3D SCENE", "PALETTE" };
     static const char *const kLayer[] = { "HSCROLL LAYER", "VSCROLL LAYER", "ROTOZOOM LAYER", "BASIC LAYER" };
     static const char *const kInk[]   = { "INK NONE", "INK BLEND", "INK ALPHA", "INK ADD", "INK SUB", "INK TINT", "INK MASKED", "INK UNMASKED" };
     const unsigned cmd = sStats.unsupportedCmd;
@@ -1750,6 +2088,65 @@ const char *GpuRender::ReasonName()
     return "?";
 }
 
+// Stereoscopic depth of a command, in pixels of disparity at the full slider: tile layers by their parallax (the
+// playfield, factor 1.0, on the screen plane; a far background up to 6 pixels behind it), the HUD's draw groups
+// (12 and up) 2 pixels in front, everything else on the screen plane.
+static int8 UfoSpriteDepth(const Cmd &c, float k);
+
+static int8 CmdDepth(const Cmd &c)
+{
+    if (c.type == CMD_LAYER) {
+        const TileLayer *layer = (const TileLayer *)(uintptr_t)c.p[0];
+        // The Special Stage: the sky layers scroll by deformation (parallax 1.0) but are the farthest thing; the floor
+        // (rotozoom) gets a depth per line (EmitLayerRotozoom).
+        if (sUfoStage && c.kind != LAYER_ROTOZOOM)
+            return STEREO_FAR;
+        int32 f = layer->parallaxFactor;
+        f       = f < 0 ? 0 : f > 0x100 ? 0x100 : f;
+        return (int8)((0x100 - f) * 6 / 0x100);
+    }
+    if (c.group >= 12)
+        return -2;
+    // The Special Stage's track objects (rings, spheres, UFOs) are sprites the game scales by distance: scale =
+    // 0x1000000 / Z, with the same projection as the 3D models (projectionX 8), so they get the models' depth.
+    if (sUfoStage && c.type == CMD_ROTO && c.p[8] > 0)
+        return UfoSpriteDepth(c, 16777216.0f);
+    return 0;
+}
+
+// Z from a Special Stage sprite's scale (scale = k / Z), as a depth.
+static int8 UfoSpriteDepth(const Cmd &c, float k)
+{
+    {
+        const float z = k / (float)c.p[8];
+        float f       = 1.0f - STEREO_ZC / z;
+        f             = f < -0.5f ? -0.5f : f > 1.0f ? 1.0f : f;
+        return (int8)roundf(f * STEREO_FAR);
+    }
+}
+
+// Depths of a Special Stage frame's commands, worked out before it is emitted: an item box draws its cage as a
+// wireframe 3D scene (lines, no depth of their own) and then its contents, a sprite scaled 0x2000000 / Z: the lines
+// take the depth of the sprite that follows them.
+static int8 sCmdDepth[8192];
+
+static void UfoDepths(const Stream &stream)
+{
+    const unsigned n = stream.count < 8192 ? stream.count : 8192;
+    int8 next        = 0;
+    for (unsigned i = n; i-- > 0;) {
+        const Cmd &c = stream.cmds[i];
+        if (c.type == CMD_ROTO && c.group < 12 && c.p[8] > 0 && i > 0 && stream.cmds[i - 1].type == CMD_LINE)
+            sCmdDepth[i] = UfoSpriteDepth(c, 33554432.0f);
+        else if (c.type == CMD_LINE && c.group < 12)
+            sCmdDepth[i] = next;
+        else
+            sCmdDepth[i] = CmdDepth(c);
+        if (c.type == CMD_ROTO)
+            next = sCmdDepth[i];
+    }
+}
+
 bool GpuRender::Render(const Stream &stream)
 {
     const u64 tStart = svcGetSystemTick();
@@ -1763,7 +2160,7 @@ bool GpuRender::Render(const Stream &stream)
         sSeenContent = contentVersion;
         ResetCaches();
     }
-    TrackPalette();
+    TrackPalette(false, stream.basePalette);
     if (tileDirtyAny) {
         // Animated tiles rewritten since the last GPU frame: their copies (every bank, every flip variant) go stale.
         tileDirtyAny = false;
@@ -1792,6 +2189,15 @@ bool GpuRender::Render(const Stream &stream)
     }
 
     sCur = (sCur + 1) & 1;
+    // Both eyes when the 3D slider is up or DEBUG FORCE 3D is on (as if the slider were at the top: on a 2DS it
+    // measures what 3D would cost; the right eye is drawn and never seen).
+    sSlider = osGet3DSliderState();
+    if (DEV_SW_FORCE3D)
+        sSlider = 1.0f;
+    sStereo = sSlider > 0.0f && C3DPresent::TargetRight();
+    sUfoStage = sStereo && sceneInfo.listData && !strncmp(sceneInfo.listData[sceneInfo.listPos].folder, "UFO", 3);
+    if (sUfoStage)
+        UfoDepths(stream);
     bool ok;
     unsigned i = 0;
     for (int attempt = 0;; ++attempt) {
@@ -1807,11 +2213,25 @@ bool GpuRender::Render(const Stream &stream)
     sStats.rotoUs = sStats.rotoQuads = 0;
     ok            = true;
     memset(sLineBuf, 0, sizeof(sLineBuf));
+    for (unsigned b = 0; b < REAL_BANKS; ++b)
+        sBankMap[b] = (uint8)b;
+    sVirtUsed     = 0;
+    sScissor      = 0;
+    sScissorCount = 1;
 
     for (i = 0; i < stream.count && ok; ++i) {
         const Cmd &c = stream.cmds[i];
+        sDepth = !sStereo ? 0 : (sUfoStage && i < 8192) ? sCmdDepth[i] : CmdDepth(c);
+        if (GpuRender::depthMode & 1024) { // debug: everything scissored to the top-left quarter (checks the mapping)
+            static const int16 kQuarter[4] = { 0, 0, 200, 120 };
+            ScissorFor(kQuarter);
+        }
         switch (c.type) {
             case CMD_LINEBUF: memcpy(sLineBuf, stream.arena + c.arena, sizeof(sLineBuf)); break;
+            case CMD_PALETTE:
+                if (!ApplySnapshot((const uint16(*)[256])(stream.arena + c.arena)))
+                    ok = Refuse(REASON_UNSUPPORTED, CMD_PALETTE);
+                break;
             case CMD_SPRITE: ok = EmitSprite(c); break;
             case CMD_ROTO: ok = EmitRoto(c); break;
             case CMD_FACE: ok = EmitFace(c, stream.arena + c.arena); break;
@@ -1830,6 +2250,7 @@ bool GpuRender::Render(const Stream &stream)
                 break;
             }
             case CMD_RECT: ok = EmitRect(c); break;
+            case CMD_LINE: ok = EmitLine(c); break;
             case CMD_CIRCLE: ok = EmitRing(c, c.p[0], c.p[1], 0, c.p[2], (uint32)c.p[3], c.p[4], c.p[5], c.p[6] != 0); break;
             case CMD_CIRCLE_OUTLINE: ok = EmitRing(c, c.p[0], c.p[1], c.p[2], c.p[3], (uint32)c.p[4], c.p[5], c.p[6], c.p[7] != 0); break;
             case CMD_FILL: ok = EmitFill(c); break;
@@ -1843,7 +2264,7 @@ bool GpuRender::Render(const Stream &stream)
                     ok = EmitLayerBasic(c, layer, sl);
                 else if (c.kind == LAYER_HSCROLL)
                     ok = EmitLayerHScroll(c, layer, sl);
-                else if (c.kind == LAYER_ROTOZOOM && !(GpuRender::depthMode & 256)) {
+                else if (c.kind == LAYER_ROTOZOOM && !(GpuRender::depthMode & 256) && !sRotoSoft) {
                     const u64 t0 = svcGetSystemTick();
                     const unsigned q0 = sQuadCount;
                     ok = EmitLayerRotozoom(c, layer, sl);
@@ -1862,14 +2283,24 @@ bool GpuRender::Render(const Stream &stream)
         AddQuad(TEX_SPRITE, BLEND_MASKED, 0, 0, 400, 240, 4, 4, 4, 4, SPR_ATLAS_W, SPR_ATLAS_H, 255, 0, 0, 255);
     // The sprite atlas filled up mid-frame: empty it and build the frame once more from scratch (the tiles queued so
     // far go back to unconverted, the sprites are all new).
-    if (ok || !sSprFull || attempt > 0)
+    // Out of quads with rotozoom layers drawn as tile runs (thousands of quads): once more with those layers in
+    // software (one quad each) rather than the whole frame on the CPU.
+    const bool quadRetry = !ok && sFail.reason == GpuRender::REASON_QUAD_LIMIT && sStats.rotoQuads && !sRotoSoft;
+    if (ok || attempt > 0 || (!sSprFull && !quadRetry))
         break;
     for (unsigned k = 0; k < sPendingCount; ++k)
         if (sPending[k].kind == 0)
             sTileStamp[sPending[k].bank][sPending[k].id] = 0;
-    ResetSprites();
-    ++sStats.atlasRetries;
+    if (quadRetry) {
+        sRotoSoft = true;
+        ++sStats.quadRetries;
     }
+    else {
+        ResetSprites();
+        ++sStats.atlasRetries;
+    }
+    }
+    sRotoSoft = false;
     if (!ok) {
         // What was refused, for SITE STATE: the command and its parameters.
         if (i > 0) {
@@ -1944,6 +2375,20 @@ bool GpuRender::Render(const Stream &stream)
     const u32 maskConst = maskFrame ? MaskConstant() : 0;
     // Depth matters to the 3D scenes, the stencil to the mask frame. Clear: depth to its far end for the depth mode in
     // use (24 low bits), stencil 0 (8 high bits).
+    C3D_RenderTarget *const eyeTarget[2] = { target, sStereo ? (C3D_RenderTarget *)C3DPresent::TargetRight() : NULL };
+    C3DPresent::SetStereo(sStereo);
+    for (int eye = 0; eye < (sStereo ? 2 : 1); ++eye) {
+    target    = eyeTarget[eye];
+    sEyeShift = sStereo ? (eye ? 0.5f : -0.5f) * sSlider : 0.0f;
+    if (eye) {
+        // Never overflow the command buffer (a panic, a frozen console): the right eye only when it fits again.
+        u32 *cbuf, csize, coffset;
+        GPUCMD_GetBuffer(&cbuf, &csize, &coffset);
+        if (coffset * 2 > csize - csize / 16) {
+            ++sStats.eyesDropped;
+            break;
+        }
+    }
     C3D_RenderTargetClear(target, (sDraw3DCount || maskFrame) ? C3D_CLEAR_ALL : C3D_CLEAR_COLOR, 0x000000FF,
                           (GpuRender::depthMode & 4) ? 0 : 0x00FFFFFF);
     C3D_FrameDrawOn(target);
@@ -1964,14 +2409,37 @@ bool GpuRender::Render(const Stream &stream)
     };
     bind2D();
 
-    int curBlend = -1, curTex = -1;
+    int curBlend = -1, curTex = -1, curDepth = 0; // bind2D sets the projection of depth 0
+    int curScissor = 0;
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     for (unsigned b = 0; b < sBatchCount; ++b) {
         const Batch &bt = sBatches[b];
+        if (bt.scissor != curScissor) {
+            if (!bt.scissor)
+                C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+            else {
+                // Screen rectangle -> the target's own pixels: it is 240 wide and 400 high, the top screen turned
+                // (both axes run backwards; checked with depthmode 1024 in Azahar).
+                const int16 *r = sScissors[bt.scissor];
+                C3D_SetScissor(GPU_SCISSOR_NORMAL, (u32)(240 - r[3]), (u32)(400 - r[2]), (u32)(240 - r[1]), (u32)(400 - r[0]));
+            }
+            curScissor = bt.scissor;
+        }
         if (bt.tex == TEX_3D) {
             Draw3DSceneGpu(bt.first);
             bind2D(); // the 2D state again, textures and blending set anew
             curBlend = curTex = -1;
+            curDepth = 0;
             continue;
+        }
+        if (bt.depth != curDepth) {
+            // This eye's view of the batch: shifted by half its disparity, left for the left eye when behind.
+            C3D_Mtx m;
+            Mtx_Copy(&m, (const C3D_Mtx *)C3DPresent::Projection());
+            // Whole pixels: a fraction moved the 1-pixel floor runs' samples off their tiles (stray texels in 3D)
+            Mtx_Translate(&m, roundf((eye ? 0.5f : -0.5f) * bt.depth * sSlider), 0.0f, 0.0f, true);
+            C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &m);
+            curDepth = bt.depth;
         }
         if (curTex != bt.tex) {
             const bool tile = bt.tex == TEX_TILE || bt.tex == TEX_TILE_FINE;
@@ -2058,10 +2526,20 @@ bool GpuRender::Render(const Stream &stream)
         if (maskFrame && (bt.blend == BLEND_NORMAL || bt.blend == BLEND_UNMASKED))
             secondPass(bt.first, bt.count);
     }
-    // citro3d's state is sticky and citro2d (the bottom screen) draws next: leave no stencil or alpha test behind.
+    // citro3d's state is sticky and citro2d (the bottom screen) draws next: leave no stencil, alpha test or scissor behind.
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
     C3D_AlphaTest(false, GPU_ALWAYS, 0);
     ResetTexEnv();
+    BottomUi::DrawTopOverlayGpu(target); // OPTIONS > SHOW FPS
+    } // eye
+    {
+        // How full the GPU command buffer got (it overflowing panics libctru, a hang on the console)
+        u32 *cbuf, csize, coffset;
+        GPUCMD_GetBuffer(&cbuf, &csize, &coffset);
+        const unsigned pct = csize ? (unsigned)((u64)coffset * 100 / csize) : 0;
+        sStats.cmdBufPct = pct > sStats.cmdBufPct ? pct : sStats.cmdBufPct;
+    }
     C3D_FrameEnd(0);
     GPU_TIME(STAGE_PFRAME, t);
     return true;

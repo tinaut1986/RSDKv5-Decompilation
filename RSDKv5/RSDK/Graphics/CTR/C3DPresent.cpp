@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS
 
@@ -21,6 +22,8 @@ struct Vertex {
 
 static bool sReady, sFailed, sCore, sCoreFailed;
 static C3D_RenderTarget *sTarget;
+static C3D_RenderTarget *sTargetRight; // right eye, created when 3D is first drawn
+static bool sStereo;
 static C3D_Tex sTex;
 static DVLB_s *sDvlb;
 static shaderProgram_s sProgram;
@@ -32,13 +35,47 @@ static Vertex *sQuad;  // linear memory
 static C3D_BufInfo sBuf;
 static C3D_AttrInfo sAttr;
 
+// citro3d ends a frame asynchronously: the swap is done by a callback when its GPU queue finishes. HOME takes the GPU
+// away and a frame still in flight is never acknowledged, so every later wait on the queue (C3D_Fini) never returns:
+// closing from HOME hung on "closing the software" (2026-10-22; sm-3ds had the same, its fix is this). The APT hook,
+// while the GPU is still ours, drains the queue with an empty frame, on a thread with a timeout.
+static aptHookCookie sAptCookie;
+
+static void DrainThread(void *)
+{
+    if (C3D_FrameBegin(0))
+        C3D_FrameEnd(0);
+}
+
+static void AptHook(APT_HookType type, void *)
+{
+    if ((type != APTHOOK_ONSUSPEND && type != APTHOOK_ONSLEEP) || !sCore)
+        return;
+    Thread t = threadCreate(DrainThread, NULL, 16 * 1024, 0x30, -2, false);
+    if (!t)
+        return;
+    if (threadJoin(t, 500ULL * 1000 * 1000) == 0) // a timeout returns a positive code: only 0 is "ended"
+        threadFree(t);
+}
+
+// The teardown, on a thread with a timeout: a wait that never ends costs a second at exit, not the console.
+static void TeardownThread(void *)
+{
+    C3D_FrameSync(); // the last frame's commands and transfers are done
+    C2D_Fini();
+    C3D_Fini();
+}
+
 void C3DPresent::ShutdownCore()
 {
     if (!sCore)
         return;
-    C3D_FrameSync(); // the last frame's commands and transfers are done
-    C2D_Fini();
-    C3D_Fini();
+    aptUnhook(&sAptCookie);
+    Thread t = threadCreate(TeardownThread, NULL, 16 * 1024, 0x30, -2, false);
+    if (t && threadJoin(t, 1000ULL * 1000 * 1000) == 0)
+        threadFree(t);
+    else
+        DEV_LOG("exit: citro3d teardown timed out");
     sCore = sReady = false;
 }
 
@@ -51,14 +88,16 @@ bool C3DPresent::InitCore()
     if (sCoreFailed)
         return false;
     sCoreFailed = true;
-    // The GPU command buffer: 128 KB. The GPU renderer's 3D scenes set uniforms and buffers per model instance and
-    // overflowed 32 KB in the Special Stage (GPUCMD_AddInternal panics: svcBreak, a frozen console). Every glyph of
+    // The GPU command buffer: 256 KB. The GPU renderer's 3D scenes set uniforms and buffers per model instance and
+    // overflowed 32 KB in the Special Stage (GPUCMD_AddInternal panics: svcBreak, a frozen console); one eye takes up
+    // to ~70 KB there and stereoscopic 3D draws everything twice (128 KB froze the 2DS with FORCE 3D). Every glyph of
     // the bottom screen is a 2D object; past the limit citro2d reuses its vertex buffer mid-frame and only the last
     // objects show (256 left the bottom screen blank). 768 objects are ~150 KB of linear memory.
-    if (!C3D_Init(0x20000))
+    if (!C3D_Init(0x40000))
         return false;
     if (!C2D_Init(768))
         return false;
+    aptHook(&sAptCookie, AptHook, NULL);
     sCore       = true;
     sCoreFailed = false;
     return true;
@@ -141,6 +180,31 @@ bool C3DPresent::Ready() { return sReady; }
 void *C3DPresent::Target() { return sTarget; }
 void *C3DPresent::Projection() { return &sProj; }
 
+void *C3DPresent::TargetRight()
+{
+    static bool failed;
+    if (!sTargetRight && !failed && sReady) {
+        sTargetRight = C3D_RenderTargetCreate(SCREEN_H, SCREEN_W, GPU_RB_RGB565, GPU_RB_DEPTH24_STENCIL8);
+        if (sTargetRight)
+            C3D_RenderTargetSetOutput(sTargetRight, GFX_TOP, GFX_RIGHT,
+                                      GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
+                                          GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
+                                          GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+        failed = !sTargetRight;
+    }
+    return sTargetRight;
+}
+
+void C3DPresent::SetStereo(bool on)
+{
+    if (on == sStereo)
+        return;
+    gfxSet3D(on);
+    sStereo = on;
+}
+
+bool C3DPresent::Stereo() { return sStereo; }
+
 void C3DPresent::Present(const unsigned short *src, int pitch)
 {
     if (!sReady)
@@ -179,6 +243,24 @@ void C3DPresent::Present(const unsigned short *src, int pitch)
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &sProj);
     C3D_TexBind(0, &sTex);
     C3D_DrawArrays(GPU_TRIANGLE_STRIP, 0, 4);
+    BottomUi::DrawTopOverlayGpu(sTarget);
+    if (sStereo && sTargetRight) {
+        // A software frame in 3D mode: the same picture for both eyes.
+        C3D_FrameDrawOn(sTargetRight);
+        C3D_BindProgram(&sProgram);
+        C3D_SetAttrInfo(&sAttr);
+        C3D_SetBufInfo(&sBuf);
+        C3D_TexEnv *e = C3D_GetTexEnv(0);
+        C3D_TexEnvInit(e);
+        C3D_TexEnvSrc(e, C3D_Both, GPU_TEXTURE0, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+        C3D_TexEnvFunc(e, C3D_Both, GPU_REPLACE);
+        C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &sProj);
+        C3D_TexBind(0, &sTex);
+        C3D_DrawArrays(GPU_TRIANGLE_STRIP, 0, 4);
+        BottomUi::DrawTopOverlayGpu(sTargetRight);
+    }
     C3D_FrameEnd(0);
 }
 

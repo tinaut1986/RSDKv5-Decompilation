@@ -35,7 +35,7 @@ enum {
     FTP_IDLE_MS   = 10 * 60 * 1000,
     FTP_PASV_FIRST = FTP_PORT + 1,
     FTP_PASV_COUNT = 64,
-    CIA_IO_SIZE   = 128 * 1024,
+    CIA_IO_SIZE   = 32 * 1024,
     RELAUNCH_MS   = 10000,
 };
 
@@ -74,7 +74,9 @@ static volatile int sPendingGpuMode = -1; // SITE GPU, applied by the main threa
 // Requests from the FTP thread, applied by the main thread in FrameEnd.
 static volatile int sPendingCategory = -1, sPendingScene = -1;
 static char sOrderCur[400], sOrderLast[400];
-static volatile int sShotRequest; // 1 top screen, 2 bottom screen
+static volatile bool sGoto; // SITE GOTO: move the player at the end of the frame
+static int32 sGotoX, sGotoY;
+static volatile int sShotRequest; // 1 top screen, 2 bottom screen, 3 top screen's right eye
 
 struct Session {
     int ctrl;
@@ -107,10 +109,9 @@ static bool InstallCia(const char *sdPath, char *error, unsigned errorCap)
     bool started = false, ok = false, downgraded = false;
     u64 size = 0, required = 0;
     AM_TitleInfo info;
-    unsigned char *data = (unsigned char *)malloc(CIA_IO_SIZE);
-    snprintf(error, errorCap, "out of memory");
-    if (!data)
-        goto done;
+    // A static buffer: in a big stage the heap had no 128 KB left and the install failed ("out of memory").
+    static unsigned char data[CIA_IO_SIZE];
+    snprintf(error, errorCap, "cannot open the CIA");
     rc = FSUSER_OpenFileDirectly(&input, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, sdPath), FS_OPEN_READ, 0);
     snprintf(error, errorCap, "cannot open %s", sdPath);
     if (R_FAILED(rc) || R_FAILED(FSFILE_GetSize(input, &size)))
@@ -169,7 +170,6 @@ done:
         AM_CancelCIAInstall(output);
     if (input)
         FSFILE_Close(input);
-    free(data);
     amExit();
     return ok;
 }
@@ -676,7 +676,7 @@ static void HandleSession(int ctrl)
             }
             else if (!strcmp(sub, "SHOT")) {
                 // The top screen's framebuffer as debug/shot-NNNN.raw (tools/shot.sh converts it).
-                sShotRequest = (path && !strncasecmp(path, "bottom", 6)) ? 2 : 1;
+                sShotRequest = (path && !strncasecmp(path, "bottom", 6)) ? 2 : (path && !strncasecmp(path, "right", 5)) ? 3 : 1;
                 Reply(s, "200 shot queued");
             }
             else if (!strcmp(sub, "GPU")) {
@@ -713,6 +713,16 @@ static void HandleSession(int ctrl)
                     DevTools::swSyncDraw = v != 0;
                 else if (!strncmp(path, "vblank", 6))
                     DevTools::swVblankWait = v != 0;
+                else if (!strncmp(path, "tab", 3))
+                    DevTools::uiTab = v < 0 || v > 2 ? 0 : v;
+                else if (!strncmp(path, "fps", 3))
+                    DevTools::optFps = v < 0 || v > 4 ? 0 : v;
+                else if (!strncmp(path, "hud", 3))
+                    DevTools::optHud = v < 0 || v > 2 ? 1 : v;
+                else if (!strncmp(path, "lock30", 6))
+                    DevTools::swLock30 = v != 0;
+                else if (!strncmp(path, "force3d", 7))
+                    DevTools::swForce3D = v != 0;
                 else
                     ok = false;
                 if (ok) {
@@ -720,7 +730,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|bottomui|syncdraw|vblank <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
@@ -796,6 +806,36 @@ static void HandleSession(int ctrl)
                 DevTools::swVblankWait = path && atoi(path) != 0;
                 Reply(s, "200 vblank wait %d", (int)DevTools::swVblankWait);
             }
+            else if (!strcmp(sub, "GOTO") && path) {
+                // SITE GOTO <ObjectName> [dx]: moves the player (slot 0) next to the first entity of that class (dx
+                // pixels to its left, 160 by default), e.g. GOTO DDWrecker for Green Hill 1's boss. Next frame.
+                char name[48];
+                int dx = 160;
+                if (sscanf(path, "%47s %d", name, &dx) < 1)
+                    name[0] = 0;
+                uint32 hash[4];
+                GEN_HASH_MD5(name, hash);
+                int found = -1;
+                for (int32 i = 0; i < sceneInfo.classCount && found < 0; ++i)
+                    if (HASH_MATCH_MD5(objectClassList[stageObjectIDs[i]].hash, hash))
+                        for (int32 e = 0; e < ENTITY_COUNT; ++e)
+                            if (objectEntityList[e].classID == i) {
+                                found = e;
+                                break;
+                            }
+                if (found >= 0) {
+                    sGotoX = objectEntityList[found].position.x - (dx << 16);
+                    sGotoY = objectEntityList[found].position.y - (32 << 16);
+                    sGoto  = true;
+                    Reply(s, "200 entity %d at %ld %ld", found, (long)(objectEntityList[found].position.x >> 16), (long)(objectEntityList[found].position.y >> 16));
+                }
+                else
+                    Reply(s, "550 no %s in this scene", name);
+            }
+            else if (!strcmp(sub, "REFUSED")) {
+                // The last command the GPU executor refused (SITE STATE's line is cut by the FTP line limit)
+                Reply(s, "200 %s | why %s | roto to software: runs %u quads %u, soft layers %u", GpuRender::LastRefusal(), sLastWhy ? sLastWhy : "-", GpuRender::GetStats().rotoSoftRuns, GpuRender::GetStats().rotoSoftQuads, GpuRender::GetStats().softLayers);
+            }
             else if (!strcmp(sub, "FREEZE")) {
                 // SITE FREEZE 1: the scene stops (no object updates) but every frame is still drawn, so the GPU and
                 // the CPU renderers can be compared on the same picture. FREEZE 0 resumes.
@@ -824,13 +864,13 @@ static void HandleSession(int ctrl)
                 Reply(s, "200 %u sheets, %u KB at 8 bit (%u KB at 16 bit): %s", count, total >> 10, (total * 2) >> 10, list);
             }
             else if (!strcmp(sub, "STATE")) {
-                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f | cmds %u replayed %u gpu %u quads %u reason %u cmd %u tileconv %u sprconv %u layers %u tileq %u empty %u rowsout %u | renderer %s frames gpu %u cpu %u (last second %u/%u) why %s | atlas retries %u tile evictions %u roto %u us %u quads soft layers %u faces %u | refused %s",
+                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f | cmds %u replayed %u gpu %u quads %u reason %u cmd %u tileconv %u sprconv %u layers %u tileq %u empty %u rowsout %u | renderer %s frames gpu %u cpu %u (last second %u/%u) why %s | atlas retries %u quad retries %u cmdbuf %u%% eyes dropped %u tile evictions %u roto %u us %u quads soft layers %u faces %u | heap used %u KB linear free %u KB | refused %s",
                       (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastSkipped, sLastFps, sLastFrameMs, sLastStageMs[0],
                       sLastStageMs[1], sLastStageMs[2], sLastStageMs[3], sLastStageMs[4], sLastStageMs[5], sLastStageMs[6], sLastStageMs[7],
                       sLastStageMs[8], sLastStageMs[9], sLastStageMs[10], sLastStageMs[11], sLastStageMs[12], GpuFrame::GetStats().commands, GpuFrame::GetStats().replayed, GpuFrame::GetStats().gpuFrames, GpuRender::GetStats().quads,
                       GpuRender::GetStats().reason, GpuRender::GetStats().unsupportedCmd, GpuRender::GetStats().tileConversions, GpuRender::GetStats().spriteConversions, GpuRender::GetStats().layerCmds,
                       GpuRender::GetStats().tileQuads, GpuRender::GetStats().emptyTiles, GpuRender::GetStats().rowsOut, DevTools::GpuMode() ? "gpu" : "cpu",
-                      sTotGpu, sTotCpu, sLastSecGpu, sLastSecCpu, sLastWhy ? sLastWhy : "-", GpuRender::GetStats().atlasRetries, GpuRender::GetStats().tileEvictions, GpuRender::GetStats().rotoUs, GpuRender::GetStats().rotoQuads, GpuRender::GetStats().softLayers, GpuRender::GetStats().faces, GpuRender::LastRefusal());
+                      sTotGpu, sTotCpu, sLastSecGpu, sLastSecCpu, sLastWhy ? sLastWhy : "-", GpuRender::GetStats().atlasRetries, GpuRender::GetStats().quadRetries, GpuRender::GetStats().cmdBufPct, GpuRender::GetStats().eyesDropped, GpuRender::GetStats().tileEvictions, GpuRender::GetStats().rotoUs, GpuRender::GetStats().rotoQuads, GpuRender::GetStats().softLayers, GpuRender::GetStats().faces, (unsigned)(mallinfo().uordblks >> 10), (unsigned)(linearSpaceFree() >> 10), GpuRender::LastRefusal());
             }
             else
                 Reply(s, "504 Unknown SITE command.");
@@ -1016,7 +1056,7 @@ int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
 bool DevTools::swGpuRender = false;
-bool DevTools::swGpu3D  = false; // froze the console on its first try (2026-10-22): opt in with SITE SET gpu3d 1
+bool DevTools::swGpu3D  = true; // on since the 2DS ran the Special Stage with it (off, the faces overflow the quads)
 bool DevTools::swRecord = false; // off until the recorder has been checked (SITE SET record 1)
 bool DevTools::swBottomUi = true;
 bool DevTools::swSyncDraw = false;   // waiting for the previous GPU frame in FrameBegin cost 10 ms (46 fps instead of 60)
@@ -1025,6 +1065,36 @@ bool DevTools::swGpuPresent = false; // the renderer starts in CPU mode (SetGpuM
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 bool DevTools::freeze         = false;
+bool DevTools::swLock30       = false;
+int DevTools::optFps          = 0;
+int DevTools::optHud          = 1;
+int DevTools::uiTab           = 0;
+bool DevTools::swForce3D      = false;
+
+bool DevTools::HideEntityClass(uint16 classID)
+{
+    if (optHud == 0 || (optHud == 1 && uiTab != 0)) // tab 0: GAME, which shows what the HUD shows
+        return false;
+    // The HUD's stage class ID, looked up again when the stage's class list changes.
+    static uint32 hudHash[4];
+    static bool hashed;
+    static const void *seenList;
+    static int32 seenCount = -1;
+    static int hudID       = -1;
+    if (!hashed) {
+        GEN_HASH_MD5("HUD", hudHash);
+        hashed = true;
+    }
+    if (seenList != (const void *)stageObjectIDs || seenCount != sceneInfo.classCount || sceneInfo.state == ENGINESTATE_LOAD) {
+        seenList  = stageObjectIDs;
+        seenCount = sceneInfo.classCount;
+        hudID     = -1;
+        for (int32 i = 0; i < sceneInfo.classCount; ++i)
+            if (HASH_MATCH_MD5(objectClassList[stageObjectIDs[i]].hash, hudHash))
+                hudID = i;
+    }
+    return hudID >= 0 && classID == hudID;
+}
 
 static unsigned sMarks;
 static bool sMenuDirty = true;
@@ -1277,8 +1347,8 @@ void DevTools::SaveSettings()
     FILE *f = fopen(kSettingsPath, "w");
     if (!f)
         return;
-    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpumode=%d\nsyncdraw=%d\nvblank=%d\n", (int)swFrameSkip, swMaxSkip, (int)swFlipCopy,
-            (int)GpuMode(), (int)swSyncDraw, (int)swVblankWait);
+    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpumode=%d\nsyncdraw=%d\nvblank=%d\nlock30=%d\nfps=%d\nhud=%d\ntab=%d\ngpu3d=%d\n", (int)swFrameSkip, swMaxSkip,
+            (int)swFlipCopy, (int)GpuMode(), (int)swSyncDraw, (int)swVblankWait, (int)swLock30, optFps, optHud, uiTab, (int)swGpu3D);
     fclose(f);
 }
 
@@ -1302,6 +1372,16 @@ static void LoadSettings()
             DevTools::swSyncDraw = v != 0;
         else if (!strcmp(key, "vblank"))
             DevTools::swVblankWait = v != 0;
+        else if (!strcmp(key, "lock30"))
+            DevTools::swLock30 = v != 0;
+        else if (!strcmp(key, "fps"))
+            DevTools::optFps = v < 0 || v > 4 ? 0 : v;
+        else if (!strcmp(key, "hud"))
+            DevTools::optHud = v < 0 || v > 2 ? 1 : v;
+        else if (!strcmp(key, "gpu3d"))
+            DevTools::swGpu3D = v != 0;
+        else if (!strcmp(key, "tab"))
+            DevTools::uiTab = v < 0 || v > 2 ? 0 : v;
     }
     fclose(f);
 }
@@ -1320,12 +1400,14 @@ bool DevTools::FrameEnd()
 {
     if (sShotRequest) {
         const gfxScreen_t screen = sShotRequest == 2 ? GFX_BOTTOM : GFX_TOP;
+        const int request        = sShotRequest;
         sShotRequest             = 0;
         u16 w = 0, h = 0;
         // The back buffer holds the frame before the one just shown: complete, which is all a snapshot needs.
-        const u8 *fb = gfxGetFramebuffer(screen, GFX_LEFT, &w, &h);
+        const bool right = request == 3;
+        const u8 *fb     = gfxGetFramebuffer(screen, right ? GFX_RIGHT : GFX_LEFT, &w, &h);
         char path[160];
-        snprintf(path, sizeof(path), "%s/shot-%s.raw", kDir, screen == GFX_BOTTOM ? "bottom" : "top");
+        snprintf(path, sizeof(path), "%s/shot-%s.raw", kDir, screen == GFX_BOTTOM ? "bottom" : right ? "right" : "top");
         FILE *f = fopen(path, "wb");
         if (f && fb) {
             // Header: width, height (the framebuffer is column-major), bytes per pixel.
@@ -1335,6 +1417,12 @@ bool DevTools::FrameEnd()
         }
         if (f)
             fclose(f);
+    }
+    if (sGoto) {
+        sGoto = false;
+        objectEntityList[0].position.x = sGotoX;
+        objectEntityList[0].position.y = sGotoY;
+        objectEntityList[0].velocity.x = objectEntityList[0].velocity.y = 0;
     }
     if (sPendingScene >= 0) {
         const SceneListInfo *l   = &sceneInfo.listCategory[sPendingCategory];

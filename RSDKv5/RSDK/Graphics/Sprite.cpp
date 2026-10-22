@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 
 using namespace RSDK;
 
@@ -905,6 +906,7 @@ bool32 RSDK::ImageTGA::Load(const char *fileName, bool32 loadHeader)
 
 uint16 RSDK::LoadSpriteSheet(const char *filename, uint8 scope)
 {
+    BottomUi::LoadDetail(filename);
     char fullFilePath[0x100];
     sprintf_s(fullFilePath, sizeof(fullFilePath), "Data/Sprites/%s", filename);
 

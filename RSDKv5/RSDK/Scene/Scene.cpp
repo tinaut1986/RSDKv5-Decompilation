@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
@@ -162,6 +163,7 @@ void RSDK::LoadSceneFolder()
     LoadTileConfig(fullFilePath);
 
     // Load StageConfig
+    BottomUi::LoadPhase("Stage config", 0.0f, 0.05f);
     sprintf_s(fullFilePath, sizeof(fullFilePath), "Data/Stages/%s/StageConfig.bin", currentSceneFolder);
 
     FileInfo info;
@@ -258,7 +260,9 @@ void RSDK::LoadSceneFolder()
 
         uint8 sfxCount = ReadInt8(&info);
         char sfxPath[0x100];
+        BottomUi::LoadPhase("Sound effects", 0.05f, 0.4f);
         for (int32 i = 0; i < sfxCount; ++i) {
+            BottomUi::LoadItem(i, sfxCount);
             ReadString(&info, sfxPath);
             uint8 maxConcurrentPlays = ReadInt8(&info);
             LoadSfx(sfxPath, maxConcurrentPlays, SCOPE_STAGE);
@@ -268,6 +272,7 @@ void RSDK::LoadSceneFolder()
     }
 
     sprintf_s(fullFilePath, sizeof(fullFilePath), "Data/Stages/%s/16x16Tiles.gif", currentSceneFolder);
+    BottomUi::LoadPhase("Tiles", 0.4f, 0.45f);
     LoadStageGIF(fullFilePath);
 
 #if RETRO_USE_MOD_LOADER
@@ -289,6 +294,7 @@ void RSDK::LoadSceneAssets()
 #endif
 
     memset(objectEntityList, 0, ENTITY_COUNT * sizeof(EntityBase));
+    BottomUi::LoadPhase("Scene layout", 0.45f, 0.5f);
 
     SceneListEntry *sceneEntry = &sceneInfo.listData[sceneInfo.listPos];
     char fullFilePath[0x40];
