@@ -11,6 +11,9 @@ bool RenderDevice::Init()
 {
   gfxInitDefault();
   consoleInit(GFX_BOTTOM, NULL);
+  // The console draws into one fixed buffer: with the bottom screen double-buffered every swap shows the
+  // other (empty) one, and in GPU presentation mode, where nothing swaps it, the text stayed half missing.
+  gfxSetDoubleBuffering(GFX_BOTTOM, false);
 
   if (printToConsole) {
     // dummy out later maybe possibly
