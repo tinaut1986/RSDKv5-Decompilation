@@ -5,6 +5,7 @@
 
 #include <3ds.h>
 #include <citro3d.h>
+#include <math.h>
 #include <string.h>
 
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
@@ -823,6 +824,73 @@ bool EmitPolygon(const Cmd &c, const Vector2 *v, int32 n, const uint32 *colors, 
     return true;
 }
 
+// Unit circle in 64 steps, for circles and rings.
+struct CircleTable {
+    float x[65], y[65];
+    CircleTable()
+    {
+        for (int i = 0; i <= 64; ++i)
+            x[i] = cosf(i * 6.28318531f / 64), y[i] = sinf(i * 6.28318531f / 64);
+    }
+};
+const CircleTable kCircle;
+
+// One quad of four free corners in screen pixels on the solid block, flat colour.
+bool AddSolidQuad(uint8 blend, const float *px, const float *py, uint8 r, uint8 g, uint8 b, uint8 a)
+{
+    if (!AddQuad(TEX_SPRITE, blend, 0, 0, 0, 0, 0, 0, 0, 0, SPR_ATLAS_W, SPR_ATLAS_H, r, g, b, a))
+        return false;
+    Vtx *q = &sVbo[sCur][(sQuadCount - 1) * 4];
+    for (int j = 0; j < 4; ++j)
+        q[j].x = Quarter(px[j]), q[j].y = Quarter(py[j]), q[j].u = 4, q[j].v = 4;
+    return true;
+}
+
+// DrawCircle (filled, inner radius 0) and DrawCircleOutline (a ring) as polygons of 16-64 steps.
+bool EmitRing(const Cmd &c, int32 x, int32 y, int32 inner, int32 outer, uint32 color, int32 alpha, int32 ink, bool screenRelative)
+{
+    if (outer <= 0 || inner >= outer)
+        return true;
+    uint8 blend;
+    bool skip;
+    if (!SpriteInk(ink, &alpha, &blend, &skip))
+        return false;
+    if (skip)
+        return true;
+    if (!screenRelative) {
+        x = FROM_FIXED(x) - c.pos[0];
+        y = FROM_FIXED(y) - c.pos[1];
+    }
+    if (x + outer < c.clip[0] || x - outer >= c.clip[2] || y + outer < c.clip[1] || y - outer >= c.clip[3])
+        return true;
+    if ((x - outer < c.clip[0] && c.clip[0] > 0) || (y - outer < c.clip[1] && c.clip[1] > 0) || (x + outer >= c.clip[2] && c.clip[2] < screens[0].size.x)
+        || (y + outer >= c.clip[3] && c.clip[3] < screens[0].size.y))
+        return Refuse(GpuRender::REASON_UNSUPPORTED, inner > 0 ? CMD_CIRCLE_OUTLINE : CMD_CIRCLE);
+    uint8 r, g, b;
+    Widen565(color, &r, &g, &b);
+    const int step = outer >= 48 ? 1 : outer >= 16 ? 2 : 4; // 64, 32 or 16 segments
+    const float cx = x + 0.5f, cy = y + 0.5f, ro = outer + 0.5f, ri = inner > 0 ? inner - 0.5f : 0.0f;
+    for (int i = 0; i < 64; i += step) {
+        const int k = i + step;
+        float px[4], py[4];
+        if (ri <= 0) { // a wedge of the disc: centre, two rim points (the last corner repeated)
+            px[0] = cx, py[0] = cy;
+            px[1] = cx + ro * kCircle.x[i], py[1] = cy + ro * kCircle.y[i];
+            px[2] = cx + ro * kCircle.x[k], py[2] = cy + ro * kCircle.y[k];
+            px[3] = px[2], py[3] = py[2];
+        }
+        else {
+            px[0] = cx + ro * kCircle.x[i], py[0] = cy + ro * kCircle.y[i];
+            px[1] = cx + ro * kCircle.x[k], py[1] = cy + ro * kCircle.y[k];
+            px[2] = cx + ri * kCircle.x[k], py[2] = cy + ri * kCircle.y[k];
+            px[3] = cx + ri * kCircle.x[i], py[3] = cy + ri * kCircle.y[i];
+        }
+        if (!AddSolidQuad(blend, px, py, r, g, b, (uint8)alpha))
+            return Refuse(GpuRender::REASON_QUAD_LIMIT);
+    }
+    return true;
+}
+
 bool EmitFace(const Cmd &c, const uint8 *arena)
 {
     uint8 r, g, b;
@@ -1219,6 +1287,8 @@ bool GpuRender::Render(const Stream &stream)
                 break;
             }
             case CMD_RECT: ok = EmitRect(c); break;
+            case CMD_CIRCLE: ok = EmitRing(c, c.p[0], c.p[1], 0, c.p[2], (uint32)c.p[3], c.p[4], c.p[5], c.p[6] != 0); break;
+            case CMD_CIRCLE_OUTLINE: ok = EmitRing(c, c.p[0], c.p[1], c.p[2], c.p[3], (uint32)c.p[4], c.p[5], c.p[6], c.p[7] != 0); break;
             case CMD_FILL: ok = EmitFill(c); break;
             case CMD_LAYER: {
                 TileLayer *layer = (TileLayer *)(uintptr_t)c.p[0];
