@@ -80,6 +80,10 @@ tools/site.sh "GPU 1"                       # renderer mode (the RENDERER button
 tools/site.sh "SET record 1"                # single switches: frameskip maxskip draw flipcopy gpu gpurender record syncdraw vblank bottomui
 tools/site.sh ORDER                         # draw order of the last frame (L layer, S sprite, F face, R roto, P shape)
 tools/site.sh SURFACES                      # sprite sheets in memory (texture-memory budget)
+tools/site.sh CMDS                          # next recorded frame's command list -> debug/cmds.txt (with layer sizes)
+tools/site.sh MODELS                        # loaded 3D models (vertices x frames, flags, ranges)
+tools/site.sh "SET gpu3d 1"                 # 3D scenes as GPU model instances (perf/special-stage; off at boot)
+tools/site.sh "SET depthmode N"             # renderer debug bits (docs/gpu-renderer.md: depth convention, mask views)
 tools/shot.sh top|bottom out.png            # screenshot; the top one is blind while the GPU draws (see gpu-renderer.md)
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
 ```
@@ -94,6 +98,10 @@ second), `dev-settings.ini` (the bottom-screen switches). Luma crash dumps are i
 - After the game freezes the console needs a manual power cycle; the first install of a build that cannot be
   installed over FTP (a bug in the installer) is manual: upload to `/cias/` and install with FBI.
 - `DEV_TOOLS=0 ./build_3ds.sh` builds without the dev tools (production).
+- **No console at hand**: `tools/azahar.sh` runs the build in the owner's Azahar (Flatpak) and the same tools work with
+  `-i 127.0.0.1` (`tools/site.sh -i 127.0.0.1 STATE`, `tools/shot.sh -i 127.0.0.1 top x.png`). Good for pictures, crashes
+  and libctru panics (PC/LR in Azahar's log, resolve with addr2line); useless for timings; it does not reproduce the
+  stencil (masked inks). Never `pkill -f azahar` from a script: the pattern matches the script's own command line.
 
 ## Tests
 
