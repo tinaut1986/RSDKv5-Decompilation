@@ -18,8 +18,8 @@
 
 using namespace RSDK;
 
-// Own title ID (3ds/SonicMania.rsf: UniqueId 0x5A230). Installs of any other CIA are refused.
-static const u64 TITLE_ID = 0x000400000005A230ULL;
+// Own title ID: 0004000000 + UniqueId 0x05A230 (3ds/SonicMania.rsf) + variation 00. Installs of any other CIA are refused.
+static const u64 TITLE_ID = 0x0004000005A23000ULL;
 
 enum {
     FTP_PORT      = 5000,
