@@ -155,6 +155,7 @@ RSDK_SOURCES += \
 	RSDKv5/RSDK/Dev/CTR/DevTools 			\
 	RSDKv5/RSDK/Dev/CTR/BottomUi 			\
 	RSDKv5/RSDK/Graphics/CTR/C3DPresent 		\
+	RSDKv5/RSDK/Graphics/CTR/GpuFrame 		\
 	RSDKv5/RSDK/Storage/Storage       		\
 	RSDKv5/RSDK/Storage/Text         		\
 	RSDKv5/RSDK/Graphics/Drawing      		\

@@ -1,6 +1,7 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
+#include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
 using namespace RSDK;
 
@@ -589,6 +590,7 @@ void RSDK::SwapDrawListEntries(uint8 drawGroup, uint16 slot1, uint16 slot2, uint
 
 void RSDK::FillScreen(uint32 color, int32 alphaR, int32 alphaG, int32 alphaB)
 {
+    GPUFRAME_REC(RecFill(color, alphaR, alphaG, alphaB));
     alphaR = CLAMP(alphaR, 0x00, 0xFF);
     alphaG = CLAMP(alphaG, 0x00, 0xFF);
     alphaB = CLAMP(alphaB, 0x00, 0xFF);
@@ -618,6 +620,7 @@ void RSDK::FillScreen(uint32 color, int32 alphaR, int32 alphaG, int32 alphaB)
 
 void RSDK::DrawLine(int32 x1, int32 y1, int32 x2, int32 y2, uint32 color, int32 alpha, int32 inkEffect, bool32 screenRelative)
 {
+    GPUFRAME_REC(RecLine(x1, y1, x2, y2, color, alpha, inkEffect, screenRelative));
     DEV_STAGE(STAGE_SHAPES);
     switch (inkEffect) {
         default: break;
@@ -1148,6 +1151,7 @@ void RSDK::DrawLine(int32 x1, int32 y1, int32 x2, int32 y2, uint32 color, int32 
 }
 void RSDK::DrawRectangle(int32 x, int32 y, int32 width, int32 height, uint32 color, int32 alpha, int32 inkEffect, bool32 screenRelative)
 {
+    GPUFRAME_REC(RecRect(x, y, width, height, color, alpha, inkEffect, screenRelative));
     DEV_STAGE(STAGE_SHAPES);
     switch (inkEffect) {
         default: break;
@@ -1319,6 +1323,7 @@ void RSDK::DrawRectangle(int32 x, int32 y, int32 width, int32 height, uint32 col
 }
 void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha, int32 inkEffect, bool32 screenRelative)
 {
+    GPUFRAME_REC(RecCircle(x, y, radius, color, alpha, inkEffect, screenRelative));
     DEV_STAGE(STAGE_SHAPES);
     if (radius > 0) {
         switch (inkEffect) {
@@ -1654,6 +1659,7 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
 void RSDK::DrawCircleOutline(int32 x, int32 y, int32 innerRadius, int32 outerRadius, uint32 color, int32 alpha, int32 inkEffect,
                              bool32 screenRelative)
 {
+    GPUFRAME_REC(RecCircleOutline(x, y, innerRadius, outerRadius, color, alpha, inkEffect, screenRelative));
     DEV_STAGE(STAGE_SHAPES);
     switch (inkEffect) {
         default: break;
@@ -1935,6 +1941,7 @@ void RSDK::DrawCircleOutline(int32 x, int32 y, int32 innerRadius, int32 outerRad
 
 void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 b, int32 alpha, int32 inkEffect)
 {
+    GPUFRAME_REC(RecFace(vertices, vertCount, r, g, b, alpha, inkEffect));
     DEV_STAGE(STAGE_FACES);
     switch (inkEffect) {
         default: break;
@@ -2189,6 +2196,7 @@ void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 
 }
 void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, int32 alpha, int32 inkEffect)
 {
+    GPUFRAME_REC(RecBlendedFace(vertices, colors, vertCount, alpha, inkEffect));
     DEV_STAGE(STAGE_FACES);
     switch (inkEffect) {
         default: break;
@@ -2864,6 +2872,7 @@ void RSDK::DrawSprite(Animator *animator, Vector2 *position, bool32 screenRelati
 void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 sprX, int32 sprY, int32 direction, int32 inkEffect, int32 alpha,
                              int32 sheetID)
 {
+    GPUFRAME_REC(RecSprite(x, y, width, height, sprX, sprY, direction, inkEffect, alpha, sheetID));
     DEV_STAGE(STAGE_SPRITES);
     switch (inkEffect) {
         default: break;
@@ -3526,6 +3535,7 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
 void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int32 width, int32 height, int32 sprX, int32 sprY, int32 scaleX,
                               int32 scaleY, int32 direction, int16 rotation, int32 inkEffect, int32 alpha, int32 sheetID)
 {
+    GPUFRAME_REC(RecRoto(x, y, pivotX, pivotY, width, height, sprX, sprY, scaleX, scaleY, direction, rotation, inkEffect, alpha, sheetID));
     DEV_STAGE(STAGE_ROTO);
     switch (inkEffect) {
         default: break;
@@ -3878,6 +3888,7 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
 
 void RSDK::DrawDeformedSprite(uint16 sheetID, int32 inkEffect, int32 alpha)
 {
+    GPUFRAME_HAZARD();
     DEV_STAGE(STAGE_ROTO);
     switch (inkEffect) {
         default: break;
@@ -4262,6 +4273,7 @@ void RSDK::DrawTile(uint16 *tiles, int32 countX, int32 countY, Vector2 *position
 }
 void RSDK::DrawAniTile(uint16 sheetID, uint16 tileIndex, uint16 srcX, uint16 srcY, uint16 width, uint16 height)
 {
+    GPUFRAME_HAZARD();
 
     if (sheetID < SURFACE_COUNT && tileIndex < TILE_COUNT) {
         GFXSurface *surface = &gfxSurface[sheetID];
@@ -4405,6 +4417,7 @@ void RSDK::DrawString(Animator *animator, Vector2 *position, String *string, int
 }
 void RSDK::DrawDevString(const char *string, int32 x, int32 y, int32 align, uint32 color)
 {
+    GPUFRAME_HAZARD();
     uint16 color16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
 
     int32 charOffset   = 0;

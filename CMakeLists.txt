@@ -30,6 +30,7 @@ set(RETRO_FILES
     RSDKv5/RSDK/Dev/CTR/DevTools.cpp
     RSDKv5/RSDK/Dev/CTR/BottomUi.cpp
     RSDKv5/RSDK/Graphics/CTR/C3DPresent.cpp
+    RSDKv5/RSDK/Graphics/CTR/GpuFrame.cpp
     RSDKv5/RSDK/Storage/Storage.cpp
     RSDKv5/RSDK/Storage/Text.cpp
     RSDKv5/RSDK/Graphics/Drawing.cpp

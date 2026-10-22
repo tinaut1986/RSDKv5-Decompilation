@@ -1,6 +1,7 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
+#include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
 
@@ -683,6 +684,8 @@ static void HandleSession(int ctrl)
                     DevTools::swFlipCopy = v != 0;
                 else if (!strncmp(path, "gpu", 3))
                     DevTools::swGpuPresent = v != 0;
+                else if (!strncmp(path, "record", 6))
+                    DevTools::swRecord = v != 0;
                 else if (!strncmp(path, "bottomui", 8))
                     DevTools::swBottomUi = v != 0;
                 else if (!strncmp(path, "syncdraw", 8))
@@ -731,10 +734,10 @@ static void HandleSession(int ctrl)
                 Reply(s, "200 %u sheets, %u KB at 8 bit (%u KB at 16 bit): %s", count, total >> 10, (total * 2) >> 10, list);
             }
             else if (!strcmp(sub, "STATE")) {
-                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f",
+                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f | cmds %u replayed %u",
                       (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastSkipped, sLastFps, sLastFrameMs, sLastStageMs[0],
                       sLastStageMs[1], sLastStageMs[2], sLastStageMs[3], sLastStageMs[4], sLastStageMs[5], sLastStageMs[6], sLastStageMs[7],
-                      sLastStageMs[8], sLastStageMs[9], sLastStageMs[10], sLastStageMs[11], sLastStageMs[12]);
+                      sLastStageMs[8], sLastStageMs[9], sLastStageMs[10], sLastStageMs[11], sLastStageMs[12], GpuFrame::GetStats().commands, GpuFrame::GetStats().replayed);
             }
             else
                 Reply(s, "504 Unknown SITE command.");
@@ -915,6 +918,7 @@ bool DevTools::swFrameSkip = true;
 int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
+bool DevTools::swRecord = false; // off until the recorder has been checked (SITE SET record 1)
 bool DevTools::swBottomUi = true;
 bool DevTools::swSyncDraw = false;   // waiting for the previous GPU frame in FrameBegin cost 10 ms (46 fps instead of 60)
 bool DevTools::swVblankWait = false; // the clock paces the loop now (RenderDevice::UpdateFPSCap)

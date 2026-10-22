@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
 using namespace RSDK;
 
@@ -826,6 +827,7 @@ void RSDK::AddMeshFrameToScene(uint16 modelFrames, uint16 sceneIndex, Animator *
 
 void RSDK::Draw3DScene(uint16 sceneID)
 {
+    GPUFRAME_HAZARD();
     DEV_STAGE(STAGE_3D);
     if (sceneID < SCENE3D_COUNT) {
         Entity *entity = sceneInfo.entity;

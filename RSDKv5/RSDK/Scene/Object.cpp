@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
 using namespace RSDK;
 
@@ -784,6 +785,10 @@ void RSDK::ProcessObjectDrawLists()
 #endif
 
     if (sceneInfo.state != ENGINESTATE_LOAD && sceneInfo.state != (ENGINESTATE_LOAD | ENGINESTATE_STEPOVER)) {
+#if RETRO_PLATFORM == RETRO_3DS
+        currentScreen = &screens[0];
+        GpuFrame::Begin();
+#endif
         for (int32 s = 0; s < videoSettings.screenCount; ++s) {
             currentScreen             = &screens[s];
             sceneInfo.currentScreenID = s;
@@ -1062,6 +1067,9 @@ void RSDK::ProcessObjectDrawLists()
             currentScreen++;
             sceneInfo.currentScreenID++;
         }
+#if RETRO_PLATFORM == RETRO_3DS
+        GpuFrame::End();
+#endif
     }
 }
 

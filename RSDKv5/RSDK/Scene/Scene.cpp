@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
 using namespace RSDK;
 
@@ -1294,6 +1295,7 @@ void RSDK::CopyTileLayer(uint16 dstLayerID, int32 dstStartX, int32 dstStartY, ui
 
 void RSDK::DrawLayerHScroll(TileLayer *layer)
 {
+    GPUFRAME_REC(RecLayer(layer, LAYER_HSCROLL));
     DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
@@ -1447,6 +1449,7 @@ void RSDK::DrawLayerHScroll(TileLayer *layer)
 }
 void RSDK::DrawLayerVScroll(TileLayer *layer)
 {
+    GPUFRAME_REC(RecLayer(layer, LAYER_VSCROLL));
     DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
@@ -1590,6 +1593,7 @@ void RSDK::DrawLayerVScroll(TileLayer *layer)
 }
 void RSDK::DrawLayerRotozoom(TileLayer *layer)
 {
+    GPUFRAME_REC(RecLayer(layer, LAYER_ROTOZOOM));
     DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
@@ -1634,6 +1638,7 @@ void RSDK::DrawLayerRotozoom(TileLayer *layer)
 }
 void RSDK::DrawLayerBasic(TileLayer *layer)
 {
+    GPUFRAME_REC(RecLayer(layer, LAYER_BASIC));
     DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;

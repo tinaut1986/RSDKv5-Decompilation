@@ -73,6 +73,7 @@ extern bool swDraw;      // run the draw lists (off isolates the cost of the log
 extern bool swFlipCopy;  // copy the frame into the screen (off isolates the cost of the flip)
 extern uint32 injectKeys; // 3DS key mask held on top of the real buttons (SITE INPUT)
 extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy
+extern bool swRecord;      // record draw calls per frame and execute them at the flip (GpuFrame)
 extern bool swBottomUi;    // redraw the bottom screen (off to measure its cost)
 extern bool swSyncDraw;    // C3D_FrameBegin waits for the previous GPU frame (experiment switch)
 extern bool swVblankWait;  // gspWaitForVBlank after the present (experiment switch)
@@ -108,6 +109,7 @@ struct StageScope {
 #define DEV_SW_DRAW      RSDK::DevTools::swDraw
 #define DEV_SW_FLIPCOPY  RSDK::DevTools::swFlipCopy
 #define DEV_SW_GPUPRESENT RSDK::DevTools::swGpuPresent
+#define DEV_SW_RECORD    RSDK::DevTools::swRecord
 #define DEV_SW_SYNCDRAW  RSDK::DevTools::swSyncDraw
 #define DEV_SW_VBLANK    RSDK::DevTools::swVblankWait
 #define DEV_COUNT_SKIP() (++RSDK::DevTools::skipCount)
@@ -117,6 +119,7 @@ struct StageScope {
 #define DEV_SW_DRAW      true
 #define DEV_SW_FLIPCOPY  true
 #define DEV_SW_GPUPRESENT false
+#define DEV_SW_RECORD    false
 #define DEV_SW_SYNCDRAW  true
 #define DEV_SW_VBLANK    true
 #define DEV_COUNT_SKIP() ((void)0)

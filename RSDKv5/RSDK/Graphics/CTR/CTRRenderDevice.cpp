@@ -73,6 +73,7 @@ static void TransposeToFramebuffer(const u16 *src, int pitch, u16 *dst)
 // https://github.com/JeffRuLz/Sonic-1-2-2013-Decompilation/blob/main/RSDKv4/3ds/3ds.cpp#L141
 void RenderDevice::FlipScreen()
 {
+  GpuFrame::Present(); // execute the frame's recorded draw commands
   const u16 *src = screens[0].frameBuffer;
   u16 *dst = (uint16*) gfxGetFramebuffer(GFX_TOP, GFX_LEFT, 0, 0);
 
