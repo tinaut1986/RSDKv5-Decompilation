@@ -210,6 +210,32 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Installs: the New 3DS (192.168.1.133) runs the dev build too; `./build_3ds.sh --install 192.168.1.133` works there
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS).
 
+## Rotozoom layers from a texture of their own (perf/roto-texture, 2026-10-23)
+
+- The title's island (64x64 tiles, 1024x1024 px) and clouds (16x16) were ~3500 one-pixel tile-run quads of the ~4000
+  a frame: the same cost as the Special Stage floor. A rotozoom layer up to 1024x1024 px is now drawn whole into a
+  VRAM texture (`RotoTex`, RGBA5551, GPU_REPEAT as the layer wraps; per tile four Morton blocks through the staging
+  buffer and the copy engine) and each screen line is one quad with affine texel coordinates in 1/16 texel (from the
+  line's start reduced into the texture; the ends half a step outside the first and last samples). Title: ~4060 ->
+  ~950 quads (480 of them the layers), checked against the software on frozen frames in Azahar (215 pixels differ,
+  the tile runs 294). Stereo: a depth per line as before.
+- Rebuilt when what it depends on changes and has then held for two frames (the tile runs draw it meanwhile): the
+  colours its pixels use (`used`, from its distinct tiles), the layout, the tileset epoch (animated tiles).
+- **Hot colours**: the title rotates indices 140-143 (the water) every 6 frames, which rebuilt it ~10 times a second.
+  When only a few used colours change (at most 4), they become hot: the texture stays, an A8 mask (1 MB for the island)
+  holds (k + 1) * 32 where a pixel uses hot colour k, and each frame every hot colour is painted over from the mask
+  (`BLEND_HOT`: alpha test EQUAL, constant colour, opaque) with the same line quads. Two builds per visit, none after.
+- Slots: two; freed on a scene change (with the 3D models, which held VRAM until the next 3D scene: after a Special
+  Stage the island found no VRAM), or when not drawn for a second and a slot is needed. A layer whose texture cannot
+  be allocated is drawn with tile runs until the next scene. VRAM free in the title: ~1.4 MB.
+- Debug: `SITE SET depthmode 512` draws them as tile runs again; `SITE REFUSED` ends with `roto texture <why>` (`-`
+  drawn from it; `too big`, `no vram`, `banks` lines in several palette banks, `changing`, `quads`, `range`) and the
+  VRAM free; `SITE STATE` `roto N us M quads tex B` (B: builds since boot).
+- Not measured on hardware yet (consoles off): expected to save most of the title's roto build time (~3.4 ms of CPU on
+  the New 3DS for 3362 quads) and GPU time; check `SITE STATE` and fps on the 2DS.
+- Next: the Special Stage floor (~512x512 tiles) does not fit: a window texture around the player for near lines plus
+  a reduced copy of the whole map for far ones, fog by distance in the combiner (issue #7).
+
 ## Stereo depth by layer band (feat/layer-depth, 2026-10-23)
 
 - `layer->parallaxFactor` is the **vertical** factor of an HSCROLL / BASIC layer (horizontal only for VSCROLL and

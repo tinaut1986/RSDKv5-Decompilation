@@ -86,7 +86,7 @@ tools/site.sh SURFACES                      # sprite sheets in memory (texture-m
 tools/site.sh CMDS                          # next recorded frame's command list -> debug/cmds.txt (with layer sizes)
 tools/site.sh MODELS                        # loaded 3D models (vertices x frames, flags, ranges)
 tools/site.sh "SET gpu3d 0|1"               # 3D scenes as GPU model instances (on by default, saved)
-tools/site.sh REFUSED                       # the last command the GPU refused, and why (STATE's line is cut by the FTP limit)
+tools/site.sh REFUSED                       # the last command the GPU refused, and why (STATE's line is cut by the FTP limit); also why a rotozoom layer is not drawn from its texture, VRAM free
 tools/site.sh "GOTO DDWrecker"              # move the player next to an object (the camera does not follow: he may die)
 tools/site.sh "SET force3d 1"               # draw both eyes as if the 3D slider were up (cost on a 2DS); also tab/fps/hud/lock30
 tools/site.sh "SET depthmode N"             # renderer debug bits (docs/gpu-renderer.md: depth convention, mask views)

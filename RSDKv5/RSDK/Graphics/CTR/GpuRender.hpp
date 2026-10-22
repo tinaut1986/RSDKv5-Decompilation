@@ -41,6 +41,7 @@ struct Stats {
     unsigned faces;        // polygons emitted (last frame)
     unsigned rotoSoftRuns, rotoSoftQuads; // rotozoom layers sent to the software: too many runs / quads (total)
     unsigned rotoUs, rotoQuads; // rotozoom layers as tile runs: build time (us) and quads (last frame)
+    unsigned rotoTexBuilds; // rotozoom layers drawn into their own texture (RotoTex), times built (total)
     unsigned eyesDropped;   // right eyes not drawn because the command buffer would not hold them (total)
     unsigned cmdBufPct;     // most of the GPU command buffer a frame has used (%), since boot
     unsigned tileEvictions; // times the full tile atlas gave back the cells not used in the frame (total)
@@ -60,6 +61,8 @@ extern int stereoFar;
 extern bool depthTint;
 // The last 3D frame's depths ("L<layer> g<group> near..far | ... far N playfield #i sprites behind n"), SITE DEPTHS.
 const char *DepthSummary();
+// Why the last rotozoom layer was not drawn from a texture of its own ("-": it was), for SITE REFUSED.
+const char *RotoTexWhy();
 
 } // namespace GpuRender
 } // namespace RSDK
