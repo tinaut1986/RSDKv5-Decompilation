@@ -19,6 +19,9 @@ namespace C3DPresent
 // citro3d and citro2d, shared by the top-screen presentation and the bottom-screen UI.
 bool InitCore();
 bool CoreReady();
+// At exit, before gfxExit: waits for the GPU's queued work and shuts citro2d and citro3d down. A process that
+// ended with GPU work queued is a suspect for the loader faults on the relaunch after SITE INSTALL.
+void ShutdownCore();
 
 bool Init();
 bool Ready();

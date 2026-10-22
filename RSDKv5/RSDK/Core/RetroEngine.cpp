@@ -347,9 +347,13 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
     DEV_LOG("main loop ended: isRunning=%d", (int)RenderDevice::isRunning);
 
     // Shutdown
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+    DevTools::Shutdown(); // the FTP thread ends before the services under it go
+#endif
 
     ReleaseInputDevices();
     AudioDevice::Release();
+    DEV_LOG("exit: audio released");
     RenderDevice::Release(false);
     SaveSettingsINI(false);
     SKU::ReleaseUserCore();
@@ -365,6 +369,7 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
     if (engine.consoleEnabled)
         ReleaseConsole();
 
+    DEV_LOG("exit: engine released");
     return 0;
 }
 

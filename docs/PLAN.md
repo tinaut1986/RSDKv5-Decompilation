@@ -85,8 +85,14 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
 
 - 2026-10-22: a relaunch after `SITE INSTALL` (10 s countdown already) crashed Luma's `loader` (`0xE0E01BF5`, our title
   being loaded); started by hand afterwards the build ran. Other ports saw `0xD86007F3` in the same place (see
-  `../legend-of-doom-3ds` PLAN 2026-10-13). Watch for it on the next installs; not investigated.
+  `../legend-of-doom-3ds` PLAN 2026-10-13). It happened on 3 installs of 3 while the game exited with the FTP thread
+  still running and citro3d never shut down (`DevTools::Shutdown` was never called, no `C3D_Fini`). With a clean exit
+  (FTP thread joined, listen socket closed, `C3D_FrameSync` + `C2D_Fini` + `C3D_Fini` before `gfxExit`, each step in
+  the log; the previous run's log is kept as `debug/log-prev.txt`) 5 installs of 5 relaunched with no dump.
 - 2026-10-22: `C2D_Init(256)` -> 768: the bottom screen outgrew 256 objects (one per glyph) and came out blank.
+- 2026-10-22: bottom screen relaid out at the owner's request: fixed header, buttons half as wide (four to a row) fixed at
+  the bottom, the information between them scrolls (drag; the bar on the right jumps). stdout/stderr go nowhere while it
+  is up: the engine's prints went to the libctru text console in the same framebuffer and flashed over it on every tap.
 - 2026-10-22: the engine ran one logic tick per loop pass and a drawn frame ended in a vblank wait, so any pass over
   16.7 ms slowed the whole game (the 400x240 rotate-copy alone cost ~9 ms). Fixed by scheduling passes on the clock
   (skip draw+flip when a tick late, at most 2 in a row) and a tiled transpose. `SITE INSTALL` compares the CIA's title

@@ -497,7 +497,7 @@ bool EmitFill(const Cmd &c)
     const uint16 rr = rgb32To16_B[(color >> 0x10) & 0xFF], gg = rgb32To16_B[(color >> 0x08) & 0xFF], bb = rgb32To16_B[(color >> 0x00) & 0xFF];
     // rgb32To16_B gives a 5-bit value for each channel (the software uses it for all three).
     const uint8 r = (uint8)((rr << 3) | (rr >> 2)), g = (uint8)((gg << 3) | (gg >> 2)), b = (uint8)((bb << 3) | (bb >> 2));
-    if (!AddQuad(TEX_SPRITE, BLEND_FILL, 0.0f, 0.0f, (float)currentScreen->size.x, (float)currentScreen->size.y, 4.0f, 4.0f, 4.0f, 4.0f, SPR_ATLAS_W, SPR_ATLAS_H,
+    if (!AddQuad(TEX_SPRITE, BLEND_FILL, 0.0f, 0.0f, (float)screens[0].size.x, (float)screens[0].size.y, 4.0f, 4.0f, 4.0f, 4.0f, SPR_ATLAS_W, SPR_ATLAS_H,
                  r, g, b, 255, (uint32)aR | ((uint32)aG << 8) | ((uint32)aB << 16) | (0xFFu << 24)))
         return Refuse(GpuRender::REASON_QUAD_LIMIT);
     return true;
@@ -624,7 +624,9 @@ bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     uint8 bank;
     if (!UniformBank(y1, y2, &bank))
         return Refuse(GpuRender::REASON_PALETTE_LINES);
-    const int pitch = currentScreen->pitch;
+    // screens[0], not currentScreen: the draw loop has moved that on to screen 1 (never set up on the 3DS, pitch 0,
+    // which left every tile run empty).
+    const int pitch = screens[0].pitch;
     int line        = y1;
     while (line < y2) {
         // A band: consecutive lines with the same x whose layer row advances by one pixel each.

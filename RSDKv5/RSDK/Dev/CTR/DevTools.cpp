@@ -895,8 +895,12 @@ void DevTools::Log(const char *fmt, ...)
         mkdir("sdmc:/3ds", 0777);
         mkdir("sdmc:/3ds/Sonic Mania 3DS", 0777);
         mkdir(kDir, 0777);
-        char path[160];
+        char path[160], prev[160];
         snprintf(path, sizeof(path), "%s/log.txt", kDir);
+        // The previous run's log (with its exit steps) is kept as log-prev.txt.
+        snprintf(prev, sizeof(prev), "%s/log-prev.txt", kDir);
+        remove(prev);
+        rename(path, prev);
         log = fopen(path, "w");
         if (!log)
             return;
@@ -1335,9 +1339,21 @@ bool DevTools::FrameEnd()
 
 void DevTools::Shutdown()
 {
+    // The server thread polls without blocking and checks sRun between polls and transfer chunks, so it ends
+    // within a nap. A thread still alive is left alone (freeing it under a socket call froze other ports).
+    Log("exit: stopping the FTP server");
     sRun = false;
+    if (sThread) {
+        if (threadJoin(sThread, 3000000000ULL) == 0)
+            threadFree(sThread);
+        else
+            Log("exit: the FTP thread did not end in 3 s, left running");
+        sThread = NULL;
+    }
+    CloseSocket(&sListen);
     if (sCsv)
         fclose(sCsv), sCsv = NULL;
+    Log("exit: dev tools stopped");
 }
 
 #endif

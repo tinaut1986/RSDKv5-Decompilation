@@ -117,7 +117,10 @@ void RenderDevice::Release(bool32 isRefresh)
     free(scanlines);
 
   if (!isRefresh) {
+    C3DPresent::ShutdownCore();
+    DEV_LOG("exit: citro3d shut down");
     gfxExit();
+    DEV_LOG("exit: gfx shut down");
   }
 }
 

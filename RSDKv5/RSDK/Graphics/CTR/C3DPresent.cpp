@@ -32,6 +32,16 @@ static Vertex *sQuad;  // linear memory
 static C3D_BufInfo sBuf;
 static C3D_AttrInfo sAttr;
 
+void C3DPresent::ShutdownCore()
+{
+    if (!sCore)
+        return;
+    C3D_FrameSync(); // the last frame's commands and transfers are done
+    C2D_Fini();
+    C3D_Fini();
+    sCore = sReady = false;
+}
+
 bool C3DPresent::InitCore()
 {
     if (sCore)
