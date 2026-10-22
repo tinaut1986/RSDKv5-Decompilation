@@ -661,6 +661,10 @@ static void HandleSession(int ctrl)
                 sShotRequest = 1;
                 Reply(s, "200 shot queued");
             }
+            else if (!strcmp(sub, "GPU")) {
+                DevTools::swGpuPresent = path && atoi(path) != 0;
+                Reply(s, "200 gpu present %d", (int)DevTools::swGpuPresent);
+            }
             else if (!strcmp(sub, "INPUT")) {
                 // SITE INPUT <hex mask of 3DS keys, e.g. 10 = A, 10 = KEY_A bit>: held until set to 0.
                 DevTools::injectKeys = path ? (uint32)strtoul(path, NULL, 16) : 0;
@@ -817,6 +821,7 @@ bool DevTools::swFrameSkip = true;
 int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
+bool DevTools::swGpuPresent = false; // off at boot until it has been checked; SITE GPU 1 or the menu
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 
@@ -837,6 +842,8 @@ static void ValDraw(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swDraw
 static void TapDraw() { DevTools::swDraw = !DevTools::swDraw; }
 static void ValFlip(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swFlipCopy ? "ON" : "OFF (no copy)"); }
 static void TapFlip() { DevTools::swFlipCopy = !DevTools::swFlipCopy; }
+static void ValGpu(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swGpuPresent ? "GPU" : "CPU"); }
+static void TapGpu() { DevTools::swGpuPresent = !DevTools::swGpuPresent; }
 static void ValMark(char *o, unsigned c) { snprintf(o, c, "%u", sMarks); }
 static void TapMark()
 {
@@ -855,6 +862,7 @@ static const Cell kCells[] = {
     { "MAX SKIPPED IN A ROW", TapMaxSkip, ValMaxSkip },
     { "DRAW LISTS", TapDraw, ValDraw },
     { "FLIP COPY", TapFlip, ValFlip },
+    { "PRESENT", TapGpu, ValGpu },
     { "FTP SERVER", NULL, ValFtp },
     { "LOG MARK", TapMark, ValMark },
 };

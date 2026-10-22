@@ -47,6 +47,7 @@ extern int swMaxSkip;    // most passes skipped in a row
 extern bool swDraw;      // run the draw lists (off isolates the cost of the logic)
 extern bool swFlipCopy;  // copy the frame into the screen (off isolates the cost of the flip)
 extern uint32 injectKeys; // 3DS key mask held on top of the real buttons (SITE INPUT)
+extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy
 extern unsigned skipCount; // passes whose drawing was skipped since the last second
 
 // Appends one line to sdmc:/3ds/Sonic Mania 3DS/debug/log.txt (flushed at once, so it survives a
@@ -78,12 +79,14 @@ struct StageScope {
 #define DEV_SW_MAXSKIP   RSDK::DevTools::swMaxSkip
 #define DEV_SW_DRAW      RSDK::DevTools::swDraw
 #define DEV_SW_FLIPCOPY  RSDK::DevTools::swFlipCopy
+#define DEV_SW_GPUPRESENT RSDK::DevTools::swGpuPresent
 #define DEV_COUNT_SKIP() (++RSDK::DevTools::skipCount)
 #else
 #define DEV_SW_FRAMESKIP true
 #define DEV_SW_MAXSKIP   2
 #define DEV_SW_DRAW      true
 #define DEV_SW_FLIPCOPY  true
+#define DEV_SW_GPUPRESENT false
 #define DEV_COUNT_SKIP() ((void)0)
 #endif
 
