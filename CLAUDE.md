@@ -63,7 +63,7 @@ goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`).
     After every tag rename the release branch to the next patch.
   - Never commit directly on `main` or `release/*`. Commit only when the owner asks.
 - `master` is the fork's GitHub default branch (SaturnSH2x2's history); we do not use it.
-- Releases/CI/version script are not set up yet: see PLAN (B0.3). Nothing has been pushed to `origin` yet (B0.4).
+- Releases/CI/version script are not set up yet: see PLAN (B0.3). `main`, `release/v0.1.0` and the open feature branches are on `origin` (pushed 2026-10-22).
 - Commit only when the owner asks; the owner asked for commits at the end of each long task.
 
 ## The console in the loop (dev-tools builds)

@@ -6,7 +6,7 @@
   (v1 done) -> stereoscopic 3D. **Technical detail and next steps of R1: [`docs/gpu-renderer.md`](gpu-renderer.md).**
 - **Where R1 stands (2026-10-22):** P0 (record + software replay) works; P1 (GPU executor for layers/sprites/rects) runs
   but **does not draw the layers correctly yet** (quads = sprites only; diagnostics added, not read). Both are off at boot.
-- **Active release line**: `release/v0.1.0` (local only). **Nothing has been pushed to `origin` yet** (B0.4).
+- **Active release line**: `release/v0.1.0`. Pushed to `origin` (the owner's fork) on 2026-10-22 together with `main`, `feat/gpu-renderer`, `feat/loading-screen` and `feat/render-backend`; the merged topic branches were not pushed (their commits are in the release).
 - **Console**: the owner's Old 2DS at `192.168.1.141` (DHCP: ping first; `tools/site.sh -i IP`). The build on it is the
   latest of `feat/gpu-renderer` (with the layer diagnostics, if the last install finished). Ask the owner before
   installing in a new session (the "install without asking" permission was for the previous session only).
@@ -26,7 +26,7 @@
 - [ ] B0.1 Build works from a clean clone (`./build_3ds.sh --cia`); document the libtheora workaround. *Done on the owner's machine; check on a clean clone.*
 - [x] B0.2 (2026-10-22, 2DS) Run on hardware with the owner's `Data.rsdk` (find out if it is the Plus data), record Old 3DS frame times per stage (draw vs game logic) with a debug overlay. **Gate for R1: if logic dominates, the GPU will not fix it.**
 - [ ] B0.3 CI (`build-3ds.yml`, `build-release.yml`), version from git, release notes, as in `../zelda-tmc-3ds`.
-- [ ] B0.4 Push branches to `origin`, enable issues.
+- [x] B0.4 Branches pushed to `origin` (2026-10-22). [ ] Enable issues in the repository settings; GitHub's default branch is still `master` (upstream's history).
 
 ### Measurements (Old 2DS, 80 MB mode, right+A held; `tools/perf-sweep.sh`)
 
