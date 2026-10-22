@@ -58,6 +58,19 @@ static volatile unsigned long long sRelaunchAt; // osGetTime() the countdown end
 static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
 static unsigned sLastSkipped;
 
+// Frames shown by renderer (NoteFrame): this second, the last full second, since the mode switch, and since the
+// last log line; plus why the CPU drew them, counted per reason (the names are static strings: compared as pointers).
+static unsigned sSecGpu, sSecCpu, sLastSecGpu, sLastSecCpu, sTotGpu, sTotCpu, sLogGpu, sLogCpu;
+static bool sLastFrameGpu;
+static const char *sLastWhy;
+struct WhyCount {
+    const char *why;
+    unsigned count;
+};
+enum { WHY_SLOTS = 16 };
+static WhyCount sWhy[WHY_SLOTS], sLogWhy[WHY_SLOTS];
+static volatile int sPendingGpuMode = -1; // SITE GPU, applied by the main thread
+
 // Requests from the FTP thread, applied by the main thread in FrameEnd.
 static volatile int sPendingCategory = -1, sPendingScene = -1;
 static char sOrderCur[400], sOrderLast[400];
@@ -667,8 +680,9 @@ static void HandleSession(int ctrl)
                 Reply(s, "200 shot queued");
             }
             else if (!strcmp(sub, "GPU")) {
-                DevTools::swGpuPresent = path && atoi(path) != 0;
-                Reply(s, "200 gpu present %d", (int)DevTools::swGpuPresent);
+                // SITE GPU <0|1>: the renderer mode (the RENDERER button), switched at the end of the frame
+                sPendingGpuMode = path && atoi(path) != 0;
+                Reply(s, "200 renderer %s", sPendingGpuMode ? "gpu" : "cpu");
             }
             else if (!strcmp(sub, "SET") && path) {
                 // SITE SET <frameskip|maxskip|draw|flipcopy|gpu|syncdraw|vblank> <value>
@@ -702,7 +716,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|syncdraw|vblank <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|bottomui|syncdraw|vblank <value>");
             }
             else if (!strcmp(sub, "ORDER")) {
                 Reply(s, "200 %s", sOrderLast);
@@ -737,12 +751,13 @@ static void HandleSession(int ctrl)
                 Reply(s, "200 %u sheets, %u KB at 8 bit (%u KB at 16 bit): %s", count, total >> 10, (total * 2) >> 10, list);
             }
             else if (!strcmp(sub, "STATE")) {
-                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f | cmds %u replayed %u gpu %u quads %u reason %u cmd %u tileconv %u sprconv %u layers %u tileq %u empty %u rowsout %u",
+                Reply(s, "200 category %d scene %d state %d skipped %u fps %.1f frame %.1f upd %.1f draw %.1f flip %.1f | layers %.1f sprites %.1f roto %.1f faces %.1f 3d %.1f shapes %.1f | pcopy %.1f pxfer %.1f pframe %.1f wait %.1f | cmds %u replayed %u gpu %u quads %u reason %u cmd %u tileconv %u sprconv %u layers %u tileq %u empty %u rowsout %u | renderer %s frames gpu %u cpu %u (last second %u/%u) why %s",
                       (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, (int)sceneInfo.state, sLastSkipped, sLastFps, sLastFrameMs, sLastStageMs[0],
                       sLastStageMs[1], sLastStageMs[2], sLastStageMs[3], sLastStageMs[4], sLastStageMs[5], sLastStageMs[6], sLastStageMs[7],
                       sLastStageMs[8], sLastStageMs[9], sLastStageMs[10], sLastStageMs[11], sLastStageMs[12], GpuFrame::GetStats().commands, GpuFrame::GetStats().replayed, GpuFrame::GetStats().gpuFrames, GpuRender::GetStats().quads,
                       GpuRender::GetStats().reason, GpuRender::GetStats().unsupportedCmd, GpuRender::GetStats().tileConversions, GpuRender::GetStats().spriteConversions, GpuRender::GetStats().layerCmds,
-                      GpuRender::GetStats().tileQuads, GpuRender::GetStats().emptyTiles, GpuRender::GetStats().rowsOut);
+                      GpuRender::GetStats().tileQuads, GpuRender::GetStats().emptyTiles, GpuRender::GetStats().rowsOut, DevTools::GpuMode() ? "gpu" : "cpu",
+                      sTotGpu, sTotCpu, sLastSecGpu, sLastSecCpu, sLastWhy ? sLastWhy : "-");
             }
             else
                 Reply(s, "504 Unknown SITE command.");
@@ -909,7 +924,7 @@ static void OpenCsv()
         if (stat(path, &st) != 0) {
             sCsv = fopen(path, "w");
             if (sCsv)
-                fprintf(sCsv, "second,fps,frame_ms_avg,frame_ms_max,update_ms,draw_ms,flip_ms,layers_ms,sprites_ms,roto_ms,faces_ms,d3_ms,shapes_ms,scene\n");
+                fprintf(sCsv, "second,fps,frame_ms_avg,frame_ms_max,update_ms,draw_ms,flip_ms,layers_ms,sprites_ms,roto_ms,faces_ms,d3_ms,shapes_ms,scene,gpu_frames,cpu_frames\n");
         }
     }
 }
@@ -928,7 +943,7 @@ bool DevTools::swRecord = false; // off until the recorder has been checked (SIT
 bool DevTools::swBottomUi = true;
 bool DevTools::swSyncDraw = false;   // waiting for the previous GPU frame in FrameBegin cost 10 ms (46 fps instead of 60)
 bool DevTools::swVblankWait = false; // the clock paces the loop now (RenderDevice::UpdateFPSCap)
-bool DevTools::swGpuPresent = true; // GPU presentation is the default (SITE GPU 0 or the CPU button switches back)
+bool DevTools::swGpuPresent = false; // the renderer starts in CPU mode (SetGpuMode, the RENDERER button)
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 
@@ -949,8 +964,8 @@ static void ValDraw(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swDraw
 static void TapDraw() { DevTools::swDraw = !DevTools::swDraw; }
 static void ValFlip(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swFlipCopy ? "ON" : "OFF (no copy)"); }
 static void TapFlip() { DevTools::swFlipCopy = !DevTools::swFlipCopy; }
-static void ValGpu(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swGpuPresent ? "GPU" : "CPU"); }
-static void TapGpu() { DevTools::swGpuPresent = !DevTools::swGpuPresent; }
+static void ValGpu(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::GpuMode() ? "GPU" : "CPU"); }
+static void TapGpu() { DevTools::SetGpuMode(!DevTools::GpuMode()); }
 static void ValMark(char *o, unsigned c) { snprintf(o, c, "%u", sMarks); }
 static void TapMark()
 {
@@ -969,7 +984,7 @@ static const Cell kCells[] = {
     { "MAX SKIPPED IN A ROW", TapMaxSkip, ValMaxSkip },
     { "DRAW LISTS", TapDraw, ValDraw },
     { "FLIP COPY", TapFlip, ValFlip },
-    { "PRESENT", TapGpu, ValGpu },
+    { "RENDERER", TapGpu, ValGpu },
     { "FTP SERVER", NULL, ValFtp },
     { "LOG MARK", TapMark, ValMark },
 };
@@ -1078,6 +1093,77 @@ void DevTools::GetStats(Stats *out)
 }
 
 const char *DevTools::FtpStatus() { return sStatus; }
+
+void DevTools::SetGpuMode(bool on)
+{
+    swGpuPresent = swRecord = swGpuRender = on;
+    sSecGpu = sSecCpu = sLastSecGpu = sLastSecCpu = sTotGpu = sTotCpu = sLogGpu = sLogCpu = 0;
+    sLastWhy = NULL;
+    memset(sWhy, 0, sizeof(sWhy));
+    memset(sLogWhy, 0, sizeof(sLogWhy));
+    Log("renderer: %s", on ? "GPU" : "CPU");
+}
+
+bool DevTools::GpuMode() { return swGpuPresent && swRecord && swGpuRender; }
+
+static void CountWhy(WhyCount *table, const char *why)
+{
+    for (int i = 0; i < WHY_SLOTS; ++i) {
+        if (table[i].why == why || !table[i].why) {
+            table[i].why = why;
+            ++table[i].count;
+            return;
+        }
+    }
+}
+
+void DevTools::NoteFrame(const char *why)
+{
+    sLastFrameGpu = !why;
+    if (!why) {
+        ++sSecGpu, ++sTotGpu, ++sLogGpu;
+        return;
+    }
+    ++sSecCpu, ++sTotCpu, ++sLogCpu;
+    if (GpuMode()) {
+        sLastWhy = why;
+        CountWhy(sWhy, why);
+        CountWhy(sLogWhy, why);
+    }
+}
+
+// The `n` most frequent entries of a reason table, most frequent first.
+static int TopWhy(const WhyCount *table, WhyCount *out, int n)
+{
+    int found = 0;
+    bool used[WHY_SLOTS] = {};
+    for (; found < n; ++found) {
+        int best = -1;
+        for (int i = 0; i < WHY_SLOTS && table[i].why; ++i)
+            if (!used[i] && (best < 0 || table[i].count > table[best].count))
+                best = i;
+        if (best < 0)
+            break;
+        used[best] = true;
+        out[found] = table[best];
+    }
+    return found;
+}
+
+void DevTools::GetRenderStats(RenderStats *out)
+{
+    out->gpuMode      = GpuMode();
+    out->lastFrameGpu = sLastFrameGpu;
+    out->secGpu       = sLastSecGpu;
+    out->secCpu       = sLastSecCpu;
+    out->totalGpu     = sTotGpu;
+    out->totalCpu     = sTotCpu;
+    out->lastWhy      = sLastWhy;
+    WhyCount top[3] = {};
+    TopWhy(sWhy, top, 3);
+    for (int i = 0; i < 3; ++i)
+        out->top[i].why = top[i].why, out->top[i].count = top[i].count;
+}
 void DevTools::Mark() { TapMark(); }
 
 int DevTools::InstallNotice(char *title, unsigned cap, float *progress, unsigned *secondsLeft)
@@ -1109,8 +1195,8 @@ void DevTools::SaveSettings()
     FILE *f = fopen(kSettingsPath, "w");
     if (!f)
         return;
-    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpu=%d\nsyncdraw=%d\nvblank=%d\n", (int)swFrameSkip, swMaxSkip, (int)swFlipCopy,
-            (int)swGpuPresent, (int)swSyncDraw, (int)swVblankWait);
+    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpumode=%d\nsyncdraw=%d\nvblank=%d\n", (int)swFrameSkip, swMaxSkip, (int)swFlipCopy,
+            (int)GpuMode(), (int)swSyncDraw, (int)swVblankWait);
     fclose(f);
 }
 
@@ -1128,8 +1214,8 @@ static void LoadSettings()
             DevTools::swMaxSkip = v < 1 ? 1 : v > 4 ? 4 : v;
         else if (!strcmp(key, "flipcopy"))
             DevTools::swFlipCopy = v != 0;
-        else if (!strcmp(key, "gpu"))
-            DevTools::swGpuPresent = v != 0;
+        else if (!strcmp(key, "gpumode")) // the old "gpu" key (presentation alone) is ignored
+            DevTools::SetGpuMode(v != 0);
         else if (!strcmp(key, "syncdraw"))
             DevTools::swSyncDraw = v != 0;
         else if (!strcmp(key, "vblank"))
@@ -1176,6 +1262,11 @@ bool DevTools::FrameEnd()
         DevTools::Log("scene request: category %d scene %d", sPendingCategory, sPendingScene);
         sPendingScene = sPendingCategory = -1;
     }
+    if (sPendingGpuMode >= 0) {
+        DevTools::SetGpuMode(sPendingGpuMode != 0);
+        DevTools::SaveSettings();
+        sPendingGpuMode = -1;
+    }
     const uint64 now = svcGetSystemTick();
     const uint64 dt  = now - sLastFrameTick;
     sLastFrameTick   = now;
@@ -1196,9 +1287,27 @@ bool DevTools::FrameEnd()
             fprintf(sCsv, "%u,%.2f,%.2f,%.2f", ++second, sLastFps, sLastFrameMs, sFrameTicksMax * toMs);
             for (int i = 0; i < STAGE_COUNT; ++i)
                 fprintf(sCsv, ",%.2f", sLastStageMs[i]);
-            fprintf(sCsv, ",%d\n", (int)sceneInfo.listPos);
+            fprintf(sCsv, ",%d,%u,%u\n", (int)sceneInfo.listPos, sSecGpu, sSecCpu);
             if (second % 5 == 0)
                 fflush(sCsv);
+        }
+        sLastSecGpu = sSecGpu, sLastSecCpu = sSecCpu;
+        sSecGpu = sSecCpu = 0;
+        // In GPU mode, every 5 s with a CPU frame in it: how many and why, in log.txt.
+        static unsigned logSeconds;
+        if (++logSeconds >= 5) {
+            logSeconds = 0;
+            if (GpuMode() && sLogCpu) {
+                WhyCount top[4] = {};
+                const int n = TopWhy(sLogWhy, top, 4);
+                char why[160];
+                unsigned w = 0;
+                for (int i = 0; i < n && w < sizeof(why); ++i)
+                    w += (unsigned)snprintf(why + w, sizeof(why) - w, "%s%s %u", i ? ", " : "", top[i].why, top[i].count);
+                Log("render (5 s, scene %d): gpu %u cpu %u | why: %s", (int)sceneInfo.listPos, sLogGpu, sLogCpu, n ? why : "-");
+            }
+            sLogGpu = sLogCpu = 0;
+            memset(sLogWhy, 0, sizeof(sLogWhy));
         }
         sLastSkipped = skipCount;
         if (!BottomUi::Ready())

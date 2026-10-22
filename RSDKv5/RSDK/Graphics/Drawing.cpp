@@ -3888,7 +3888,7 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
 
 void RSDK::DrawDeformedSprite(uint16 sheetID, int32 inkEffect, int32 alpha)
 {
-    GPUFRAME_HAZARD();
+    GPUFRAME_HAZARD("DEFORMED SPRITE");
     DEV_STAGE(STAGE_ROTO);
     switch (inkEffect) {
         default: break;
@@ -4273,7 +4273,7 @@ void RSDK::DrawTile(uint16 *tiles, int32 countX, int32 countY, Vector2 *position
 }
 void RSDK::DrawAniTile(uint16 sheetID, uint16 tileIndex, uint16 srcX, uint16 srcY, uint16 width, uint16 height)
 {
-    GPUFRAME_HAZARD();
+    GPUFRAME_HAZARD("ANI TILE");
 
     if (sheetID < SURFACE_COUNT && tileIndex < TILE_COUNT) {
         GFXSurface *surface = &gfxSurface[sheetID];
@@ -4417,7 +4417,7 @@ void RSDK::DrawString(Animator *animator, Vector2 *position, String *string, int
 }
 void RSDK::DrawDevString(const char *string, int32 x, int32 y, int32 align, uint32 color)
 {
-    GPUFRAME_HAZARD();
+    GPUFRAME_HAZARD("DEV TEXT");
     uint16 color16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
 
     int32 charOffset   = 0;

@@ -661,6 +661,30 @@ bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 
 const GpuRender::Stats &GpuRender::GetStats() { return sStats; }
 
+const char *GpuRender::ReasonName()
+{
+    static const char *const kCmd[]   = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE OUTLINE", "FACE", "BLENDED FACE", "SPRITE", "ROTO SPRITE", "LAYER", "LINEBUF" };
+    static const char *const kLayer[] = { "HSCROLL LAYER", "VSCROLL LAYER", "ROTOZOOM LAYER", "BASIC LAYER" };
+    static const char *const kInk[]   = { "INK NONE", "INK BLEND", "INK ALPHA", "INK ADD", "INK SUB", "INK TINT", "INK MASKED", "INK UNMASKED" };
+    const unsigned cmd = sStats.unsupportedCmd;
+    switch (sStats.reason) {
+        case REASON_OK: return NULL;
+        case REASON_NO_GPU: return "GPU INIT";
+        case REASON_UNSUPPORTED:
+            if (cmd >= 100)
+                return cmd - 100 < sizeof(kLayer) / sizeof(kLayer[0]) ? kLayer[cmd - 100] : "LAYER KIND";
+            return cmd < sizeof(kCmd) / sizeof(kCmd[0]) ? kCmd[cmd] : "COMMAND";
+        case REASON_INK: return cmd < sizeof(kInk) / sizeof(kInk[0]) ? kInk[cmd] : "INK";
+        case REASON_PALETTE_LINES: return "WATER LINE";
+        case REASON_TILE_RANGE: return "TILE RANGE";
+        case REASON_ATLAS_FULL: return "ATLAS FULL";
+        case REASON_QUAD_LIMIT: return "QUAD LIMIT";
+        case REASON_SPRITE_SIZE: return "SPRITE SIZE";
+        case REASON_BAD_DATA: return "BAD DATA";
+    }
+    return "?";
+}
+
 bool GpuRender::Render(const Stream &stream)
 {
     sStats.reason = REASON_OK;

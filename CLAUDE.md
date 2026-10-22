@@ -76,7 +76,8 @@ The game runs an FTP server on port 5000 (address on the bottom screen) with a r
 tools/site.sh STATE                         # category/scene, fps, stage times, GPU stats
 tools/site.sh SCENES | "SCENE 1 0"          # list / jump (category, index): 1 0 = Green Hill 1, 3 0 = Special Stage 1
 tools/site.sh "INPUT 11"                    # hold keys (hex 3DS mask: 10 = right, 1 = A); "INPUT 0" releases
-tools/site.sh "SET record 1"                # switches: frameskip maxskip draw flipcopy gpu gpurender record syncdraw vblank bottomui
+tools/site.sh "GPU 1"                       # renderer mode (the RENDERER button): 1 GPU (gpu+record+gpurender), 0 CPU (all software)
+tools/site.sh "SET record 1"                # single switches: frameskip maxskip draw flipcopy gpu gpurender record syncdraw vblank bottomui
 tools/site.sh ORDER                         # draw order of the last frame (L layer, S sprite, F face, R roto, P shape)
 tools/site.sh SURFACES                      # sprite sheets in memory (texture-memory budget)
 tools/shot.sh top|bottom out.png            # screenshot; the top one is blind while the GPU draws (see gpu-renderer.md)

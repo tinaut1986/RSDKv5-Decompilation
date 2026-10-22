@@ -44,7 +44,7 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
 
 ### GPU findings (2026-10-22, Old 2DS)
 
-- **GPU presentation works** (`C3DPresent`, menu PRESENT / `SITE GPU 1`, off at boot): the software picture is copied to a
+- **GPU presentation works** (`C3DPresent`, part of the RENDERER GPU mode; was menu PRESENT / `SITE GPU 1`): the software picture is copied to a
   512x256 linear staging buffer, tiled into a VRAM texture by the display-transfer engine and drawn as one quad. Needed:
   staging in *linear* memory (the CPU cannot write VRAM from an installed title: crash in memcpy), a 512-wide staging
   buffer (equal transfer dimensions), V from 1 (memory row 0) down to 1 - 240/256. Cost today: copy ~1 ms + frame ~4 ms,
@@ -66,6 +66,8 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
 - [x] R1.2 Frame command recorder with software replay and hazards (`GpuFrame`, P0), verified on the console.
 - [ ] R1.3 GPU executor for tile layers (BASIC, HSCROLL), sprites (4 flips; inks NONE/BLEND/ALPHA/ADD/SUB), rectangles,
   `FillScreen` (`GpuRender`, P1): **written, layers emit nothing, not verified**. Needs the readback + GPU CHECK tool first.
+- [x] R1.3b (2026-10-22) One RENDERER GPU/CPU switch (CPU = everything in software, as originally) and GPU/CPU frame
+  counters with the reason of every CPU frame (bottom screen, `SITE STATE`, CSV, log). Not yet checked on the console.
 - [ ] R1.4 Readback of the render target (`SITE SHOT` is blind in GPU mode) and a GPU CHECK (diff against the software replay).
 - [ ] R1.5 Water / per-line palette banks, VScroll/rotozoom layers, `INK_TINT/MASKED/UNMASKED`, `DrawAniTile` (cell invalidation),
   rotozoom and deformed sprites, faces, circles, lines.
@@ -81,6 +83,10 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
 
 ## Decisions log
 
+- 2026-10-22: a relaunch after `SITE INSTALL` (10 s countdown already) crashed Luma's `loader` (`0xE0E01BF5`, our title
+  being loaded); started by hand afterwards the build ran. Other ports saw `0xD86007F3` in the same place (see
+  `../legend-of-doom-3ds` PLAN 2026-10-13). Watch for it on the next installs; not investigated.
+- 2026-10-22: `C2D_Init(256)` -> 768: the bottom screen outgrew 256 objects (one per glyph) and came out blank.
 - 2026-10-22: the engine ran one logic tick per loop pass and a drawn frame ended in a vblank wait, so any pass over
   16.7 ms slowed the whole game (the 400x240 rotate-copy alone cost ~9 ms). Fixed by scheduling passes on the clock
   (skip draw+flip when a tick late, at most 2 in a row) and a tiled transpose. `SITE INSTALL` compares the CIA's title

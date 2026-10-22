@@ -38,8 +38,8 @@ static void ValDraw(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevToo
 static void TapDraw() { DevTools::swDraw = !DevTools::swDraw; }
 static void ValFlip(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::swFlipCopy ? "ON" : "OFF"); *on = DevTools::swFlipCopy; }
 static void TapFlip() { DevTools::swFlipCopy = !DevTools::swFlipCopy; }
-static void ValPresent(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::swGpuPresent ? "GPU" : "CPU"); *on = DevTools::swGpuPresent; }
-static void TapPresent() { DevTools::swGpuPresent = !DevTools::swGpuPresent; }
+static void ValRenderer(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::GpuMode() ? "GPU" : "CPU"); *on = DevTools::GpuMode(); }
+static void TapRenderer() { DevTools::SetGpuMode(!DevTools::GpuMode()); }
 static unsigned sMarks;
 static void ValMark(char *o, unsigned c, bool *on) { snprintf(o, c, "%u", sMarks); *on = false; }
 static void TapMark()
@@ -50,9 +50,9 @@ static void TapMark()
 
 static const Button kButtons[] = {
     { "FRAME SKIP", TapFrameSkip, ValFrameSkip }, { "MAX SKIPPED", TapMaxSkip, ValMaxSkip }, { "DRAW LISTS", TapDraw, ValDraw },
-    { "FLIP COPY", TapFlip, ValFlip },            { "PRESENT", TapPresent, ValPresent },     { "LOG MARK", TapMark, ValMark },
+    { "FLIP COPY", TapFlip, ValFlip },            { "RENDERER", TapRenderer, ValRenderer },     { "LOG MARK", TapMark, ValMark },
 };
-enum { BTN_COUNT = sizeof(kButtons) / sizeof(kButtons[0]), BTN_COLS = 2, BTN_W = 150, BTN_H = 32, BTN_GAP = 5, BTN_TOP = 112 };
+enum { BTN_COUNT = sizeof(kButtons) / sizeof(kButtons[0]), BTN_COLS = 2, BTN_W = 150, BTN_H = 28, BTN_GAP = 4, BTN_TOP = 142 };
 
 static void ButtonRect(int i, float *x, float *y)
 {
@@ -85,7 +85,8 @@ static void Draw()
     // Header
     C2D_DrawRectSolid(0, 0, 0.1f, W, 22, Rgb(30, 64, 120));
     Text("SONIC MANIA 3DS", 8, 2, 0.6f, Rgb(255, 255, 255));
-    Text("dev tools", W - 8, 4, 0.45f, Rgb(170, 200, 255), C2D_AlignRight);
+    snprintf(line, sizeof(line), "FTP %s", DevTools::FtpStatus());
+    Text(line, W - 8, 5, 0.42f, Rgb(170, 220, 190), C2D_AlignRight);
 
     // Frame rate: green at 59+, yellow from 50, red below
     const u32 fpsColor = st.fps >= 59 ? Rgb(90, 220, 110) : st.fps >= 50 ? Rgb(240, 210, 70) : Rgb(235, 90, 80);
@@ -93,12 +94,12 @@ static void Draw()
     Text(line, 10, 24, 1.1f, fpsColor);
     Text("fps", 74, 42, 0.5f, Rgb(160, 170, 180));
     snprintf(line, sizeof(line), "frame %.1f ms   skipped %u/s", st.frameMs, st.skipped);
-    Text(line, 118, 30, 0.45f, Rgb(210, 215, 220));
-    snprintf(line, sizeof(line), "scene %d   %s", st.scene, DevTools::swGpuPresent ? "GPU present" : "CPU present");
-    Text(line, 118, 46, 0.45f, Rgb(160, 170, 180));
+    Text(line, 118, 28, 0.45f, Rgb(210, 215, 220));
+    snprintf(line, sizeof(line), "scene %d", st.scene);
+    Text(line, 118, 42, 0.45f, Rgb(160, 170, 180));
 
     // Stacked bar of one 16.7 ms frame: update | draw | flip
-    const float budget = 16.7f, barX = 8, barY = 72, barW = W - 16, barH = 14;
+    const float budget = 16.7f, barX = 8, barY = 62, barW = W - 16, barH = 12;
     C2D_DrawRectSolid(barX, barY, 0.2f, barW, barH, Rgb(34, 40, 48));
     const u32 colors[3] = { Rgb(80, 140, 235), Rgb(240, 150, 60), Rgb(130, 140, 150) };
     float x = barX;
@@ -111,11 +112,38 @@ static void Draw()
         x += w;
     }
     snprintf(line, sizeof(line), "update %.1f   draw %.1f   flip %.1f   idle %.1f", st.stageMs[0], st.stageMs[1], st.stageMs[2], st.stageMs[12]);
-    Text(line, 8, 88, 0.42f, Rgb(200, 205, 210));
+    Text(line, 8, 76, 0.42f, Rgb(200, 205, 210));
     snprintf(line, sizeof(line), "layers %.1f  sprites %.1f  3d %.1f  faces %.1f", st.stageMs[3], st.stageMs[4], st.stageMs[7], st.stageMs[6]);
-    Text(line, 8, 99, 0.38f, Rgb(140, 150, 160));
-    snprintf(line, sizeof(line), "FTP %s", DevTools::FtpStatus());
-    Text(line, 8, 224, 0.4f, Rgb(120, 200, 140));
+    Text(line, 8, 87, 0.38f, Rgb(140, 150, 160));
+
+    // Renderer: the mode, who drew the last frame, frames per renderer, and why the CPU drew them in GPU mode.
+    DevTools::RenderStats rs;
+    DevTools::GetRenderStats(&rs);
+    const u32 gpuCol = Rgb(90, 220, 110), cpuCol = Rgb(240, 170, 70);
+    C2D_DrawRectSolid(0, 100, 0.1f, W, 40, Rgb(22, 28, 36));
+    snprintf(line, sizeof(line), "RENDERER %s", rs.gpuMode ? "GPU" : "CPU");
+    Text(line, 8, 101, 0.5f, rs.gpuMode ? gpuCol : Rgb(200, 205, 210));
+    if (rs.lastFrameGpu)
+        snprintf(line, sizeof(line), "last frame GPU");
+    else if (rs.gpuMode && rs.lastWhy)
+        snprintf(line, sizeof(line), "last frame CPU: %s", rs.lastWhy);
+    else
+        snprintf(line, sizeof(line), "last frame CPU");
+    Text(line, W - 8, 102, 0.45f, rs.lastFrameGpu ? gpuCol : cpuCol, C2D_AlignRight);
+    snprintf(line, sizeof(line), "1 s: GPU %u  CPU %u     total: GPU %u  CPU %u", rs.secGpu, rs.secCpu, rs.totalGpu, rs.totalCpu);
+    Text(line, 8, 115, 0.4f, Rgb(200, 205, 210));
+    if (rs.gpuMode) {
+        if (rs.top[0].why) {
+            int n = snprintf(line, sizeof(line), "CPU:");
+            for (int i = 0; i < 3 && rs.top[i].why && n < (int)sizeof(line); ++i)
+                n += snprintf(line + n, sizeof(line) - n, " %s %u", rs.top[i].why, rs.top[i].count);
+            Text(line, 8, 127, 0.38f, cpuCol);
+        }
+        else
+            Text("every frame on the GPU", 8, 127, 0.38f, gpuCol);
+    }
+    else
+        Text("software renderer, CPU copy to the screen", 8, 127, 0.38f, Rgb(140, 150, 160));
 
     // Buttons
     for (int i = 0; i < BTN_COUNT; ++i) {
@@ -129,8 +157,8 @@ static void Draw()
             fill = on ? Rgb(50, 130, 80) : Rgb(70, 82, 100);
         C2D_DrawRectSolid(bx, by, 0.4f, BTN_W, BTN_H, fill);
         C2D_DrawRectSolid(bx, by, 0.45f, 3, BTN_H, on ? Rgb(90, 220, 110) : Rgb(90, 100, 115));
-        Text(kButtons[i].label, bx + 10, by + 2, 0.42f, Rgb(190, 198, 206));
-        Text(val, bx + 10, by + 15, 0.55f, Rgb(255, 255, 255));
+        Text(kButtons[i].label, bx + 10, by + 1, 0.4f, Rgb(190, 198, 206));
+        Text(val, bx + 10, by + 12, 0.52f, Rgb(255, 255, 255));
     }
 
     // An install in progress is a modal message: the screen is dimmed and a box with the step, a bar and the

@@ -12,7 +12,7 @@ namespace GpuFrame
 extern bool active;
 extern bool pending;
 extern unsigned paletteVersion;
-void Hazard();
+void Hazard(const char *why);
 } // namespace GpuFrame
 } // namespace RSDK
 
@@ -20,7 +20,7 @@ void Hazard();
     do {                                                                                                                                             \
         ++RSDK::GpuFrame::paletteVersion;                                                                                                            \
         if (RSDK::GpuFrame::active || RSDK::GpuFrame::pending)                                                                                       \
-            RSDK::GpuFrame::Hazard();                                                                                                                \
+            RSDK::GpuFrame::Hazard("PALETTE");                                                                                                       \
     } while (0)
 
 #else

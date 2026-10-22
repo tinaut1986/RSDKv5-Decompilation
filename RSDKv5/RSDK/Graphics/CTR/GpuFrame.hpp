@@ -26,10 +26,13 @@ extern bool pending; // commands waiting for Present
 void Begin();
 void End();
 void Flush();   // replay the pending commands through the software renderer now
-void Hazard();  // Flush, and draw immediately for the rest of the frame
+void Hazard(const char *why); // Flush, and draw immediately for the rest of the frame; `why` is a static name ("PALETTE")
 // FlipScreen: execute what is pending. True when the GPU drew the frame and presented it (the caller must not
 // present the software framebuffer), false when it was replayed into the software framebuffer.
 bool Present();
+// Why the frame Present just handled was not drawn by the GPU ("CPU MODE", "PALETTE", "FACE"...); NULL when it
+// was. A static string.
+const char *LastWhy();
 void InvalidateContent(); // a scene (tileset, sprite sheets) was loaded: textures made from the old ones are stale
 
 // Recording entry points: true when the call was taken (the caller returns).
@@ -69,17 +72,17 @@ const Stats &GetStats();
             RSDK::GpuFrame::Flush();                                                                                                                 \
     } while (0)
 
-// For functions that cannot be deferred (palette changes, the 3D scene, dev text).
-#define GPUFRAME_HAZARD()                                                                                                                            \
+// For functions that cannot be deferred (palette changes, the 3D scene, dev text). `why` names it in the dev tools.
+#define GPUFRAME_HAZARD(why)                                                                                                                         \
     do {                                                                                                                                             \
         if (RSDK::GpuFrame::active || RSDK::GpuFrame::pending)                                                                                       \
-            RSDK::GpuFrame::Hazard();                                                                                                                \
+            RSDK::GpuFrame::Hazard(why);                                                                                                             \
     } while (0)
 
 #else
 
 #define GPUFRAME_REC(rec)
-#define GPUFRAME_HAZARD()
+#define GPUFRAME_HAZARD(why)
 
 #endif
 

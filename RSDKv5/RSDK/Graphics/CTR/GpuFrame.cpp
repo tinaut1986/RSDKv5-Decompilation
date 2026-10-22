@@ -29,6 +29,9 @@ unsigned sCount, sArenaUsed;
 uint8 sLineBuf[SCREEN_YSIZE];
 GpuFrame::Stats sStats;
 int16 sEndClip[4];
+bool sRecorded;         // this frame's draw lists were recorded (Begin got going)
+const char *sHazardWhy; // the first hazard of this frame
+const char *sLastWhy;   // why the last presented frame was not drawn by the GPU
 
 bool Alloc()
 {
@@ -51,7 +54,7 @@ bool Alloc()
 Cmd *NewCmd(CmdType type, uint32 arenaBytes = 0)
 {
     if (sCount >= MAX_CMDS || sArenaUsed + arenaBytes > ARENA_SIZE) {
-        GpuFrame::Hazard();
+        GpuFrame::Hazard("COMMAND LIMIT");
         return NULL;
     }
     Cmd *c = &sCmds[sCount++];
@@ -104,6 +107,8 @@ const GpuFrame::Stats &GpuFrame::GetStats() { return sStats; }
 
 void GpuFrame::Begin()
 {
+    sRecorded  = false;
+    sHazardWhy = NULL;
     if (!DEV_SW_RECORD || videoSettings.screenCount != 1 || !Alloc())
         return;
     sCount     = 0;
@@ -114,8 +119,9 @@ void GpuFrame::Begin()
     if (!c)
         return;
     memcpy(sArena + c->arena, sLineBuf, sizeof(sLineBuf));
-    active  = true;
-    pending = false;
+    active    = true;
+    pending   = false;
+    sRecorded = true;
 }
 
 void GpuFrame::End()
@@ -131,8 +137,10 @@ void GpuFrame::End()
     pending = sCount > 1;
 }
 
-void GpuFrame::Hazard()
+void GpuFrame::Hazard(const char *why)
 {
+    if (!sHazardWhy)
+        sHazardWhy = why;
     if (active) {
         sEndClip[0] = (int16)screens[0].clipBound_X1;
         sEndClip[1] = (int16)screens[0].clipBound_Y1;
@@ -208,20 +216,33 @@ void GpuFrame::Flush()
 
 bool GpuFrame::Present()
 {
-    if (!pending)
-        return false;
-    if (DEV_SW_GPUPRESENT && DEV_SW_GPURENDER) {
+    const bool gpuMode = DEV_SW_GPUPRESENT && DEV_SW_GPURENDER;
+    if (!gpuMode)
+        sLastWhy = "CPU MODE";
+    else if (sHazardWhy)
+        sLastWhy = sHazardWhy; // part of the frame was drawn by the CPU already
+    else if (!sRecorded)
+        sLastWhy = "NOT RECORDED";
+    else if (!pending)
+        sLastWhy = "EMPTY FRAME";
+    else {
         const Stream stream = { sCmds, sCount, sArena };
         if (GpuRender::Render(stream)) {
             pending = false;
             sCount = sArenaUsed = 0;
             ++sStats.gpuFrames;
+            sLastWhy = NULL;
             return true; // the frame is on screen already
         }
+        sLastWhy = GpuRender::ReasonName();
+        if (!sLastWhy)
+            sLastWhy = "REFUSED";
     }
     Flush();
     return false;
 }
+
+const char *GpuFrame::LastWhy() { return sLastWhy; }
 
 void GpuFrame::InvalidateContent() { ++contentVersion; }
 

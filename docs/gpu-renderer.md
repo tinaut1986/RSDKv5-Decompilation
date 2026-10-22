@@ -84,6 +84,22 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   `cmd 0` = `CMD_FILL` before FILL support was added).
 - Everything is off by default and resets at boot (`record`, `gpurender` are not saved in `dev-settings.ini`).
 
+## Renderer mode and frame accounting (2026-10-22)
+
+- One switch, **RENDERER GPU/CPU** (bottom screen, text console cell, `SITE GPU 0|1`), saved as `gpumode` in
+  `dev-settings.ini` (the old `gpu` key is ignored). GPU = `gpu` + `record` + `gpurender` on; CPU = all three off, i.e.
+  the software renderer and the CPU copy to the screen, as the port started. CPU is the default. `SET gpu|record|gpurender`
+  still flip the parts one by one (the button then shows CPU unless all three are on).
+- Every frame shown is counted as GPU or CPU (`DevTools::NoteFrame` from `FlipScreen`). A CPU frame carries a reason
+  (`GpuFrame::LastWhy`): `CPU MODE`; a hazard (`PALETTE`, `3D SCENE`, `DEFORMED SPRITE`, `ANI TILE`, `DEV TEXT`,
+  `COMMAND LIMIT`); `NOT RECORDED`, `EMPTY FRAME`; or the executor's refusal (`GpuRender::ReasonName`: the unsupported
+  command such as `FACE`, `ROTOZOOM LAYER`, an ink such as `INK TINT`, `WATER LINE`, `ATLAS FULL`...).
+- Where to read it: the bottom screen (mode, who drew the last frame and why, GPU/CPU frames in the last second and since
+  the switch, the three most frequent reasons); `SITE STATE` (`renderer ... frames gpu N cpu N (last second g/c) why X`);
+  the perf CSV (`gpu_frames,cpu_frames` per second); `log.txt` every 5 s in GPU mode when a CPU frame happened
+  (`render (5 s, scene N): gpu N cpu N | why: FACE 120, PALETTE 3`).
+- The fps number counts loop passes and is capped at 60 by the clock pacing: compare renderers by the ms, not the fps.
+
 ### The Green Hill reading (the install that had the diagnostics, running right in Green Hill 1)
 
 `cmds 59 ... reason 2 cmd 5 layers 5 tileq 0 empty 0 rowsout 0`: five layer commands were processed and **not one tile

@@ -827,7 +827,7 @@ void RSDK::AddMeshFrameToScene(uint16 modelFrames, uint16 sceneIndex, Animator *
 
 void RSDK::Draw3DScene(uint16 sceneID)
 {
-    GPUFRAME_HAZARD();
+    GPUFRAME_HAZARD("3D SCENE");
     DEV_STAGE(STAGE_3D);
     if (sceneID < SCENE3D_COUNT) {
         Entity *entity = sceneInfo.entity;

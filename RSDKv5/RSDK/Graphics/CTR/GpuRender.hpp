@@ -37,6 +37,9 @@ struct Stats {
     unsigned reason, unsupportedCmd;
 };
 const Stats &GetStats();
+// The last refusal as a short name for the dev tools ("FACE", "INK TINT", "WATER LINE"); NULL when the last
+// frame was drawn. Always a static string: callers may keep and compare the pointer.
+const char *ReasonName();
 
 } // namespace GpuRender
 } // namespace RSDK

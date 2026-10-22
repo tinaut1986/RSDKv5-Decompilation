@@ -105,6 +105,7 @@ void RenderDevice::FlipScreen()
       gfxFlushBuffers();
       gfxSwapBuffers();
     }
+    DEV_NOTE_FRAME(drawnByGpu ? NULL : GpuFrame::LastWhy());
     if (DEV_SW_VBLANK)
       gspWaitForVBlank();
   }
@@ -193,7 +194,11 @@ void RenderDevice::UpdateFPSCap()
     while (svcGetSystemTick() < sNextTick) {
     }
     now = svcGetSystemTick();
+#if MANIA_DEV_TOOLS
     DevTools::StageAdd(DevTools::STAGE_WAIT, now - start);
+#else
+    (void)start;
+#endif
   }
   const u64 late = now > sNextTick ? now - sNextTick : 0;
   sSkipThisPass = DEV_SW_FRAMESKIP && late > TICKS_PER_FRAME && sSkipRun < DEV_SW_MAXSKIP;
