@@ -149,7 +149,8 @@ uint32 sGroupGen[BANKS][32];
 // Tile cache: one cell per (bank, tile id)
 int16 sTileCell[BANKS][TILE_IDS];
 uint32 sTileStamp[BANKS][TILE_IDS];
-uint32 sTileGroups[TILE_IDS]; // palette groups the tile's pixels use (valid once converted)
+uint32 sTileGroups[TILE_IDS];  // palette groups the tile's pixels use
+uint8 sTileGroupsOk[TILE_IDS]; // sTileGroups is known (computed once per tile content, not per conversion)
 uint32 sTileHash[TILE_COUNT];  // content of each base tile when DrawAniTile last touched it (it rewrites unchanged frames too)
 bool sSprFull;                 // the last ATLAS_FULL came from the sprite atlas
 unsigned sTileCellsUsed;
@@ -228,6 +229,7 @@ void ResetCaches()
     memset(sTileCell, 0xFF, sizeof(sTileCell)); // -1
     memset(sTileStamp, 0, sizeof(sTileStamp));
     memset(sTileHash, 0, sizeof(sTileHash));
+    memset(sTileGroupsOk, 0, sizeof(sTileGroupsOk));
     sTileCellsUsed = 0;
     ++sGen; // everything converted from now on is newer than any group change so far
     ResetSprites();
@@ -512,24 +514,27 @@ SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, 
 void ConvertTile(const Pending &p)
 {
     const uint8 *src = &tilesetPixels[TILE_DATASIZE * p.id];
-    const uint16 *pal = fullPalette[p.bank];
     const unsigned X = (p.cell % (TILE_ATLAS_W / 16)) * 16, Y = (p.cell / (TILE_ATLAS_W / 16)) * 16;
-    (void)pal;
-    const u16 *tex = sTexPal[p.bank];
-    uint32 groups  = 0;
-    // Four 8x8 blocks, each 64 consecutive texels in Morton order.
+    const u16 *tex   = sTexPal[p.bank];
+    if (!sTileGroupsOk[p.id]) {
+        uint32 groups = 0;
+        for (unsigned i = 0; i < TILE_DATASIZE; ++i)
+            groups |= (src[i] ? 1u : 0u) << (src[i] >> 3);
+        sTileGroups[p.id]   = groups;
+        sTileGroupsOk[p.id] = 1;
+    }
+    // Four 8x8 blocks, each 64 texels in Morton order: Morton(x, y) = mx[x] | my[y] (the bits interleave).
+    static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
     for (unsigned by = 0; by < 2; ++by)
         for (unsigned bx = 0; bx < 2; ++bx) {
             u16 *blk        = &sTileData[(((Y >> 3) + by) * (TILE_ATLAS_W >> 3) + (X >> 3) + bx) << 6];
             const uint8 *sp = src + by * 8 * 16 + bx * 8;
-            for (unsigned y = 0; y < 8; ++y)
-                for (unsigned x = 0; x < 8; ++x) {
-                    const unsigned idx = sp[y * 16 + x];
-                    groups |= (idx ? 1u : 0u) << (idx >> 3);
-                    blk[kMorton.v[y * 8 + x]] = tex[idx];
-                }
+            for (unsigned y = 0; y < 8; ++y, sp += 16) {
+                u16 *b = blk + my[y];
+                b[0] = tex[sp[0]], b[1] = tex[sp[1]], b[4] = tex[sp[2]], b[5] = tex[sp[3]];
+                b[16] = tex[sp[4]], b[17] = tex[sp[5]], b[20] = tex[sp[6]], b[21] = tex[sp[7]];
+            }
         }
-    sTileGroups[p.id] = groups;
     Dirty(sTileDirtyLo, sTileDirtyHi, TILE_ATLAS_W, X, Y, 16, 16);
     ++sStats.tileConversions;
 }
@@ -579,6 +584,26 @@ bool AddQuad(uint8 tex, uint8 blend, float x0, float y0, float x1, float y1, flo
     v[1] = { X1, Y0, U1, V0, r, g, b, a };
     v[2] = { X1, Y1, U1, V1, r, g, b, a };
     v[3] = { X0, Y1, U0, V1, r, g, b, a };
+    return true;
+}
+
+// A tile quad: integer screen pixels and atlas texels (the hot path: thousands a frame).
+inline bool AddTileQuad(int x0, int y0, int x1, int y1, int u0, int v0, int u1, int v1)
+{
+    if (sQuadCount >= MAX_QUADS)
+        return false;
+    if (!sBatchCount || sBatches[sBatchCount - 1].tex != TEX_TILE || sBatches[sBatchCount - 1].blend != BLEND_NORMAL) {
+        if (sBatchCount >= MAX_BATCHES)
+            return false;
+        sBatches[sBatchCount++] = { TEX_TILE, BLEND_NORMAL, sQuadCount, 0, 0 };
+    }
+    ++sBatches[sBatchCount - 1].count;
+    Vtx *v                     = &sVbo[sCur][sQuadCount++ * 4];
+    const int16 X0 = (int16)(x0 << 2), X1 = (int16)(x1 << 2), Y0 = (int16)(y0 << 2), Y1 = (int16)(y1 << 2);
+    v[0] = { X0, Y0, (int16)u0, (int16)v0, 255, 255, 255, 255 };
+    v[1] = { X1, Y0, (int16)u1, (int16)v0, 255, 255, 255, 255 };
+    v[2] = { X1, Y1, (int16)u1, (int16)v1, 255, 255, 255, 255 };
+    v[3] = { X0, Y1, (int16)u0, (int16)v1, 255, 255, 255, 255 };
     return true;
 }
 
@@ -1372,9 +1397,8 @@ bool EmitTileRun(TileLayer *layer, unsigned bank, int row, int srcY, int dy, int
                 return Refuse(GpuRender::REASON_ATLAS_FULL);
             if (cell < 0)
                 return Refuse(GpuRender::REASON_TILE_RANGE);
-            const float cx = (float)((cell % (TILE_ATLAS_W / 16)) * 16 + inX), cy = (float)((cell / (TILE_ATLAS_W / 16)) * 16 + srcY);
-            if (!AddQuad(TEX_TILE, BLEND_NORMAL, (float)sx, (float)dy, (float)(sx + w), (float)(dy + n), cx, cy, cx + (float)w, cy + (float)n, TILE_ATLAS_W,
-                         TILE_ATLAS_H, 255, 255, 255, 255))
+            const int cx = (cell % (TILE_ATLAS_W / 16)) * 16 + inX, cy = (cell / (TILE_ATLAS_W / 16)) * 16 + srcY;
+            if (!AddTileQuad(sx, dy, sx + w, dy + n, cx, cy, cx + w, cy + n))
                 return Refuse(GpuRender::REASON_QUAD_LIMIT);
         }
         sx += w;
@@ -1510,9 +1534,11 @@ bool GpuRender::Render(const Stream &stream)
                 if (h == sTileHash[t])
                     continue;
                 sTileHash[t] = h;
-                for (unsigned b = 0; b < BANKS; ++b)
-                    for (unsigned v = 0; v < 4; ++v)
+                for (unsigned v = 0; v < 4; ++v) {
+                    sTileGroupsOk[t + v * TILE_COUNT] = 0;
+                    for (unsigned b = 0; b < BANKS; ++b)
                         sTileStamp[b][t + v * TILE_COUNT] = 0;
+                }
             }
         }
     }
