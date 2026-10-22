@@ -875,6 +875,11 @@ static void PrintRow(int row, const char *text)
 {
     // The console is slow to paint: only rows whose text changed are written.
     static char shown[30][41];
+    static u64 lastFullRepaint;
+    if (svcGetSystemTick() - lastFullRepaint > 3ULL * SYSCLOCK_ARM11) {
+        memset(shown, 0, sizeof(shown)); // repaint everything now and then, whatever the screen kept
+        lastFullRepaint = svcGetSystemTick();
+    }
     if (row < 0 || row >= 30)
         return; // never print on or below the console's last row: it scrolls
     char padded[41];
@@ -929,6 +934,14 @@ static void DrawStatus()
     // The console writes through the CPU cache; in GPU presentation mode nothing else flushes the screens
     // every frame (the CPU flip does), so the menu flushes what it painted.
     gfxFlushBuffers();
+    {
+        // And the bottom framebuffer by hand, whole: only the first rows of the menu reached the screen
+        // with gfxFlushBuffers alone (the owner saw the menu cut after row 7).
+        u16 w = 0, h = 0;
+        u8 *fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+        if (fb)
+            GSPGPU_FlushDataCache(fb, (u32)w * h * (gfxGetScreenFormat(GFX_BOTTOM) == GSP_RGB565_OES ? 2 : 3));
+    }
     sMenuDirty = false;
 }
 
@@ -961,12 +974,11 @@ bool DevTools::FrameEnd()
     if (sShotRequest) {
         const gfxScreen_t screen = sShotRequest == 2 ? GFX_BOTTOM : GFX_TOP;
         sShotRequest             = 0;
-        static unsigned shotNumber;
         u16 w = 0, h = 0;
         // The back buffer holds the frame before the one just shown: complete, which is all a snapshot needs.
         const u8 *fb = gfxGetFramebuffer(screen, GFX_LEFT, &w, &h);
         char path[160];
-        snprintf(path, sizeof(path), "%s/shot-%04u.raw", kDir, ++shotNumber);
+        snprintf(path, sizeof(path), "%s/shot-%s.raw", kDir, screen == GFX_BOTTOM ? "bottom" : "top");
         FILE *f = fopen(path, "wb");
         if (f && fb) {
             // Header: width, height (the framebuffer is column-major), bytes per pixel.
