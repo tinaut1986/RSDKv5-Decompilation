@@ -36,9 +36,9 @@ bool32 RSDK::InitStorage()
     // the old sizes STG filled up in a Special Stage and MUS in Lava Reef, and a refused allocation is a NULL the
     // engine does not check (a music file read to address 0 crashed). SFX never went past 11.5 MB of its 20.
     dataStorage[DATASET_STG].storageLimit = 20 * 1024 * 1024; // most seen: 16.2 MB (full)
-    dataStorage[DATASET_MUS].storageLimit = 6 * 1024 * 1024;  // 4.1 MB (the stream's buffer and music ring live here)
+    dataStorage[DATASET_MUS].storageLimit = 7 * 1024 * 1024;  // 6.0 MB of 6 in a Special Stage (2DS sweep); the stream's buffer and music ring live here
     dataStorage[DATASET_SFX].storageLimit = 13 * 1024 * 1024; // 11.4 MB
-    dataStorage[DATASET_STR].storageLimit = 256 * 1024;       // 59 KB of the old 60; 126 KB of 128 in Press Garden (2DS)
+    dataStorage[DATASET_STR].storageLimit = 512 * 1024;       // 250 KB of 256 in Press Garden+ (2DS sweep)
     dataStorage[DATASET_TMP].storageLimit = 7 * 1024 * 1024;  // 5.6 MB
 #else
     dataStorage[DATASET_STG].storageLimit = 24 * 1024 * 1024; // 24MB
