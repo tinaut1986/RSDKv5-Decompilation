@@ -249,6 +249,14 @@ void RSDK::LoadStream(ChannelInfo *channel)
         streamBufferSize = info.fileSize;
         streamBuffer     = NULL;
         AllocateStorage((void **)&streamBuffer, info.fileSize, DATASET_MUS, false);
+#if RETRO_AUDIODEVICE_CTR
+        // A refused allocation (the pool full) left streamBuffer NULL and the file was read to address 0.
+        DEV_LOG("music: %s, %u KB, buffer %s, MUS %u/%u KB", streamFilePath, (unsigned)(info.fileSize >> 10), streamBuffer ? "ok" : "REFUSED",
+                (unsigned)(dataStorage[DATASET_MUS].usedStorage * 4 >> 10), (unsigned)(dataStorage[DATASET_MUS].storageLimit >> 10));
+        if (!streamBuffer)
+            streamBufferSize = 0;
+        else
+#endif
         ReadBytes(&info, streamBuffer, streamBufferSize);
         CloseFile(&info);
 
@@ -256,12 +264,17 @@ void RSDK::LoadStream(ChannelInfo *channel)
             vorbisAlloc.alloc_buffer_length_in_bytes = 512 * 1024; // 512KiB
 #if RETRO_AUDIODEVICE_CTR
             // + the decoded music's ring after stb_vorbis's part (CTRAudioDevice.cpp)
+            vorbisAlloc.alloc_buffer = NULL;
             AllocateStorage((void **)&vorbisAlloc.alloc_buffer, 512 * 1024 + MUSIC_RING_BYTES, DATASET_MUS, false);
+            DEV_LOG("music: decoder buffer %s, MUS %u KB", vorbisAlloc.alloc_buffer ? "ok" : "REFUSED",
+                    (unsigned)(dataStorage[DATASET_MUS].usedStorage * 4 >> 10));
+            if (!vorbisAlloc.alloc_buffer)
+                streamBufferSize = 0;
 #else
             AllocateStorage((void **)&vorbisAlloc.alloc_buffer, 512 * 1024, DATASET_MUS, false);
 #endif
 
-            vorbisInfo = stb_vorbis_open_memory(streamBuffer, streamBufferSize, NULL, &vorbisAlloc);
+            vorbisInfo = streamBufferSize > 0 ? stb_vorbis_open_memory(streamBuffer, streamBufferSize, NULL, &vorbisAlloc) : NULL;
             if (vorbisInfo) {
                 if (streamStartPos)
                     stb_vorbis_seek(vorbisInfo, streamStartPos);

@@ -59,6 +59,9 @@ const char *FtpStatus(); // "192.168.1.141:5000" or why the server is off
 extern bool swFtp;
 bool FtpRunning();
 void SetFtp(bool on);
+// SET heapcheck 1 (debug): walk the heap every frame (and wherever HeapCheck is called) and log the first broken chunk.
+extern bool heapCheck;
+void HeapCheck(const char *where);
 void Mark();             // writes a mark into log.txt and the perf CSV
 // The switches survive between sessions, in the port's file with the player's options (Port::Save,
 // port-settings.ini), written on every change and read at start. DRAW LISTS is not saved: off it leaves a blank

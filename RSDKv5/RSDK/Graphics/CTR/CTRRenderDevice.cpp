@@ -25,9 +25,14 @@ bool RenderDevice::Init()
   gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
   gfxSetDoubleBuffering(GFX_TOP, true);
 
-  scanlines = (ScanlineInfo*) malloc(SCREEN_YSIZE_3DS * sizeof(ScanlineInfo));
+  // One entry per line, and per column for vertical-scroll layers and their callbacks: as many as the screen is wide,
+  // as the PC render devices allocate it (max of width and height). With 240 the tower of Stardust Speedway 2
+  // (SSZ2Setup_Scanline_BGTower, columns past the centre) wrote over the next heap chunk and the game crashed.
+  const int32 scanlineCount = SCREEN_XSIZE_3DS > SCREEN_YSIZE_3DS ? SCREEN_XSIZE_3DS : SCREEN_YSIZE_3DS;
+  scanlines = (ScanlineInfo*) malloc(scanlineCount * sizeof(ScanlineInfo));
   if (!scanlines)
     return false;
+  memset(scanlines, 0, scanlineCount * sizeof(ScanlineInfo));
 
   engine.inFocus = 1;
   videoSettings.windowState = WINDOWSTATE_ACTIVE;
