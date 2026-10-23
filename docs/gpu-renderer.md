@@ -592,6 +592,12 @@ without FORCE 3D, sampled 15 s after the load, `tools/site.sh STATE`):
   answer). The same sequence in Azahar did not hang. Suspect a libctru panic (the GPU command buffer, as in session 3)
   or the mask frame with 3D on the console. After the owner's power cycle: `debug/log-prev.txt`'s last lines,
   `/luma/dumps/arm11/` (PC/LR with addr2line), then repeat the sequence step by step.
+- **Follow-up (evening, no power cycle):** the 2DS answered FTP again by itself hours later, still in Special Stage 7,
+  in CPU mode at ~20 fps (`why CPU MODE`). `debug/log.txt` has no gap longer than a minute up to its last line (the
+  switch to CPU mode), and no new crash dump: the game never stopped. What hung was the remote control, not the game
+  (the FTP thread starved, or a command waiting on the frozen frame), and something in that sequence turned the
+  renderer to CPU mode. Copies in `debug/hang-2026-10-23/` (gitignored). To try: the same sequence with `SITE STATE`
+  between steps, watching which one stops the answers.
 
 ## Next steps (suggested order)
 
