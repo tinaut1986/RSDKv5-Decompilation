@@ -210,6 +210,23 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Installs: the New 3DS (192.168.1.133) runs the dev build too; `./build_3ds.sh --install 192.168.1.133` works there
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS).
 
+## Rotozoom textures per palette bank; Special Stage 2 at 59 fps (perf/special-floor, 2026-10-23)
+
+- What Special Stage 2 spent on the 2DS was its small 3D floor (a 16x16-tile grid, 256x256 px, `UFO_Setup_Scanline_3DFloor`
+  picks a fog bank per line): `RotoTex` needed one bank, so it was tile runs, often over the quad limit and drawn in
+  software (CPU frames "ROTOZOOM LAYER").
+- `RotoTex` now keeps a copy per palette bank its lines use (`RotoBank`, 128 KB each here; up to ROTO_BANK_BUDGET, 1 MB,
+  for several banks), each line drawn from its bank's copy: no extra passes. Hot colours stay shared (the mask), their
+  pass colour taken from the line's bank. Far lines of a small repeating layer span thousands of texels: their texel
+  unit grows (`Batch::uvk`, 1/16 << k) instead of refusing the layer. Bugs found on the way: a non-zero bank's batch
+  was rebound to the sprite atlas by the generic bind (`curTex` holds a key for roto textures now); the "too big"
+  status of the big floor hid the small layer's in `SITE REFUSED`.
+- 2DS, same frozen frame (both all-GPU): pcopy 13.7 -> 6.7 ms and 13.7 -> 4.7 ms at two spots. Playing (turning):
+  **50.0 -> 58.7 fps**, 59.3 with FORCE 3D. Sweep of the Special Stages with textures: 1, 3, 5, 6 at 58-60 fps with
+  and without 3D (4 and 7 ended or loaded during the sample). With 3D, stages 5 and 6 peaked the command buffer at
+  93 % and dropped 4-8 right eyes: the next thing to look at for 3D.
+- `VRAM_RESERVE` (800 KB for the 3D models) applies to every Special Stage texture.
+
 ## Special Stage floor from two map windows (perf/special-floor, 2026-10-23)
 
 - The floor (512x512 tiles, 8192 px) cannot be one texture. From a `SITE LAYERS` dump of Special Stage 1: ~2330 tile
