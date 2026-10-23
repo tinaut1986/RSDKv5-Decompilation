@@ -43,6 +43,9 @@ struct Stats {
     unsigned rotoUs, rotoQuads; // rotozoom layers as tile runs: build time (us) and quads (last frame)
     unsigned rotoTexBuilds; // rotozoom layers drawn into their own texture (RotoTex), times built (total)
     float gpuDrawMs, gpuProcMs; // citro3d: the last GPU frame's drawing time and its submit time (ms)
+    // The last frame's citro3d part on the CPU (ms): FrameBegin's wait for the previous GPU frame, each eye's
+    // commands (the FPS overlay apart), the overlay, FrameEnd.
+    float beginMs, eyeMs[2], overlayMs, endMs;
     float emitMs[GpuFrame::CMD_TYPES_MAX]; // the last frame's geometry building per command type (ms; the last attempt)
     float preMs;                 // before the commands: palette tracking, animated tiles, set-up (ms)
     unsigned batches;           // batches of the last frame
@@ -53,6 +56,8 @@ struct Stats {
     unsigned tileEvictions; // times the full tile atlas gave back the cells not used in the frame (total)
 };
 const Stats &GetStats();
+// SITE C3D: the averages since the last call of FrameBegin's wait, each eye, the overlay and FrameEnd (ms); resets them.
+unsigned TakeC3DTimes(float avg[5]);
 // The last refusal as a short name for the dev tools ("FACE", "INK TINT", "WATER LINE"); NULL when the last
 // frame was drawn. Always a static string: callers may keep and compare the pointer.
 const char *ReasonName();

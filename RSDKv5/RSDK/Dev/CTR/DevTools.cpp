@@ -3,6 +3,7 @@
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 #include "RSDK/Graphics/CTR/GpuRender.hpp"
+#include "RSDK/Graphics/CTR/C3DPresent.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
 
@@ -20,6 +21,13 @@
 #include <unistd.h>
 
 using namespace RSDK;
+
+// The audio device's counters (CTRAudioDevice.cpp), for SITE C3D and the recorded runs.
+extern volatile u64 ctrAudioMixTicks, ctrAudioDecodeTicks;
+extern volatile u32 ctrAudioUnderruns, ctrMusicStarved;
+extern int ctrAudioCore;
+extern u32 ctrAudioCore1Limit;
+extern Thread audioThreadHandle;
 
 // Own title ID: 0004000000 + UniqueId 0x05A230 (3ds/SonicMania.rsf) + variation 00. Installs of any other CIA are refused.
 static const u64 TITLE_ID = 0x0004000005A23000ULL;
@@ -76,6 +84,7 @@ static volatile int sPendingCategory = -1, sPendingScene = -1;
 static char sOrderCur[400], sOrderLast[400];
 static volatile bool sGoto; // SITE GOTO: move the player at the end of the frame
 static volatile bool sUfoTime; // SITE SET ufotime 1: the Special Stage's countdown never runs out (not saved)
+static s32 sMainPrio; // the main thread's priority (SITE C3D)
 static volatile bool sUfoNoFall; // SITE SET ufonofall 1: the Special Stage's holes are ground (not saved)
 
 // GetTile asks: the Special Stage's player falls where the playfield has no tile (UFO_Player_HandleSpeedUp); with
@@ -120,6 +129,7 @@ static volatile int sRunMode;
 static uint32 sRunContent; // GpuFrame::contentVersion when armed: a new value means the scene has been loaded
 static int sRunCategory = -1, sRunListPos = -1;
 static unsigned sRunFrames0;
+static unsigned sRunStarved0; // music buffers the decoder had not filled, at the run's start
 static u64 sRunTick0;
 static char sRunResult[96] = "-";
 static bool sRunFreezeAtEnd; // RUNPLAY N F: freeze the objects on the last pass (to compare two playbacks' pictures)
@@ -800,6 +810,10 @@ static void HandleSession(int ctrl)
                     GpuRender::depthTint = v != 0;
                 else if (!strncmp(path, "stereofar", 9))
                     GpuRender::stereoFar = v < 0 ? 0 : v > 16 ? 16 : v;
+                else if (!strncmp(path, "audioprio", 9)) {
+                    // debug, not saved: the audio thread's priority (0x18-0x3F; lower runs first)
+                    ok = v >= 0x18 && v <= 0x3F && R_SUCCEEDED(svcSetThreadPriority(threadGetHandle(audioThreadHandle), v));
+                }
                 else
                     ok = false;
                 if (ok) {
@@ -807,7 +821,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|ufonofall|floorwin|gpuskip <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|ufonofall|floorwin|gpuskip|audioprio <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
@@ -1011,6 +1025,23 @@ static void HandleSession(int ctrl)
                       sLastFrameMs, sLastStageMs[DevTools::STAGE_UPDATE], sLastStageMs[DevTools::STAGE_DRAW], sLastStageMs[DevTools::STAGE_FLIP], sLastStageMs[DevTools::STAGE_PCOPY],
                       sLastStageMs[DevTools::STAGE_PFRAME], sLastStageMs[DevTools::STAGE_WAIT], g.gpuDrawMs, g.gpuProcMs, g.quads, g.batches, g.cmdBufPct, g.cmdEyeKB, g.cmd3dKB, g.instances3d, g.scenes3d, g.eyesDropped);
             }
+            else if (!strcmp(sub, "C3D")) {
+                // pframe split, averages since the last C3D (ms a frame): FrameBegin's wait, each eye's commands, the
+                // FPS overlay, FrameEnd; and the audio thread's mixing as a share of the time since the last C3D.
+                static u64 lastAt, lastMix, lastDecode;
+                const u64 now = svcGetSystemTick(), mix = ctrAudioMixTicks, decode = ctrAudioDecodeTicks;
+                const float audioPct  = lastAt ? (float)(mix - lastMix) * 100.0f / (float)(now - lastAt) : 0.0f;
+                const float decodePct = lastAt ? (float)(decode - lastDecode) * 100.0f / (float)(now - lastAt) : 0.0f;
+                lastAt = now, lastMix = mix, lastDecode = decode;
+                float c[5];
+                const unsigned n = GpuRender::TakeC3DTimes(c);
+                s32 audioPrio = 0, mainPrio = 0;
+                svcGetThreadPriority(&audioPrio, threadGetHandle(audioThreadHandle));
+                mainPrio = sMainPrio;
+                Reply(s, "200 begin %.2f eye %.2f %.2f overlay %.2f end %.2f (%u frames) | pxfer %.2f pframe %.2f | mix %.1f%% ogg %.1f%% (core %d) underruns %lu starved %lu core 1 %lu%% prio 0x%lX main 0x%lX", c[0], c[1], c[2], c[3], c[4], n,
+                      sLastStageMs[DevTools::STAGE_PXFER], sLastStageMs[DevTools::STAGE_PFRAME], audioPct, decodePct, ctrAudioCore, (unsigned long)ctrAudioUnderruns, (unsigned long)ctrMusicStarved,
+                      (unsigned long)ctrAudioCore1Limit, (unsigned long)audioPrio, (unsigned long)mainPrio);
+            }
             else if (!strcmp(sub, "EMIT")) {
                 // pcopy split: before the commands, then the geometry building per command type (ms, last frame).
                 const GpuRender::Stats &g = GpuRender::GetStats();
@@ -1121,6 +1152,7 @@ static bool StartServer()
     sRun = true;
     s32 priority = 0x30;
     svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+    sMainPrio = priority;
     priority = priority + 4 <= 0x3F ? priority + 4 : 0x3F;
     sThread  = threadCreate(FtpMain, NULL, 64 * 1024, priority, 0, false);
     if (!sThread) {
@@ -1273,6 +1305,7 @@ void DevTools::RunKeys(uint32 *held, uint32 *down)
         // Statics the Special Stage does not reset on a reload (its frame counter: every other frame does things):
         // from the same values in the recording and the playback.
         sRunFrames0 = sTotGpu + sTotCpu;
+        sRunStarved0 = ctrMusicStarved;
         sRunTick0   = svcGetSystemTick();
         Log("run: %s from category %d list %d", mode == RUN_ARM_REC ? "recording" : "playing", sRunCategory, sRunListPos);
     }
@@ -1301,8 +1334,8 @@ void DevTools::RunKeys(uint32 *held, uint32 *down)
     }
     const float secs = (float)(svcGetSystemTick() - sRunTick0) / SYSCLOCK_ARM11;
     const unsigned frames = sTotGpu + sTotCpu - sRunFrames0;
-    snprintf(sRunResult, sizeof(sRunResult), "played %u passes in %.1f s: %u frames drawn, %.1f fps", sRunCount, secs, frames,
-             secs > 0 ? frames / secs : 0.0f);
+    snprintf(sRunResult, sizeof(sRunResult), "played %u passes in %.1f s: %u frames drawn, %.1f fps, music gaps %u", sRunCount, secs, frames,
+             secs > 0 ? frames / secs : 0.0f, (unsigned)(ctrMusicStarved - sRunStarved0));
     Log("run: %s", sRunResult);
     sRunMode = RUN_OFF;
     if (sRunFreezeAtEnd)
@@ -1642,28 +1675,104 @@ void DevTools::Init()
     DrawStatus();
 }
 
+// A screen's back buffer as a raw file (tools/shot.sh, tools/capture.sh convert it): request 1 top screen, 2 bottom
+// screen, 3 the top screen's right eye. The back buffer holds the frame before the one just shown.
+static void WriteShot(int request, const char *path)
+{
+    const gfxScreen_t screen = request == 2 ? GFX_BOTTOM : GFX_TOP;
+    u16 w = 0, h = 0;
+    const u8 *fb = gfxGetFramebuffer(screen, request == 3 ? GFX_RIGHT : GFX_LEFT, &w, &h);
+    FILE *f      = fopen(path, "wb");
+    if (f && fb) {
+        // Header: width, height (the framebuffer is column-major), bytes per pixel.
+        const u32 head[3] = { w, h, (u32)(gfxGetScreenFormat(screen) == GSP_RGB565_OES ? 2 : 3) };
+        fwrite(head, sizeof(head), 1, f);
+        fwrite(fb, head[2], (size_t)w * h, f);
+    }
+    if (f)
+        fclose(f);
+}
+
+// The CAPTURE button (DEBUG tab, dev builds): the owner's own capture of what is on screen now. The game freezes
+// (FREEZE: the objects stop, the frame keeps being drawn) and debug/capture-NNN-* get the picture shown when it was
+// tapped (both eyes: the back buffers one frame later), the one before it (-prev), the next frame's command list
+// (-cmds.txt) and the renderer's state (-info.txt). Tapped again, the game carries on. tools/capture.sh [N] fetches
+// and converts them.
+static int sCaptureNumber = -1;
+static volatile bool sCaptureTap;
+
+void DevTools::TapCapture() { sCaptureTap = true; }
+int DevTools::CaptureNumber() { return sCaptureNumber; }
+
+static void Capture()
+{
+    static int sStep;
+    int &sNumber = sCaptureNumber;
+    char path[160];
+    auto name = [&](const char *what) {
+        snprintf(path, sizeof(path), "%s/capture-%03d-%s", kDir, sNumber, what);
+        return path;
+    };
+    if (sStep == 1) {
+        // One frame on: the back buffers hold the frame that was on screen when it was tapped.
+        sStep = 0;
+        WriteShot(1, name("top.raw"));
+        WriteShot(3, name("right.raw"));
+        static char cmdsPath[160];
+        snprintf(cmdsPath, sizeof(cmdsPath), "%s/capture-%03d-cmds.txt", kDir, sNumber);
+        GpuFrame::dumpPath    = cmdsPath;
+        GpuFrame::dumpRequest = true;
+        DevTools::Log("capture %03d saved", sNumber);
+        return;
+    }
+    if (!sCaptureTap)
+        return;
+    sCaptureTap = false;
+    if (DevTools::freeze) {
+        DevTools::freeze = false;
+        return;
+    }
+    DevTools::freeze = true;
+    if (sNumber < 0) { // the first free number on the card
+        mkdir(kDir, 0777);
+        for (sNumber = 0; sNumber < 999; ++sNumber) {
+            struct stat st;
+            if (stat(name("info.txt"), &st) != 0)
+                break;
+        }
+    }
+    else
+        ++sNumber;
+    WriteShot(1, name("prev-top.raw"));
+    WriteShot(3, name("prev-right.raw"));
+    FILE *f = fopen(name("info.txt"), "w");
+    if (f) {
+        const GpuRender::Stats &g = GpuRender::GetStats();
+        fprintf(f, "capture %03d: category %d scene %d (list %d), frame %u\n", sNumber, (int)sceneInfo.activeCategory,
+                (int)(sceneInfo.listPos - sceneInfo.listCategory[sceneInfo.activeCategory].sceneOffsetStart), (int)sceneInfo.listPos, sTotGpu + sTotCpu);
+        fprintf(f, "renderer %s, last frame %s (why %s), stereo %d force3d %d slider %.2f\n", DevTools::GpuMode() ? "GPU" : "CPU",
+                sLastWhy ? "CPU" : "GPU", sLastWhy ? sLastWhy : "-", (int)C3DPresent::Stereo(), (int)DevTools::swForce3D, osGet3DSliderState());
+        fprintf(f, "refused: %s\nroto texture: %s\n", GpuRender::LastRefusal(), GpuRender::RotoTexWhy());
+        fprintf(f, "quads %u batches %u faces %u soft layers %u roto quads %u, cmdbuf %u%% eyes dropped %u, atlas retries %u quad retries %u\n",
+                g.quads, g.batches, g.faces, g.softLayers, g.rotoQuads, g.cmdBufPct, g.eyesDropped, g.atlasRetries, g.quadRetries);
+        fprintf(f, "fps %.1f frame %.1f ms, heap used %u KB, linear free %u KB, vram free %u KB\n", sLastFps, sLastFrameMs,
+                (unsigned)(mallinfo().uordblks >> 10), (unsigned)(linearSpaceFree() >> 10), (unsigned)(vramSpaceFree() >> 10));
+        fprintf(f, "depths: %s\n", GpuRender::DepthSummary());
+        fclose(f);
+    }
+    sStep = 1;
+}
+
 bool DevTools::FrameEnd()
 {
     if (sShotRequest) {
-        const gfxScreen_t screen = sShotRequest == 2 ? GFX_BOTTOM : GFX_TOP;
-        const int request        = sShotRequest;
-        sShotRequest             = 0;
-        u16 w = 0, h = 0;
-        // The back buffer holds the frame before the one just shown: complete, which is all a snapshot needs.
-        const bool right = request == 3;
-        const u8 *fb     = gfxGetFramebuffer(screen, right ? GFX_RIGHT : GFX_LEFT, &w, &h);
+        const int request = sShotRequest;
+        sShotRequest      = 0;
         char path[160];
-        snprintf(path, sizeof(path), "%s/shot-%s.raw", kDir, screen == GFX_BOTTOM ? "bottom" : right ? "right" : "top");
-        FILE *f = fopen(path, "wb");
-        if (f && fb) {
-            // Header: width, height (the framebuffer is column-major), bytes per pixel.
-            const u32 head[3] = { w, h, (u32)(gfxGetScreenFormat(screen) == GSP_RGB565_OES ? 2 : 3) };
-            fwrite(head, sizeof(head), 1, f);
-            fwrite(fb, head[2], (size_t)w * h, f);
-        }
-        if (f)
-            fclose(f);
+        snprintf(path, sizeof(path), "%s/shot-%s.raw", kDir, request == 2 ? "bottom" : request == 3 ? "right" : "top");
+        WriteShot(request, path);
     }
+    Capture();
     if (sUfoTime) {
         // SITE SET ufotime 1: the Special Stage's countdown (UFO_Setup->rings, one a second, time over at 0) kept at
         // 50 or more, to test the floor at leisure.
@@ -1747,6 +1856,10 @@ bool DevTools::FrameEnd()
     }
     else if (!BottomUi::Ready() && ((sPhase == 3 && (sFrames & 15) == 0) || sMenuDirty))
         DrawStatus();
+    // Frozen, the game's ProcessInput (the only hidScanInput) does not run: read the touch screen here, or the
+    // bottom screen (CAPTURE again) never sees a tap.
+    if (freeze)
+        hidScanInput();
     if (BottomUi::Ready())
         BottomUi::Update();
     else

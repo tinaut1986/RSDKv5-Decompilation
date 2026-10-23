@@ -14,6 +14,7 @@
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
 #include "RSDK/Graphics/CTR/GpuRender.hpp"
 #include "RSDK/Dev/CTR/GameInfo.h"
+#include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Dev/CTR/UiFont.hpp"
 #include <time.h>
 
@@ -64,11 +65,22 @@ static void TapForce3D()
 }
 static void ValDepthTint(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", GpuRender::depthTint ? "ON" : "OFF"); *on = GpuRender::depthTint; }
 static void TapDepthTint() { GpuRender::depthTint = !GpuRender::depthTint; }
+static void ValCapture(char *o, unsigned c, bool *on)
+{
+    const int n = DevTools::CaptureNumber();
+    if (DevTools::freeze && n >= 0)
+        snprintf(o, c, "#%03d GO ON", n);
+    else
+        snprintf(o, c, "%s", "TAKE");
+    *on = DevTools::freeze;
+}
+static void TapCapture() { DevTools::TapCapture(); }
 
 static const Button kButtons[] = {
     { "RENDERER", TapRenderer, ValRenderer }, { "FRAME SKIP", TapFrameSkip, ValFrameSkip }, { "MAX SKIP", TapMaxSkip, ValMaxSkip },
     { "LOG MARK", TapMark, ValMark },         { "DRAW LISTS", TapDraw, ValDraw },            { "FLIP COPY", TapFlip, ValFlip },
     { "3D SCENES", TapGpu3D, ValGpu3D },      { "FORCE 3D", TapForce3D, ValForce3D },    { "DEPTH TINT", TapDepthTint, ValDepthTint },
+    { "CAPTURE", TapCapture, ValCapture },
 };
 
 // Tabs, in the bar at the top (icons as in the owner's other ports). Values are saved: append only.
@@ -748,6 +760,19 @@ void BottomUi::LoadDetail(const char *file)
 
 void BottomUi::LoadEnd()
 {
+    if (sLoad.active) {
+        DEV_LOG("load: %s in %lu ms", sLoad.title, (unsigned long)((svcGetSystemTick() - sLoad.start) / (SYSCLOCK_ARM11 / 1000)));
+        // The engine's storage pools after the load: used / limit KB, entries, defragmentations and refused
+        // allocations so far (a refused one leaves a layout empty: the scene drawn with tile 0).
+        static const char *const kSet[DATASET_MAX] = { "STG", "MUS", "SFX", "STR", "TMP" };
+        char line[256];
+        unsigned w = 0;
+        for (int d = 0; d < DATASET_MAX && w < sizeof(line); ++d)
+            w += (unsigned)snprintf(line + w, sizeof(line) - w, "%s%s %u/%u KB e%u d%u f%u", d ? ", " : "", kSet[d],
+                                    (unsigned)(dataStorage[d].usedStorage * 4 >> 10), (unsigned)(dataStorage[d].storageLimit >> 10),
+                                    (unsigned)dataStorage[d].entryCount, (unsigned)storageDefrags[d], (unsigned)storageFails[d]);
+        DEV_LOG("storage: %s", line);
+    }
     sLoad.active = false;
     sDirty       = true; // the tabs again
 }

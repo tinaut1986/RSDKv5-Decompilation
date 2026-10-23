@@ -25,6 +25,9 @@
   #4 bottom-screen themes, #5 INK TINT, #6 water line (done: close after the owner's check), #7 Special Stage 60 fps
   turning / with 3D and the floor's quads, #8 options in production builds). Technical record:
   [`docs/gpu-renderer.md`](gpu-renderer.md).
+- **2026-10-23, session 5 (`perf/audio-core1`):** the audio took ~20 % of core 0 (Ogg decoding); now decoded on
+  core 1. Special Stage 2 run 43.4 fps / 35.2 with 3D (46.1 / 36.5 with `floorwin 1`). Next: the floor (9-13 ms of
+  CPU a frame). See gpu-renderer.md "The audio off core 0".
 - **Active release line**: `release/v0.1.0`, on `origin`.
 - **Consoles**: the owner's Old 2DS at `192.168.1.141` and New 3DS at `192.168.1.133` (DHCP: ping first;
   `tools/site.sh -i IP`). Both run the latest dev build of `release/v0.1.0`; the New 3DS takes `--install` over FTP too
@@ -42,6 +45,7 @@
 | `feat/layer-depth` | stereo depth by layer band, title depths, DEPTH TINT; merged into the release (2026-10-23). |
 | `perf/roto-texture`, `perf/special-floor`, `feat/run-replay` | merged into the release (2026-10-23). |
 | `perf/floor-lerp` | floor windows (two-pass fog, off by default), hard-reset runs, `ufonofall`, command buffer stats; committed, not merged. |
+| `perf/audio-core1` | (cut from `perf/floor-lerp`) the music decoded on core 1 (30 % share), SITE C3D, CAPTURE button, storage / load logs; SS2 run 36.9 -> 43.4 fps (29 -> 35.2 with 3D); owner heard it clean on the 2DS; not merged. |
 | `perf/special-stage`, `feat/bottom-tabs` | merged into the release (2026-10-23); may be deleted. |
 | `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage` | merged into the release; may be deleted. |
 | `feat/loading-screen` | bottom-screen loading indicator; **not confirmed by the owner, not merged**; conflicts in spirit with `BottomUi` (text console). |

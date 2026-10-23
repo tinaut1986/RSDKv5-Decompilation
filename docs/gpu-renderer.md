@@ -438,10 +438,37 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   (`render (5 s, scene N): gpu N cpu N | why: FACE 120, PALETTE 3`).
 - The fps number counts loop passes and is capped at 60 by the clock pacing: compare renderers by the ms, not the fps.
 
+## The audio off core 0; the hidden costs (perf/audio-core1, 2026-10-23)
+
+- **The audio thread took ~20-24 % of core 0** (SITE C3D: `mix N% ogg N%`), most of it stb_vorbis decoding the Ogg
+  music. It runs at a higher priority than the game, so its time hid inside every stage (pframe looked 2-5 ms
+  longer than its parts). Mixing alone is ~4 %: a lower mixing rate would gain little.
+- **The music is decoded on core 1** by a thread of its own into a ring (~0.37 s) at the end of the stream's
+  stb_vorbis buffer (music storage); the mixer stays on core 0 and copies from it (CTRAudioDevice.cpp). The first
+  half of the ring is decoded by LoadStream itself. Gaps are counted (`music gaps` in the RUN result, `starved` in
+  SITE C3D). GetChannelPos subtracts what the ring holds.
+- **Core 1 share: 30 %, no more.** At 80 % (MaxCpu 0xD0) the system services there starved: a Special Stage load took
+  70-87 s instead of 28 and the GPU's replies (FrameBegin/End, cache flushes) slowed, fewer fps than at 30 %. The
+  whole audio thread on core 1 at 30 % gave the most fps (47.0 / 37.8 with 3D) but crackled: it did not keep up.
+  The exheader keeps MaxCpu 0x9E (30 %) and AffinityMask 3 (threads on core 1).
+- **The heap has no room for statics:** a 64 KB static ring left zlib no heap to inflate the scene layouts, and the
+  Special Stage loaded with every layout tile 0 (CPU renderer too). Uncompress failures are logged now; every load
+  logs the storage pools (`storage: STG used/limit KB e<entries> d<defrags> f<refused>`).
+- The owner's Special Stage 2 run on the 2DS (quiet: no FTP polling during the run, which costs ~2 fps):
+  before 36.9 fps / 29.0 with FORCE 3D; now **43.4 / 35.2**, no music gaps, the owner heard it clean. With the floor
+  windows (`SET floorwin 1`) **46.1 / 36.5**: with the CPU freed they now win (they were off as slower).
+- Where a 3D frame goes now (ms): logic ~3.5, recording ~2.5-3, floor geometry (pcopy, ~5000 quads as tile runs)
+  9-13, citro3d submit ~3 an eye (`SITE C3D`: begin, eye, overlay, end), GPU 10-12 in parallel.
+- Debug added: `SITE C3D` (pframe split, audio shares), `SET audioprio`, the **CAPTURE** button (DEBUG tab: freezes
+  and saves debug/capture-NNN-* with both eyes, the frame before, the command list and the renderer state; tapped
+  again, carries on; `tools/capture.sh [N]` fetches and converts them), `load: <scene> in N ms` in the log.
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
 
+0. Special Stage floor: the floor windows on by default (now faster), more levels / a coarse far level (the owner's
+   idea: detailed sections near, one low-detail picture far); then the 3D submit (shader switch per 3D scene).
 1. #1 Save states tab (the owner wants it to reach spots quickly; `SITE GOTO` kills the player far away: the camera
    bounds do not follow).
 2. #5 INK_TINT on the GPU (the pause menu's grey: copy the frame into a texture mid-frame, combiner grey).

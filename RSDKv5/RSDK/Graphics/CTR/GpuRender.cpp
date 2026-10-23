@@ -260,6 +260,8 @@ Pending sPending[MAX_PENDING];
 unsigned sPendingCount;
 unsigned sSeenContent = ~0u;
 GpuRender::Stats sStats;
+float sC3DSum[5];      // SITE C3D: sums since the last TakeC3DTimes
+unsigned sC3DFrames;
 
 // Palette change tracking. Every frame the palette is compared with a copy of the last one; the colours are
 // taken in 32 groups of 8 and each group remembers the generation (frame) it last changed in. A converted tile or
@@ -2925,6 +2927,17 @@ const char *GpuRender::RotoTexWhy()
 const char *GpuRender::DepthSummary() { return sDepthLast[0] ? sDepthLast : "- (no 3D frame yet: slider up or SET force3d 1)"; }
 
 const GpuRender::Stats &GpuRender::GetStats() { return sStats; }
+
+unsigned GpuRender::TakeC3DTimes(float avg[5])
+{
+    const unsigned n = sC3DFrames;
+    for (int i = 0; i < 5; ++i) {
+        avg[i]     = n ? sC3DSum[i] / n : 0.0f;
+        sC3DSum[i] = 0.0f;
+    }
+    sC3DFrames = 0;
+    return n;
+}
 const char *GpuRender::LastRefusal() { return sRefusal[0] ? sRefusal : "-"; }
 
 const char *GpuRender::ReasonName()
@@ -3300,6 +3313,9 @@ bool GpuRender::Render(const Stream &stream)
     // finished the previous frame, so the atlas cells rewritten below are no longer being read.
     C3D_FrameBegin(0);
     GPU_TIME(STAGE_PFRAME, t);
+    const float tickMs = 1000.0f / SYSCLOCK_ARM11;
+    sStats.beginMs     = (svcGetSystemTick() - t) * tickMs;
+    sStats.eyeMs[0] = sStats.eyeMs[1] = sStats.overlayMs = 0.0f;
     t            = svcGetSystemTick();
     sTileDirtyLo = sSprDirtyLo = ~0u;
     sTileDirtyHi = sSprDirtyHi = 0;
@@ -3341,6 +3357,7 @@ bool GpuRender::Render(const Stream &stream)
     C3D_RenderTarget *const eyeTarget[2] = { target, sStereo ? (C3D_RenderTarget *)C3DPresent::TargetRight() : NULL };
     C3DPresent::SetStereo(sStereo);
     for (int eye = 0; eye < (sStereo ? 2 : 1); ++eye) {
+    const u64 tEye = svcGetSystemTick();
     target    = eyeTarget[eye];
     sEyeShift = sStereo ? (eye ? 0.5f : -0.5f) * sSlider : 0.0f;
     if (eye) {
@@ -3589,7 +3606,10 @@ bool GpuRender::Render(const Stream &stream)
     C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
     C3D_AlphaTest(false, GPU_ALWAYS, 0);
     ResetTexEnv();
+    const u64 tOverlay = svcGetSystemTick();
     BottomUi::DrawTopOverlayGpu(target); // OPTIONS > SHOW FPS
+    sStats.overlayMs += (svcGetSystemTick() - tOverlay) * tickMs;
+    sStats.eyeMs[eye] = (tOverlay - tEye) * tickMs;
     } // eye
     {
         // How full the GPU command buffer got (it overflowing panics libctru, a hang on the console)
@@ -3598,7 +3618,12 @@ bool GpuRender::Render(const Stream &stream)
         const unsigned pct = csize ? (unsigned)((u64)coffset * 100 / csize) : 0;
         sStats.cmdBufPct = pct > sStats.cmdBufPct ? pct : sStats.cmdBufPct;
     }
+    const u64 tEnd = svcGetSystemTick();
     C3D_FrameEnd(0);
+    sStats.endMs = (svcGetSystemTick() - tEnd) * tickMs;
+    sC3DSum[0] += sStats.beginMs, sC3DSum[1] += sStats.eyeMs[0], sC3DSum[2] += sStats.eyeMs[1];
+    sC3DSum[3] += sStats.overlayMs, sC3DSum[4] += sStats.endMs;
+    ++sC3DFrames;
     // citro3d's timings of the last finished GPU frame: drawing (the PICA's work) and processing (the CPU's submit).
     sStats.gpuDrawMs = C3D_GetDrawingTime();
     sStats.gpuProcMs = C3D_GetProcessingTime();

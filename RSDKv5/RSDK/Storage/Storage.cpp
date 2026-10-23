@@ -25,6 +25,9 @@ enum {
 };
 
 DataStorage RSDK::dataStorage[DATASET_MAX];
+#if RETRO_PLATFORM == RETRO_3DS
+uint32 RSDK::storageDefrags[DATASET_MAX], RSDK::storageFails[DATASET_MAX]; // dev tools: defragmentations, refused allocations
+#endif
 
 bool32 RSDK::InitStorage()
 {
@@ -130,6 +133,9 @@ void RSDK::AllocateStorage(void **dataPtr, uint32 size, StorageDataSets dataSet,
             }
             else {
                 // We've run out of room, so perform defragmentation and garbage-collection.
+#if RETRO_PLATFORM == RETRO_3DS
+                ++storageDefrags[dataSet];
+#endif
                 DefragmentAndGarbageCollectStorage(dataSet);
 
                 // If there is now room, then perform allocation.
@@ -165,6 +171,10 @@ void RSDK::AllocateStorage(void **dataPtr, uint32 size, StorageDataSets dataSet,
                 }
             }
 
+#if RETRO_PLATFORM == RETRO_3DS
+            if (!*data)
+                ++storageFails[dataSet];
+#endif
             // If there are too many storage entries, then perform garbage collection.
             if (storage->entryCount >= STORAGE_ENTRY_COUNT)
                 GarbageCollectStorage(dataSet);
