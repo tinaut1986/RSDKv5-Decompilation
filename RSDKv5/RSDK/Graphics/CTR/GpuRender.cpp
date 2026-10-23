@@ -251,6 +251,7 @@ struct GModel {
     u32 idxCount;
     u16 vc;
     bool tried, ok;
+    float radius; // the farthest vertex from the model's origin, any frame (model units): its scene's depth range
 };
 GModel sModels[MODEL_COUNT];
 unsigned sModelsVersion = ~0u;
@@ -1355,6 +1356,15 @@ bool EnsureModel(unsigned m)
         return false;
     }
     sModelVram += vbytes + ibytes + (colors ? cbytes : 0);
+    {
+        float r2 = 0;
+        for (u32 v = 0; v < (u32)vc * frames; ++v) {
+            const ModelVertex &mv = md.vertices[v];
+            const float d = (float)mv.x * mv.x + (float)mv.y * mv.y + (float)mv.z * mv.z;
+            r2            = d > r2 ? d : r2;
+        }
+        g.radius = sqrtf(r2);
+    }
     bool ok = UploadVram(g.vtx, vbytes, [&](u32 off, u32 n, u8 *buf) {
         int16 *o = (int16 *)buf;
         for (u32 i = 0; i < n / 2; ++i) {
@@ -1436,13 +1446,28 @@ void Draw3DSceneGpu(unsigned k, bool follows)
     }
     C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, (float)(1 << h->projX), -(float)(1 << h->projY), (float)h->centerX, (float)h->centerY);
     // z / w linear in Z inside the scene's band (1/Z left the near and far sides of a model a few 16-bit steps apart
-    // and the last triangle drawn won); later scenes in nearer bands. A 24-bit depth buffer: 2^24 / 64 steps a band.
+    // and the last triangle drawn won); later scenes in nearer bands, as the software draws them over the earlier ones.
+    // The band spans the scene's own depth, its instances' Z +- their models' reach: a fixed 0..65536 clamped every
+    // farther face to one depth (the player is at ~41000) and columns, plants and ramps showed their back faces.
     const unsigned mode = GpuRender::depthMode;
-    const float width = 1.0f / MAX_DRAW3D, zmax = 65536.0f;
+    float zmin = 1e30f, zmax = -1e30f;
+    for (int32 i = 0; i < h->count; ++i) {
+        const GpuScene3D::Inst &in = d.in[i];
+        const float sx = in.world[8] / 256.0f, sy = in.world[9] / 256.0f, sz = in.world[10] / 256.0f;
+        const float reach = sModels[in.model].radius * sqrtf(sx * sx + sy * sy + sz * sz);
+        const float z     = (float)in.world[11];
+        zmin              = z - reach < zmin ? z - reach : zmin;
+        zmax              = z + reach > zmax ? z + reach : zmax;
+    }
+    zmin = zmin < 1.0f ? 1.0f : zmin;
+    zmax = zmax < zmin + 1.0f ? zmin + 1.0f : zmax;
+    // Bands of the frame's scene count, not MAX_DRAW3D: the shader's 24-bit floats leave only a few hundred steps in a
+    // band of 1/256 of the range.
+    const float width = 1.0f / (float)(sDraw3DCount ? sDraw3DCount : 1), span = zmax - zmin;
     if (mode & 1) // nearer = lower z / w
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.band, -(float)(k + 1) * width, width / zmax, zmax, 0);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.band, -(float)(k + 1) * width - width * zmin / span, width / span, zmax, 0);
     else // nearer = higher z / w
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.band, -1.0f + (float)(k + 1) * width, -width / zmax, zmax, 0);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.band, -1.0f + (float)(k + 1) * width + width * zmin / span, -width / span, zmax, 0);
     const float alpha = h->ink == INK_NONE ? 255.0f : h->ink == INK_BLEND ? 128.0f : (float)(h->alpha > 0xFF ? 0xFF : h->alpha < 0 ? 0 : h->alpha);
     if (shaded) {
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.lit, 1.0f / 1024, 0, 0, alpha);

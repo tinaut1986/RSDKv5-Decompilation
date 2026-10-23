@@ -566,6 +566,20 @@ without FORCE 3D, sampled 15 s after the load, `tools/site.sh STATE`):
   instead of six. Stage 2's small floor goes the same way (its fog now the floor's, black at 60 %).
 - 2DS: Special Stage 4 ~13 -> ~58 fps, the picture as the CPU's. Special Stage 2 run unchanged (57.9 / 50.0 with 3D).
 
+## 3D scenes' depth bands span their own depth (fix/3d-depth-bands, 2026-10-23, #13)
+
+- Each 3D scene has its own band of the depth range (later scenes nearer: the software draws a scene over the earlier
+  ones, and the game orders them back to front). Inside the band z / w was linear in min(Z, 65536): every face of a
+  model farther than Z 65536 (the player is at ~41000) got the same depth and the last triangle drawn won: columns,
+  plants, palm trees and ramps showed their back faces (seen by the owner in 5, 5+, 6, 7+).
+- Now the band spans the scene's own depth: its instances' Z (`world[11]`) +- their models' reach (`GModel::radius`, the
+  farthest vertex in any frame, times the matrix's Z row length). Same shader: the uniform's base and slope map
+  [zmin, zmax] onto the band. Bands are 1 / the frame's scene count (not MAX_DRAW3D): the shader's 24-bit floats left
+  only a few hundred steps in a band of 1/256.
+- Checked on the 2DS on frozen frames of 5, 6 and 7+: the GPU's models as the software's (`SET gpu3d 0`). The
+  Special Stage 2 run with FORCE 3D unchanged (49.8 fps). Not yet seen by the owner; ramps' arrows (coplanar faces)
+  not caught on a frame yet.
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:

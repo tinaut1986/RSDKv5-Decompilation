@@ -34,7 +34,8 @@
   the wrong depth order everywhere (#13), floor through the track (#10). gpu-renderer.md "Session 5 hand-off".
   `feat/gpu-deformed-sprite` (#11): the plasma sky on the GPU, Special Stages 7 and 1+ ~18 -> ~60 fps (3D ~31,
   GPU-bound); waits for the owner's look. `perf/ss4-palette` (#12): animated tiles count only where used, one faded
-  copy for the water: Special Stage 4 ~13 -> ~58 fps. Next: #13 (3D depth order, best checked with the owner).
+  copy for the water: Special Stage 4 ~13 -> ~58 fps. `fix/3d-depth-bands` (#13): each 3D scene's depth band spans
+  its own Z range (far models clamped to one depth showed their back faces); waits for the owner's look.
 - **Active release line**: `release/v0.1.0`, on `origin`.
 - **Consoles**: the owner's Old 2DS at `192.168.1.141` and New 3DS at `192.168.1.133` (DHCP: ping first;
   `tools/site.sh -i IP`). Both run the latest dev build of `release/v0.1.0`; the New 3DS takes `--install` over FTP too
@@ -52,6 +53,7 @@
 | `feat/layer-depth` | stereo depth by layer band, title depths, DEPTH TINT; merged into the release (2026-10-23). |
 | `perf/roto-texture`, `perf/special-floor`, `feat/run-replay` | merged into the release (2026-10-23). |
 | `perf/floor-lerp` | floor windows (two-pass fog, off by default), hard-reset runs, `ufonofall`, command buffer stats; committed, not merged. |
+| `fix/3d-depth-bands` | (cut from `perf/ss4-palette`) #13: 3D scene depth bands over the scene's own Z range; not merged. |
 | `perf/ss4-palette` | (cut from `feat/gpu-deformed-sprite`) #12: animated tiles count only where used, small RotoTex rebuilt at once, one faded copy for rotozoom layers in a Special Stage; not merged. |
 | `feat/gpu-deformed-sprite` | (cut from `perf/stereo-submit`) DrawDeformedSprite on the GPU (#11), masked ink lines in one draw, the mask compare on the floor windows; not merged. |
 | `perf/stereo-submit` | (cut from `perf/floor-lod`) runs of 3D scenes keep their state, both shaders in one binary; SS2 run 49.5 fps with 3D / 57.7 without; not merged. |
