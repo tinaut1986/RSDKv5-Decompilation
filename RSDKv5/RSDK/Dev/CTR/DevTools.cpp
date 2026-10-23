@@ -123,6 +123,34 @@ enum { RUN_STATICS_MAX = 96 * 1024 };
 static uint8 sRunStatics[RUN_STATICS_MAX];
 static uint32 sRunStaticsSize;
 
+// True when `v` points into the engine's data storage (AllocateStorage): the storage tracks the variable that holds
+// each allocation, so such a word is never overwritten (a restored pointer from another load corrupted it and the next
+// scene load crashed in DefragmentAndGarbageCollectStorage).
+static bool InStorage(uint32 v)
+{
+    for (int32 set = 0; set < DATASET_MAX; ++set) {
+        const uint32 lo = (uint32)(uintptr_t)dataStorage[set].memoryTable;
+        if (lo && v >= lo && v < lo + dataStorage[set].storageLimit)
+            return true;
+    }
+    return false;
+}
+
+// Puts back a class's recorded statics, word by word, keeping the words that hold storage pointers (now or then).
+static void RunStaticsRestore(uint8 *dst, const uint8 *src, uint32 size)
+{
+    uint32 i = 0;
+    for (; i + 4 <= size; i += 4) {
+        uint32 now, was;
+        memcpy(&now, dst + i, 4);
+        memcpy(&was, src + i, 4);
+        if (!InStorage(now) && !InStorage(was))
+            memcpy(dst + i, &was, 4);
+    }
+    for (; i < size; ++i)
+        dst[i] = src[i];
+}
+
 static void RunStaticsCopy(bool save)
 {
     uint32 off = 0;
@@ -145,7 +173,7 @@ static void RunStaticsCopy(bool save)
                 break;
             }
             if (size > 0)
-                memcpy(*oc.staticVars, sRunStatics + off + 4, (size_t)size);
+                RunStaticsRestore((uint8 *)*oc.staticVars, sRunStatics + off + 4, (uint32)size);
         }
         off += 4 + (uint32)(size > 0 ? size : 0);
     }

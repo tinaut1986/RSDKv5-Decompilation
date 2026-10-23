@@ -1541,52 +1541,8 @@ bool EmitRect(const Cmd &c)
     return true;
 }
 
-// DrawLine: the software's clipping and Bresenham steps, pixel for pixel, with the pixels gathered into horizontal or
-// vertical runs, one quad each (the Special Stage's wireframe item boxes, the giant ring's portal).
-struct LineRuns {
-    int x0, y0, len;
-    bool vertical;
-    uint8 blend, r, g, b, a;
-    bool ok = true;
-    void Flush()
-    {
-        if (len <= 0 || !ok)
-            return;
-        const float x1 = vertical ? x0 + 1.0f : (float)(x0 + len), y1 = vertical ? (float)(y0 + len) : y0 + 1.0f;
-        if (!AddQuad(TEX_SPRITE, blend, (float)x0, (float)y0, x1, y1, 4.0f, 4.0f, 4.0f, 4.0f, SPR_ATLAS_W, SPR_ATLAS_H, r, g, b, a))
-            ok = false;
-        len = 0;
-    }
-    void Put(int x, int y)
-    {
-        if (len) {
-            // Extends the run when the pixel continues it (a 1-pixel run may turn into either kind)
-            if (len == 1 && y == y0 && x == x0 + 1) {
-                vertical = false, ++len;
-                return;
-            }
-            if (len == 1 && x == x0 && (y == y0 + 1 || y == y0 - 1)) {
-                vertical = true, ++len;
-                if (y < y0)
-                    y0 = y;
-                return;
-            }
-            if (!vertical && y == y0 && x == x0 + len) {
-                ++len;
-                return;
-            }
-            if (vertical && x == x0 && (y == y0 + len || y == y0 - 1)) {
-                if (y < y0)
-                    y0 = y;
-                ++len;
-                return;
-            }
-            Flush();
-        }
-        x0 = x, y0 = y, len = 1, vertical = false;
-    }
-};
-
+// DrawLine: the software's clipping, then one thin quad (the Special Stage's wireframe item boxes, the giant ring's
+// portal).
 bool EmitLine(const Cmd &c)
 {
     const int32 *p = c.p;
@@ -1676,46 +1632,39 @@ bool EmitLine(const Cmd &c)
     drawX1 = clampTo(drawX1, cx1, cx2), drawY1 = clampTo(drawY1, cy1, cy2);
     drawX2 = clampTo(drawX2, cx1, cx2), drawY2 = clampTo(drawY2, cy1, cy2);
 
-    const int32 sizeX = abs(drawX2 - drawX1), sizeY = abs(drawY2 - drawY1);
-    const int32 max = sizeY;
-    int32 hSize     = sizeX <= sizeY ? -sizeY >> 2 : sizeX >> 2;
-    if (drawX2 < drawX1) {
-        int32 v = drawX1;
-        drawX1 = drawX2, drawX2 = v;
-        v = drawY1, drawY1 = drawY2, drawY2 = v;
-    }
-
+    // One quad: a parallelogram a pixel thick across the line's major axis, which covers a pixel of each column (or
+    // row) as the software's steps do, give or take one at the half-way rounding. Walking the steps and gathering runs
+    // made a quad a pixel on diagonals (the Special Stage's wireframe item boxes: ~3 ms of the 2DS's frame).
     const uint16 c16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
     const unsigned r5 = c16 >> 11, g6 = (c16 >> 5) & 0x3F, b5 = c16 & 0x1F;
-    LineRuns runs;
-    runs.len = 0, runs.blend = blend, runs.a = (uint8)alpha;
-    runs.r = (uint8)((r5 << 3) | (r5 >> 2)), runs.g = (uint8)((g6 << 2) | (g6 >> 4)), runs.b = (uint8)((b5 << 3) | (b5 >> 2));
-    // The pixels the software writes: the frame buffer pointer stays inside the screen, so do the steps (capped).
-    int guard = 4096;
-    if (drawY1 > drawY2) {
-        while ((drawX1 < drawX2 || drawY1 >= drawY2) && --guard > 0) {
-            runs.Put(drawX1, drawY1);
-            if (hSize > -sizeX)
-                hSize -= max, ++drawX1;
-            if (hSize < max)
-                --drawY1, hSize += sizeX;
+    const uint8 r = (uint8)((r5 << 3) | (r5 >> 2)), g = (uint8)((g6 << 2) | (g6 >> 4)), b = (uint8)((b5 << 3) | (b5 >> 2));
+    float px[4], py[4];
+    if (abs(drawX2 - drawX1) >= abs(drawY2 - drawY1)) { // x-major: a pixel tall
+        if (drawX2 < drawX1) {
+            int32 t = drawX1;
+            drawX1 = drawX2, drawX2 = t;
+            t = drawY1, drawY1 = drawY2, drawY2 = t;
         }
+        px[0] = (float)drawX1, py[0] = (float)drawY1;
+        px[1] = drawX2 + 1.0f, py[1] = (float)drawY2;
+        px[2] = drawX2 + 1.0f, py[2] = drawY2 + 1.0f;
+        px[3] = (float)drawX1, py[3] = drawY1 + 1.0f;
     }
-    else {
-        while (--guard > 0) {
-            runs.Put(drawX1, drawY1);
-            if (drawX1 < drawX2 || drawY1 < drawY2) {
-                if (hSize > -sizeX)
-                    hSize -= max, ++drawX1;
-                if (hSize < max)
-                    hSize += sizeX, ++drawY1;
-            }
-            else
-                break;
+    else { // y-major: a pixel wide
+        if (drawY2 < drawY1) {
+            int32 t = drawX1;
+            drawX1 = drawX2, drawX2 = t;
+            t = drawY1, drawY1 = drawY2, drawY2 = t;
         }
+        px[0] = (float)drawX1, py[0] = (float)drawY1;
+        px[1] = drawX1 + 1.0f, py[1] = (float)drawY1;
+        px[2] = drawX2 + 1.0f, py[2] = drawY2 + 1.0f;
+        px[3] = (float)drawX2, py[3] = drawY2 + 1.0f;
     }
-    runs.Flush();
-    return runs.ok ? true : Refuse(GpuRender::REASON_QUAD_LIMIT);
+    static const float kWhite[4] = { 4, 4, 4, 4 }; // the solid block at the sprite atlas's origin
+    if (!AddQuadFree(TEX_SPRITE, blend, px, py, kWhite, kWhite, SPR_ATLAS_W, SPR_ATLAS_H, r, g, b, (uint8)alpha))
+        return Refuse(GpuRender::REASON_QUAD_LIMIT);
+    return true;
 }
 
 void ConvertSoft(const SoftJob &j);
