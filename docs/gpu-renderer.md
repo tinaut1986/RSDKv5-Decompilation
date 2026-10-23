@@ -210,6 +210,38 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Installs: the New 3DS (192.168.1.133) runs the dev build too; `./build_3ds.sh --install 192.168.1.133` works there
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS).
 
+## Special Stage floor from two map windows (perf/special-floor, 2026-10-23)
+
+- The floor (512x512 tiles, 8192 px) cannot be one texture. From a `SITE LAYERS` dump of Special Stage 1: ~2330 tile
+  runs a frame, 909 on lines with a step under 1 texel a pixel, 987 between 1 and 2, 431 between 2 and 4, none beyond;
+  the lines up to a step of 2 fit a 1024 px box of the map, those up to 4 a 2048 px one.
+- `FloorWin`: two windows in repeating VRAM textures where a map pixel lives at its position modulo the window, so a
+  move writes only the cells entering it (a column with one strided `C3D_SyncTextureCopy`, a row with a plain one):
+  level 0 1024x1024 texels at full resolution (cells of a tile) for steps up to 2; level 1 512x512 at a quarter (each
+  texel the map pixel in the middle of its 4x4; cells of one 8x8 block, 2x2 tiles) for steps 1.5-4. A window moves
+  when its lines' box leaves it. Each line is one quad from the finest window holding it whole; the rest stay tile
+  runs (`sLineDone`). VRAM: 3.75 MB (both windows and masks); ~185 KB left in the Special Stage.
+- **Fog**: UFO_Setup makes banks 1-6 as `SetPaletteFade(k, 0, 7, 36k)` over indices 160-255 and picks the bank per
+  line by distance; bank 7 holds a fog colour per ramp of 8 (green, blue, grey, red...: 6 distinct in stage 1). The
+  windows hold bank 0, an A8 mask holds each pixel's fog group ((g + 1) * 32, the distinct bank 7 colours of the indices
+  it uses), and per line and group a pass blends the group colour in by f_k (`BLEND_FOG`: alpha test EQUAL, constant
+  colour, blend constant alpha). `FloorFog` fits f_k per bank from the palette and refuses (tile runs) when a bank is
+  not such a fade within a step and a half.
+- Rebuilt when the colours the floor uses (any bank), the layout or its tiles change, once held two frames.
+  `sTileEpoch` now moves only when an animated tile's picture really changes (DrawAniTile rewrites tiles every frame,
+  mostly the same).
+- Results in Azahar (frozen frames, turning): stage 1 floor 2780-5020 quads as runs -> 720-1580; stage 2 frame
+  ~6950 -> 2500-3300 quads (it no longer goes over the 6000-quad limit). Against the CPU renderer the windows differ as
+  much as the runs did (stage 2: 466 vs 507 pixels); the level-1 lines (rows ~140-160) differ a few hundred pixels more
+  from the reduced resolution, hardly visible (fogged). With FORCE 3D cmdbuf peaked at 37 %.
+- Not measured on hardware (consoles off): the point is the 2DS's floor build (~4-6 ms of CPU turning) and GPU time.
+- Still: stage 2's small 3D floor (16x16 tiles, fog banks per line) is tile runs and sometimes a software layer
+  (`RotoTex` needs one bank: the same fog passes would do); `SITE SET depthmode 256` (rotozoom layers in software,
+  debug) draws that layer black, the CPU renderer draws it: a bug of the debug mode.
+- Debug: `SITE REFUSED` `floor A+B/C+D lines` (lines drawn from level 0 + level 1 / candidates), or why not (`few
+  lines`, `changing`, `fog`, `no vram`); `depthmode 512` turns the windows off too. `SITE SET ufotime 1` keeps the
+  Special Stage's countdown (UFO_Setup->rings) at 50 or more, not saved.
+
 ## Rotozoom layers from a texture of their own (perf/roto-texture, 2026-10-23)
 
 - The title's island (64x64 tiles, 1024x1024 px) and clouds (16x16) were ~3500 one-pixel tile-run quads of the ~4000

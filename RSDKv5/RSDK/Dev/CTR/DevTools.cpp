@@ -75,6 +75,7 @@ static volatile int sPendingGpuMode = -1; // SITE GPU, applied by the main threa
 static volatile int sPendingCategory = -1, sPendingScene = -1;
 static char sOrderCur[400], sOrderLast[400];
 static volatile bool sGoto; // SITE GOTO: move the player at the end of the frame
+static volatile bool sUfoTime; // SITE SET ufotime 1: the Special Stage's countdown never runs out (not saved)
 static int32 sGotoX, sGotoY;
 // SITE HIDE <ObjectName>: one class not drawn (to see what it covers); SITE HIDE alone shows it again. Not saved.
 static uint32 sHideHash[4];
@@ -726,6 +727,8 @@ static void HandleSession(int ctrl)
                     DevTools::swLock30 = v != 0;
                 else if (!strncmp(path, "force3d", 7))
                     DevTools::swForce3D = v != 0;
+                else if (!strncmp(path, "ufotime", 7))
+                    sUfoTime = v != 0;
                 else if (!strncmp(path, "depthtint", 9))
                     GpuRender::depthTint = v != 0;
                 else if (!strncmp(path, "stereofar", 9))
@@ -737,7 +740,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
@@ -1460,6 +1463,31 @@ bool DevTools::FrameEnd()
         }
         if (f)
             fclose(f);
+    }
+    if (sUfoTime) {
+        // SITE SET ufotime 1: the Special Stage's countdown (UFO_Setup->rings, one a second, time over at 0) kept at
+        // 50 or more, to test the floor at leisure. The game's static struct as Plus (GAME_VERSION 1.06) lays it out.
+        struct UfoSetupStatics {
+            uint16 classID;
+            uint8 active;
+            void (*deformCB)();
+            int32 timedOut, encoreStage, machLevel, scoreBonus, machPoints, rings;
+        };
+        static uint32 hash[4];
+        static bool hashed;
+        if (!hashed) {
+            GEN_HASH_MD5("UFO_Setup", hash);
+            hashed = true;
+        }
+        for (int32 i = 0; i < sceneInfo.classCount; ++i) {
+            ObjectClass &oc = objectClassList[stageObjectIDs[i]];
+            if (HASH_MATCH_MD5(oc.hash, hash) && oc.staticVars && *oc.staticVars) {
+                UfoSetupStatics *u = (UfoSetupStatics *)*oc.staticVars;
+                if (u->rings < 50)
+                    u->rings = 50;
+                break;
+            }
+        }
     }
     if (sGoto) {
         sGoto = false;
