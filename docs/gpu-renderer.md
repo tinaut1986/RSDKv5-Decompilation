@@ -463,12 +463,30 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   and saves debug/capture-NNN-* with both eyes, the frame before, the command list and the renderer state; tapped
   again, carries on; `tools/capture.sh [N]` fetches and converts them), `load: <scene> in N ms` in the log.
 
+## The floor in five levels, faded in one pass (perf/floor-lod, 2026-10-23)
+
+- The floor windows are **on by default** (`SET floorwin 0` for the tile runs) and the floor is drawn from five levels:
+  512-texel windows at full and half resolution (steps up to 1 and 2), 256-texel windows at an eighth and a sixteenth
+  (2048 and 4096 px, steps up to 4 and 8) and the whole map at a thirty-second (it never moves and takes every line
+  left, up to the horizon). No floor line is left to the tile runs: the last ones kept the game's exact fog and showed
+  as an unfaded strip at the end of the track (seen by the owner).
+- **One texture a level, one quad a line:** the window holds the map in bank 0 only and the combiner fades each line
+  towards a colour by the line's fade (vertex alpha = 1 - f, `GPU_INTERPOLATE`). The exact fog (a bank 7 copy and a
+  second additive quad a line) took twice the VRAM and the fill. The colour is black at 60 % of the game's fade (the
+  owner: the far floor just darker, not bluer, and not hidden); `SET floorfog N` (0-100) and `SET floorfogavg 1`
+  (bank 7's average over the floor's pixels: navy in stage 2) to compare; neither saved.
+- VramReserve() is now what the scene's models not yet in VRAM will take plus 32 KB (it was a fixed 800 KB, which left
+  no room for a third level); a level that does not fit is tried again on later frames. VRAM free in stage 2 with the
+  five levels: ~1 MB (374 KB with the old two levels and their fog copies).
+- The owner's Special Stage 2 run on the 2DS: **56.0 fps** (tile runs 43.6), **45.1 with FORCE 3D** (35.3). This
+  morning, before the audio work: 36.9 / 29.0.
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
 
-0. Special Stage floor: the floor windows on by default (now faster), more levels / a coarse far level (the owner's
-   idea: detailed sections near, one low-detail picture far); then the 3D submit (shader switch per 3D scene).
+0. Special Stage with 3D: the citro3d submit of two eyes (the shader switch per 3D scene, the command buffer at ~90 %);
+   check the other Special Stages and the title's rotozoom layers with the floor levels.
 1. #1 Save states tab (the owner wants it to reach spots quickly; `SITE GOTO` kills the player far away: the camera
    bounds do not follow).
 2. #5 INK_TINT on the GPU (the pause menu's grey: copy the frame into a texture mid-frame, combiner grey).

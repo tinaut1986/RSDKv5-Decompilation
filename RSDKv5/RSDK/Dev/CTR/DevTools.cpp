@@ -802,6 +802,12 @@ static void HandleSession(int ctrl)
                     GpuRender::gpuSkip = (unsigned)v;
                 else if (!strncmp(path, "floorwin", 8))
                     GpuRender::floorWindows = v != 0;
+                else if (!strncmp(path, "floorfogavg", 11)) {
+                    GpuRender::floorFogAverage = v != 0;
+                    GpuFrame::InvalidateContent(); // the windows' fog colour is set when they are built
+                }
+                else if (!strncmp(path, "floorfog", 8))
+                    GpuRender::floorFogPercent = v < 0 ? 0 : v > 100 ? 100 : v;
                 else if (!strncmp(path, "ufotime", 7))
                     sUfoTime = v != 0;
                 else if (!strncmp(path, "ufonofall", 9))
@@ -821,7 +827,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|ufonofall|floorwin|gpuskip|audioprio <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|ufonofall|floorwin|floorfog|floorfogavg|gpuskip|audioprio <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
