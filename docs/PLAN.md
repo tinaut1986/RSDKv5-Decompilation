@@ -25,6 +25,10 @@
   #4 bottom-screen themes, #5 INK TINT, #6 water line (done: close after the owner's check), #7 Special Stage 60 fps
   turning / with 3D and the floor's quads, #8 options in production builds). Technical record:
   [`docs/gpu-renderer.md`](gpu-renderer.md).
+- **2026-10-23, session 5, merged into the release:** the audio on core 1, the floor levels, the 3D scene runs; the
+  Special Stage 2 run 36.9 -> 57.7 fps, 29.0 -> 49.5 with 3D. **Pending (pushed, not merged):** #11, #12, #13 on
+  `fix/3d-depth-bands` (see the branch table), the 2DS hang, Special Stage 7 with 3D at ~31 fps, #10 (floor through
+  the track, minor). The full record: `fix/3d-depth-bands`'s docs/gpu-renderer.md.
 - **2026-10-23, session 5 (`perf/audio-core1`):** the audio took ~20 % of core 0 (Ogg decoding); now decoded on
   core 1. Special Stage 2 run 43.4 fps / 35.2 with 3D (46.1 / 36.5 with `floorwin 1`). Next: the floor (9-13 ms of
   CPU a frame). See gpu-renderer.md "The audio off core 0". Then `perf/floor-lod`: the floor from five window levels,
@@ -46,18 +50,10 @@
 | Branch | State |
 |---|---|
 | `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
-| `release/v0.1.0` | Holds, merged: build/docs, dev tools, GPU presentation, bottom UI, clock pacing + frame skip, persistent switches, draw-order tooling; `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage`; `perf/special-stage` (3D scenes as GPU instances, masked inks, rotozoom tile runs, tile eviction) and `feat/bottom-tabs` (tabs, FPS counter, loading box, stereo 3D, LINE / PALETTE / water line on the GPU, scissor, HOME-exit fix), merged 2026-10-23 after the owner checked them on the 2DS and the New 3DS. |
-| `feat/layer-depth` | stereo depth by layer band, title depths, DEPTH TINT; merged into the release (2026-10-23). |
-| `perf/roto-texture`, `perf/special-floor`, `feat/run-replay` | merged into the release (2026-10-23). |
-| `perf/floor-lerp` | floor windows (two-pass fog, off by default), hard-reset runs, `ufonofall`, command buffer stats; committed, not merged. |
-| `perf/stereo-submit` | (cut from `perf/floor-lod`) runs of 3D scenes keep their state, both shaders in one binary; SS2 run 49.5 fps with 3D / 57.7 without; not merged. |
-| `perf/floor-lod` | (cut from `perf/audio-core1`) the floor in five window levels, one texture and one quad a line (fog to black at 60 %), exact VRAM reserve; SS2 run 56.0 fps / 45.1 with 3D; not merged. |
-| `perf/audio-core1` | (cut from `perf/floor-lerp`) the music decoded on core 1 (30 % share), SITE C3D, CAPTURE button, storage / load logs; SS2 run 36.9 -> 43.4 fps (29 -> 35.2 with 3D); owner heard it clean on the 2DS; not merged. |
-| `perf/special-stage`, `feat/bottom-tabs` | merged into the release (2026-10-23); may be deleted. |
-| `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage` | merged into the release; may be deleted. |
+| `release/v0.1.0` | Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). Merged topic branches deleted. |
+| `feat/gpu-deformed-sprite` -> `perf/ss4-palette` -> `fix/3d-depth-bands` | **Stacked on the release's last merge, pushed, not merged**: #11 the plasma sky on the GPU (Special Stages 7 / 1+ ~18 -> ~60 fps), #12 animated tiles counted only where used (4 / 4+ ~13 -> ~58), #13 each 3D scene's depth band over its own Z range. Checked by Claude on the 2DS (frozen frames match the software; a tour of the 14 entries at ~60 fps without 3D), **not yet by the owner**, and the 2DS hung on a frozen Special Stage 7 with FORCE 3D while debug switches were toggled (gpu-renderer.md "Tour after the fixes; a hang"). Merge `fix/3d-depth-bands` (it holds the other two) once the owner has seen them and the hang is understood. |
 | `feat/loading-screen` | bottom-screen loading indicator; **not confirmed by the owner, not merged**; conflicts in spirit with `BottomUi` (text console). |
 | `feat/render-backend` | `gfx-rewrite` base, unused (superseded by record/replay). Reference or delete. |
-| `chore/build-and-docs`, `feat/dev-tools`, `feat/gpu-present`, `feat/bottom-ui`, `perf/frame-pacing` | merged into the release; may be deleted. |
 
 ## Tasks
 
