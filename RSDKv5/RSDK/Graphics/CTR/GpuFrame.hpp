@@ -23,6 +23,9 @@ namespace GpuFrame
 extern bool active;  // inside the draw lists: calls are recorded
 extern bool pending; // commands waiting for Present
 
+// Takes the command buffers now (they are taken at the first recorded frame otherwise): at boot, before the network
+// and the updater's check take their share of a heap the engine leaves nearly full.
+void Reserve();
 void Begin();
 void End();
 void Flush();   // replay the pending commands through the software renderer now

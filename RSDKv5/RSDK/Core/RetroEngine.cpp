@@ -134,7 +134,10 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
     InitCache(ENABLE_STATIC_CACHE);
     RenderDevice::InitFPSCap();
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
-    DevTools::Init();
+    DevTools::Init(); // the FTP server first (256 KB of network on the 2DS): the remote control must always come up
+#endif
+#if RETRO_PLATFORM == RETRO_3DS
+    GpuFrame::Reserve(); // then the GPU renderer's buffers, before the updater's check takes curl's share
 #endif
 #if RETRO_PLATFORM == RETRO_3DS
     // UPDATES > AUTO UPDATE: the check runs in the background once the engine holds its memory (the heap is nearly
