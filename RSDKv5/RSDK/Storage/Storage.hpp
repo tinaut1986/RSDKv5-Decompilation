@@ -24,6 +24,10 @@ struct DataStorage {
     uint32 clearCount;
 };
 
+#if RETRO_PLATFORM == RETRO_3DS
+extern uint32 storageDefrags[DATASET_MAX], storageFails[DATASET_MAX]; // dev tools (Storage.cpp)
+#endif
+
 template <typename T> class List
 {
     T *entries   = NULL;

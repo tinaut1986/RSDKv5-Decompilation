@@ -59,9 +59,9 @@ AccessControlInfo:
   MemoryType                    : Application # Application/System/Base
   SystemMode                    : 80MB # Old 3DS/2DS: 80 MB, as in legend-of-doom-3ds (96 MB crashed the 2DS HOME menu there)
   IdealProcessor                : 0
-  AffinityMask                  : 1
+  AffinityMask                  : 3 # cores 0 and 1: the audio thread runs on core 1 (as sm-3ds / mzm)
   Priority                      : 16
-  MaxCpu                        : 0x9E # Default
+  MaxCpu                        : 0x9E # core 1 share ceiling = MaxCpu & 0x7F = 30 % (the audio thread's; more starves the system)
   HandleTableSize               : 0x200
   DisableDebug                  : false
   EnableForceDebug              : false

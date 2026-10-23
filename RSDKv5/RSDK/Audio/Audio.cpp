@@ -195,6 +195,10 @@ void AudioDeviceBase::InitAudioChannels()
 
 void RSDK::UpdateStreamBuffer(ChannelInfo *channel)
 {
+#if RETRO_AUDIODEVICE_CTR
+    CtrMusicRead(channel); // decoded ahead on core 1 (CTRAudioDevice.cpp)
+    return;
+#endif
     int32 bufferRemaining = MIX_BUFFER_SIZE;
     SAMPLE_FORMAT *buffer         = channel->samplePtr;
 
@@ -230,7 +234,13 @@ void RSDK::LoadStream(ChannelInfo *channel)
     if (channel->state != CHANNEL_LOADING_STREAM)
         return;
 
+#if RETRO_AUDIODEVICE_CTR
+    CtrMusicLock(); // the music decoder keeps off vorbisInfo and its buffers until CtrMusicBegin / the end
+#endif
     stb_vorbis_close(vorbisInfo);
+#if RETRO_AUDIODEVICE_CTR
+    vorbisInfo = NULL;
+#endif
 
     FileInfo info;
     InitFileInfo(&info);
@@ -244,12 +254,20 @@ void RSDK::LoadStream(ChannelInfo *channel)
 
         if (streamBufferSize > 0) {
             vorbisAlloc.alloc_buffer_length_in_bytes = 512 * 1024; // 512KiB
+#if RETRO_AUDIODEVICE_CTR
+            // + the decoded music's ring after stb_vorbis's part (CTRAudioDevice.cpp)
+            AllocateStorage((void **)&vorbisAlloc.alloc_buffer, 512 * 1024 + MUSIC_RING_BYTES, DATASET_MUS, false);
+#else
             AllocateStorage((void **)&vorbisAlloc.alloc_buffer, 512 * 1024, DATASET_MUS, false);
+#endif
 
             vorbisInfo = stb_vorbis_open_memory(streamBuffer, streamBufferSize, NULL, &vorbisAlloc);
             if (vorbisInfo) {
                 if (streamStartPos)
                     stb_vorbis_seek(vorbisInfo, streamStartPos);
+#if RETRO_AUDIODEVICE_CTR
+                CtrMusicBegin(channel->loop == 1, (uint8 *)vorbisAlloc.alloc_buffer + 512 * 1024); // unlocks
+#endif
                 UpdateStreamBuffer(channel);
 
                 channel->state = CHANNEL_STREAM;
@@ -257,8 +275,12 @@ void RSDK::LoadStream(ChannelInfo *channel)
         }
     }
 
-    if (channel->state == CHANNEL_LOADING_STREAM)
+    if (channel->state == CHANNEL_LOADING_STREAM) {
         channel->state = CHANNEL_IDLE;
+#if RETRO_AUDIODEVICE_CTR
+        LightLock_Unlock(&sMusicLock); // CtrMusicBegin did not run
+#endif
+    }
 }
 
 int32 RSDK::PlayStream(const char *filename, uint32 slot, uint32 startPos, uint32 loopPoint, bool32 loadASync)
@@ -560,6 +582,9 @@ uint32 RSDK::GetChannelPos(uint32 channel)
         return channels[channel].bufferPos;
 
     if (channels[channel].state == CHANNEL_STREAM) {
+#if RETRO_AUDIODEVICE_CTR
+        return CtrMusicPos();
+#endif
         if (!vorbisInfo->current_loc_valid || vorbisInfo->current_loc < 0)
             return 0;
 
