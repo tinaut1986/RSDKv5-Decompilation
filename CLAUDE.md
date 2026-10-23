@@ -96,8 +96,11 @@ tools/site.sh "SET depthtint 1"             # debug: paint every 2D batch by its
 tools/site.sh "HIDE TitleLogo"              # debug: stop drawing one object class ("HIDE" alone undoes it)
 tools/site.sh "SET ufotime 1"               # debug: the Special Stage countdown stays at 50+ (test it at leisure); not saved
 tools/site.sh TIMES                         # one short line: frame, upd, draw, flip (pcopy, pframe), wait, GPU drawing time, quads, batches
-tools/site.sh RUNREC | RUNSTOP | RUNPLAY | RUN  # record the owner's keys from the current scene's reload, save debug/run.bin,
-                                            # replay it from the same reload; RUN: state and the result (real drawn fps)
+tools/site.sh "RUNREC 1800" | RUNSTOP | "RUNPLAY [N] [F]" | RUN  # record keys from a full load of the current scene
+                                            # (N passes, then frozen), save debug/run.bin, replay it (F: freeze at the end);
+                                            # RUN: the result (real drawn fps). Saved runs and tools/runs/play.sh: tools/runs/
+tools/site.sh "SET ufonofall 1"             # debug: the Special Stage's holes are ground (blind test routes); not saved
+tools/site.sh EMIT                          # pcopy split by command type (layers, sprites, 3D, lines...)
 tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU drew too; right = right eye in 3D)
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
 ```

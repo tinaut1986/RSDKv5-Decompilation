@@ -13,6 +13,11 @@
   session 4 (`feat/layer-depth`, merged):** zones get a stereo depth per band of lines from the horizontal parallax
   (backgrounds in several planes), background sprites sit with their layer, the title screen has its own depths (logo
   out of the screen, island and trees by line), `stereofar` scale, DEPTH TINT debug view, `SITE HIDE`, `SITE DEPTHS`.
+  **End of session 4:** `release/v0.1.0` holds the rotozoom textures, the per-bank copies and the run tools
+  (merged, pushed); `perf/floor-lerp` (floor windows with two-pass fog, hard-reset runs, `ufonofall`, command buffer
+  stats) is committed, not merged. Real fps (FRAME SKIP off, FORCE 3D) on the owner's Special Stage 2 run: 18.4 before
+  -> 30.0. Next: the right eyes dropped in 3D (the 3D scenes' command buffer use: docs/gpu-renderer.md "Session 4
+  hand-off").
   **Later in session 4 (`perf/roto-texture`, `perf/special-floor`, not merged yet):** rotozoom layers up to 1024 px from
   textures (title 55 -> 58.5 fps on the 2DS), one copy per fog bank (Special Stage 2 50 -> 58.7 fps); the floor windows
   for the big Special Stage floor were slower on the 2DS and are off (`SET floorwin 1`). Still CPU: INK TINT
@@ -35,6 +40,8 @@
 | `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
 | `release/v0.1.0` | Holds, merged: build/docs, dev tools, GPU presentation, bottom UI, clock pacing + frame skip, persistent switches, draw-order tooling; `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage`; `perf/special-stage` (3D scenes as GPU instances, masked inks, rotozoom tile runs, tile eviction) and `feat/bottom-tabs` (tabs, FPS counter, loading box, stereo 3D, LINE / PALETTE / water line on the GPU, scissor, HOME-exit fix), merged 2026-10-23 after the owner checked them on the 2DS and the New 3DS. |
 | `feat/layer-depth` | stereo depth by layer band, title depths, DEPTH TINT; merged into the release (2026-10-23). |
+| `perf/roto-texture`, `perf/special-floor`, `feat/run-replay` | merged into the release (2026-10-23). |
+| `perf/floor-lerp` | floor windows (two-pass fog, off by default), hard-reset runs, `ufonofall`, command buffer stats; committed, not merged. |
 | `perf/special-stage`, `feat/bottom-tabs` | merged into the release (2026-10-23); may be deleted. |
 | `feat/gpu-renderer`, `feat/gpu-faces`, `feat/gpu-special-stage` | merged into the release; may be deleted. |
 | `feat/loading-screen` | bottom-screen loading indicator; **not confirmed by the owner, not merged**; conflicts in spirit with `BottomUi` (text console). |

@@ -59,8 +59,8 @@ inline int16 Quarter(float p) { return (int16)(p >= 0 ? p * 4.0f + 0.5f : p * 4.
 // texel (rotozoom layers: affine runs need sub-texel coordinates).
 // TEX_ROTO0..: a rotozoom layer drawn whole into a texture of its own (RotoTex), texel coordinates in 1/16 texel.
 // TEX_ROTOMASK0..: that layer's hot-colour mask (RotoTex::mask), drawn with BLEND_HOT.
-// TEX_FLOOR0.. / TEX_FLOORMASK0..: the Special Stage floor windows and their fog-group masks (FloorWin), 1/16 texel.
-enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE, TEX_FLOOR0, TEX_FLOOR1, TEX_FLOOR2, TEX_FLOORMASK0, TEX_FLOORMASK1, TEX_FLOORMASK2, TEX_ROTO0, TEX_ROTO1, TEX_ROTOMASK0, TEX_ROTOMASK1 };
+// TEX_FLOOR0.. / TEX_FLOORFOG0..: the Special Stage floor windows in bank 0 and in bank 7 (FloorWin), 1/16 texel.
+enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE, TEX_FLOOR0, TEX_FLOOR1, TEX_FLOORFOG0, TEX_FLOORFOG1, TEX_ROTO0, TEX_ROTO1, TEX_ROTOMASK0, TEX_ROTOMASK1 };
 
 // Software layers: a layer kind the GPU cannot draw (rotozoom, vscroll, a layer split by the water line) is drawn by
 // the engine's own function into screens[1] (unused on the 3DS), keyed with a colour no palette produces in practice,
@@ -73,8 +73,7 @@ struct SoftJob {
 // screen holds / does not hold the mask colour (see the mask frame in Render).
 // BLEND_HOT: a rotozoom texture's hot colour (RotoTex): the mask's texels equal to the constant's top byte, painted
 // opaque in the constant's colour (0xRRGGBB in the low bytes, as the texture combiner takes it).
-// BLEND_FOG: the floor window's fog: as BLEND_HOT, but blended in by Batch::fog / 255 (the line's bank's fade).
-enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL, BLEND_MASKED, BLEND_UNMASKED, BLEND_HOT, BLEND_FOG };
+enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL, BLEND_MASKED, BLEND_UNMASKED, BLEND_HOT };
 
 struct Batch {
     uint8 tex, blend;
@@ -82,7 +81,7 @@ struct Batch {
     uint32 constant;       // BLEND_FILL: the per-channel alpha (R, G, B in the low bytes)
     int8 depth;            // stereoscopic disparity in pixels at the full slider (+ behind the screen, - in front)
     uint8 scissor;         // index in sScissors (0: none)
-    uint8 fog;             // BLEND_FOG: the fade, 0..255; TEX_ROTO*: the bank copy
+    uint8 fog;             // TEX_ROTO*: the bank copy
     uint8 uvk;             // TEX_ROTO*: texel coordinates in 1/16 texel << uvk (lines with a long span)
 };
 
@@ -2185,26 +2184,26 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
 
 // ---------------------------------------------------------------- the Special Stage floor windows
 //
-// The Special Stage floor (512x512 tiles, 8192 px) does not fit a texture. Its lines are drawn from three windows of
+// The Special Stage floor (512x512 tiles, 8192 px) does not fit a texture. Its near lines are drawn from two windows of
 // the map kept in repeating 512x512 textures, where a map pixel lives at its position modulo the window (so when a
 // window moves only the cells entering it are written: a strided copy for a column of cells, a plain one for a row):
-// level 0 at full resolution (cells of a tile, 512 px of the map) for the near lines, level 1 at half (each texel the
-// map pixel in the middle of its 2x2, 1024 px), level 2 at a quarter (2048 px) for the far ones (kFloorStep). 1.9 MB
-// with the masks: the first try (1024x1024 + 512x512, 3.1 MB) left no VRAM for Special Stage 2's small floor.
-// Each line is one quad from the finest window that holds it; the rest stay tile runs. The windows hold palette bank
-// 0; the fog banks 1-7 (UFO_Setup: bank k = bank 0 faded towards bank 7 by f_k, chosen per line by distance) are
-// painted over: an A4 mask holds each pixel's fog group (the distinct bank 7 colours its palette indices fade to,
-// g + 1; the GPU widens it to (g + 1) * 17) and per line and group a pass blends the group's colour in by f_k
-// (BLEND_FOG). Checked when the palette changes: banks that are not such fades send the floor back to tile runs.
-// VRAM: 640 KB a level, each made only when VramReserve() stays free for the 3D models (on
-// the 2DS the windows took it first and every frame with a 3D scene went to the CPU).
-enum { FLOOR_LEVELS = 3, FLOOR_GROUPS = 7 };
+// level 0 at full resolution (cells of a tile, 512 px of the map) for the lines up to a step of 1 map pixel a screen
+// pixel, level 1 at half (each texel the map pixel in the middle of its 2x2, 1024 px) up to 2 (kFloorStep). Each line
+// is one quad from the finest window that holds it; the rest stay tile runs.
+// Fog: UFO_Setup makes the banks 1-7 fades of bank 0 towards bank 7 (bank k = bank 0 + (bank 7 - bank 0) * f_k) and
+// picks one per line by distance. Each window keeps two textures, the map in bank 0 and in bank 7, and a line is two
+// quads: bank 0 times 1 - f_k (opaque where the map is), then bank 7 times f_k added. (A pass per fog group over a
+// group mask was slower on the 2DS than the tile runs; a second texture unit cannot be unbound in citro3d 1.7.1:
+// C3D_TexBind(1, NULL) crashed.) Checked when the palette changes: banks that are not such fades send the floor back
+// to tile runs.
+// VRAM: 1 MB a level, each made only when VramReserve() stays free for the 3D models.
+enum { FLOOR_LEVELS = 2 };
 // Per level: texels (square), map pixels per texel (log2), texels a cell, and the largest step (map pixels a screen
 // pixel) of the lines it takes; a level takes no line under 3/4 of the previous level's limit (too blurred).
-const unsigned kFloorTexW[FLOOR_LEVELS] = { 512, 512, 512 }, kFloorShift[FLOOR_LEVELS] = { 0, 1, 2 }, kFloorCell[FLOOR_LEVELS] = { 16, 8, 8 };
-const float kFloorStep[FLOOR_LEVELS] = { 1.0f, 2.0f, 4.0f };
+const unsigned kFloorTexW[FLOOR_LEVELS] = { 512, 512 }, kFloorShift[FLOOR_LEVELS] = { 0, 1 }, kFloorCell[FLOOR_LEVELS] = { 16, 8 };
+const float kFloorStep[FLOOR_LEVELS] = { 1.0f, 2.0f };
 struct FloorLevel {
-    C3D_Tex tex, mask;
+    C3D_Tex tex, fog; // the map in bank 0 and in bank 7
     bool alloc, valid;
     unsigned texW;    // texels (square)
     unsigned shift;   // map pixels per texel, log2
@@ -2219,9 +2218,6 @@ struct FloorWin {
     const TileLayer *layer;
     uint32 built, seen; // content hash the windows hold / was seen last frame
     unsigned seenFrames;
-    uint8 group[PALETTE_BANK_SIZE];   // fog group + 1 of each palette index (0: transparent or unused), a mask nibble
-    uint32 groupColour[FLOOR_GROUPS]; // the groups' bank 7 colours, 0xBBGGRR as the combiner takes them
-    unsigned groupCount;
     uint8 fogAlpha[PALETTE_BANK_COUNT]; // f_k * 255
     uint32 used[8];
     bool usedOk;
@@ -2231,13 +2227,14 @@ FloorWin sFloor;
 bool sFloorFailed;
 const char *sFloorWhy = "-"; // the floor windows' state for SITE REFUSED (the last frame with a floor)
 uint8 sLineDone[SCREEN_YSIZE]; // per line of the rotozoom layer being emitted: 1 + the window level drawing it, 0 none
+const u16 *sFloorPal0, *sFloorPal7; // the texel tables of banks 0 and 7 the cells are written with
 
 void FreeFloor()
 {
     for (FloorLevel &l : sFloor.level)
         if (l.alloc) {
             C3D_TexDelete(&l.tex);
-            C3D_TexDelete(&l.mask);
+            C3D_TexDelete(&l.fog);
         }
     memset(&sFloor, 0, sizeof(sFloor));
     sFloorFailed = false;
@@ -2256,11 +2253,11 @@ inline unsigned FloorTileAt(const TileLayer *layer, int tx, int ty)
     return layer->layout[((unsigned)tx & mx) + (((unsigned)ty & my) << layer->widthShift)] & 0xFFF;
 }
 
-// One cell of a level (world cell (cx, cy)) into `col` / `msk` at block (bx, by) of buffers `blocksW` blocks wide.
-void FloorCell(const FloorLevel &l, const TileLayer *layer, u16 *col, uint8 *msk, unsigned blocksW, unsigned bx, unsigned by, int cx, int cy,
-               const u16 *tex)
+// One cell of a level (world cell (cx, cy)) into `col` (bank 0) and `fog` (bank 7) at block (bx, by) of buffers
+// `blocksW` blocks wide.
+void FloorCell(const FloorLevel &l, const TileLayer *layer, u16 *col, u16 *fog, unsigned blocksW, unsigned bx, unsigned by, int cx, int cy)
 {
-    const uint8 *grp = sFloor.group;
+    const u16 *t0 = sFloorPal0, *t7 = sFloorPal7;
     static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
     if (!l.shift) { // a tile: four blocks
         const unsigned t = FloorTileAt(layer, cx, cy);
@@ -2268,15 +2265,12 @@ void FloorCell(const FloorLevel &l, const TileLayer *layer, u16 *col, uint8 *msk
             for (unsigned i = 0; i < 2; ++i) {
                 const unsigned blk = ((by + j) * blocksW + bx + i) << 6;
                 const uint8 *sp    = &tilesetPixels[TILE_DATASIZE * t + j * 8 * 16 + i * 8];
-                u16 *c             = col + blk;
-                uint8 *m           = msk + (blk >> 1); // A4: two texels a byte, the even Morton index low
                 for (unsigned y = 0; y < 8; ++y, sp += 16) {
-                    u16 *b   = c + my[y];
-                    uint8 *a = m + (my[y] >> 1);
-                    b[0] = tex[sp[0]], b[1] = tex[sp[1]], b[4] = tex[sp[2]], b[5] = tex[sp[3]];
-                    b[16] = tex[sp[4]], b[17] = tex[sp[5]], b[20] = tex[sp[6]], b[21] = tex[sp[7]];
-                    a[0] = (uint8)(grp[sp[0]] | grp[sp[1]] << 4), a[2] = (uint8)(grp[sp[2]] | grp[sp[3]] << 4);
-                    a[8] = (uint8)(grp[sp[4]] | grp[sp[5]] << 4), a[10] = (uint8)(grp[sp[6]] | grp[sp[7]] << 4);
+                    u16 *b = col + blk + my[y], *f = fog + blk + my[y];
+                    b[0] = t0[sp[0]], b[1] = t0[sp[1]], b[4] = t0[sp[2]], b[5] = t0[sp[3]];
+                    b[16] = t0[sp[4]], b[17] = t0[sp[5]], b[20] = t0[sp[6]], b[21] = t0[sp[7]];
+                    f[0] = t7[sp[0]], f[1] = t7[sp[1]], f[4] = t7[sp[2]], f[5] = t7[sp[3]];
+                    f[16] = t7[sp[4]], f[17] = t7[sp[5]], f[20] = t7[sp[6]], f[21] = t7[sp[7]];
                 }
             }
         return;
@@ -2288,37 +2282,20 @@ void FloorCell(const FloorLevel &l, const TileLayer *layer, u16 *col, uint8 *msk
     for (unsigned v = 0; v < 8; ++v) {
         const int wy = py0 + (int)(v * step + step / 2);
         for (unsigned u = 0; u < 8; ++u) {
-            const int wx      = px0 + (int)(u * step + step / 2);
-            const unsigned t  = FloorTileAt(layer, wx >> 4, wy >> 4);
-            const uint8 idx   = tilesetPixels[TILE_DATASIZE * t + (wy & 15) * 16 + (wx & 15)];
-            const unsigned m  = blk + my[v] + mx[u];
-            col[m]            = tex[idx];
-            uint8 &a          = msk[m >> 1];
-            a                 = (uint8)((m & 1) ? (a & 0x0F) | grp[idx] << 4 : (a & 0xF0) | grp[idx]);
+            const int wx     = px0 + (int)(u * step + step / 2);
+            const unsigned t = FloorTileAt(layer, wx >> 4, wy >> 4);
+            const uint8 idx  = tilesetPixels[TILE_DATASIZE * t + (wy & 15) * 16 + (wx & 15)];
+            const unsigned m = blk + my[v] + mx[u];
+            col[m] = t0[idx], fog[m] = t7[idx];
         }
     }
 }
 
 // Writes cell column sx (for origin x ox, y oy) or cell row sy of a level.
-// The windows' moves go to VRAM without waiting: their copies join citro3d's queue behind the previous frame's
-// drawing (C3D_SyncTextureCopy waited for it there and then: the 2DS spent the time at each move) and C3D_FrameBegin
-// waits for them with the rest. Their data stays in this linear ring until then: a frame's copies are done by the
-// next frame's emission (C3D_FrameBegin emptied the queue in between), so it starts over each frame. A move that
-// does not fit takes the staging buffer and waits.
-enum { FLOOR_RING = 128 * 1024 };
-u8 *sFloorRing;
-u32 sFloorRingUsed;
-
-u8 *FloorRingTake(u32 bytes)
-{
-    if (!sFloorRing)
-        sFloorRing = (u8 *)linearAlloc(FLOOR_RING);
-    if (!sFloorRing || sFloorRingUsed + bytes > FLOOR_RING)
-        return NULL;
-    u8 *p = sFloorRing + sFloorRingUsed;
-    sFloorRingUsed += (bytes + 15) & ~15u;
-    return p;
-}
+// The windows' moves are copied to VRAM through the staging buffer, waiting for each copy. Queued copies
+// (GX_TextureCopy from a ring buffer, 2026-10-23) corrupted textures on the 2DS: a refused frame or a scene change
+// reused the ring or freed the VRAM before the queue ran them (Azahar runs them at once and showed nothing).
+u8 *FloorRingTake(u32) { return NULL; }
 
 // `bytes` of `src` into VRAM in runs of `run` bytes, `gap` bytes skipped after each (0, 0: plain); queued when `async`.
 void FloorCopy(const void *src, void *dst, u32 bytes, u32 run, u32 gap, bool async)
@@ -2331,70 +2308,68 @@ void FloorCopy(const void *src, void *dst, u32 bytes, u32 run, u32 gap, bool asy
         C3D_SyncTextureCopy((u32 *)src, indim, (u32 *)dst, outdim, bytes, 8);
 }
 
-bool FloorWriteColumn(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsigned sx, const u16 *tex)
+bool FloorWriteColumn(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsigned sx)
 {
     const unsigned cells = l.Cells(), bpc = l.cellTex / 8, blocksW = l.texW / 8;
-    const u32 colBytes = cells * bpc * bpc * 128, mskBytes = cells * bpc * bpc * 32;
-    u8 *staging = FloorRingTake(colBytes + mskBytes);
+    const u32 colBytes = cells * bpc * bpc * 128;
+    u8 *staging = FloorRingTake(colBytes * 2);
     const bool async = staging != NULL;
     if (!staging)
         staging = (u8 *)C3DPresent::Staging();
     if (!staging)
         return false;
-    u16 *col   = (u16 *)staging;
-    uint8 *msk = staging + cells * bpc * bpc * 128; // A4 mask: 32 bytes a block
+    u16 *col = (u16 *)staging, *fog = (u16 *)(staging + colBytes);
     const int cx = ox + (int)((sx - (unsigned)ox) & (cells - 1));
     for (unsigned sy = 0; sy < cells; ++sy) {
         const int cy = oy + (int)((sy - (unsigned)oy) & (cells - 1));
-        FloorCell(l, layer, col, msk, bpc, 0, sy * bpc, cx, cy, tex);
+        FloorCell(l, layer, col, fog, bpc, 0, sy * bpc, cx, cy);
     }
     FloorCopy(col, (u8 *)l.tex.data + sx * bpc * 128, colBytes, bpc * 128, (blocksW - bpc) * 128, async);
-    FloorCopy(msk, (u8 *)l.mask.data + sx * bpc * 32, mskBytes, bpc * 32, (blocksW - bpc) * 32, async);
+    FloorCopy(fog, (u8 *)l.fog.data + sx * bpc * 128, colBytes, bpc * 128, (blocksW - bpc) * 128, async);
     return true;
 }
 
-bool FloorWriteRow(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsigned sy, const u16 *tex)
+bool FloorWriteRow(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsigned sy)
 {
     const unsigned cells = l.Cells(), bpc = l.cellTex / 8, blocksW = l.texW / 8;
-    const u32 colBytes = blocksW * bpc * 128, mskBytes = blocksW * bpc * 32;
-    u8 *staging = FloorRingTake(colBytes + mskBytes);
+    const u32 colBytes = blocksW * bpc * 128;
+    u8 *staging = FloorRingTake(colBytes * 2);
     const bool async = staging != NULL;
     if (!staging)
         staging = (u8 *)C3DPresent::Staging();
     if (!staging)
         return false;
-    u16 *col   = (u16 *)staging;
-    uint8 *msk = staging + colBytes;
+    u16 *col = (u16 *)staging, *fog = (u16 *)(staging + colBytes);
     const int cy = oy + (int)((sy - (unsigned)oy) & (cells - 1));
     for (unsigned sx = 0; sx < cells; ++sx) {
         const int cx = ox + (int)((sx - (unsigned)ox) & (cells - 1));
-        FloorCell(l, layer, col, msk, blocksW, sx * bpc, 0, cx, cy, tex);
+        FloorCell(l, layer, col, fog, blocksW, sx * bpc, 0, cx, cy);
     }
     FloorCopy(col, (u8 *)l.tex.data + sy * bpc * blocksW * 128, colBytes, 0, 0, async);
-    FloorCopy(msk, (u8 *)l.mask.data + sy * bpc * blocksW * 32, mskBytes, 0, 0, async);
+    FloorCopy(fog, (u8 *)l.fog.data + sy * bpc * blocksW * 128, colBytes, 0, 0, async);
     return true;
 }
 
 // Places a level's window at origin (wantX, wantY) cells: the cells entering it, or all of it.
-bool FloorMove(FloorLevel &l, const TileLayer *layer, int wantX, int wantY, bool all, const u16 *tex)
+bool FloorMove(FloorLevel &l, const TileLayer *layer, int wantX, int wantY, bool all)
 {
     const int cells = (int)l.Cells();
     const int dxC = wantX - l.ox, dyC = wantY - l.oy;
     if (all || dxC >= cells || dxC <= -cells || dyC >= cells || dyC <= -cells) {
         for (unsigned sx = 0; sx < (unsigned)cells; ++sx)
-            if (!FloorWriteColumn(l, layer, wantX, wantY, sx, tex))
+            if (!FloorWriteColumn(l, layer, wantX, wantY, sx))
                 return false;
     }
     else {
         // Columns entering (for the new x origin and the old y one), then rows entering (new origin).
         for (int k = 0; k < (dxC < 0 ? -dxC : dxC); ++k) {
             const int cx = dxC > 0 ? l.ox + cells + k : wantX + k;
-            if (!FloorWriteColumn(l, layer, wantX, l.oy, (unsigned)cx & (unsigned)(cells - 1), tex))
+            if (!FloorWriteColumn(l, layer, wantX, l.oy, (unsigned)cx & (unsigned)(cells - 1)))
                 return false;
         }
         for (int k = 0; k < (dyC < 0 ? -dyC : dyC); ++k) {
             const int cy = dyC > 0 ? l.oy + cells + k : wantY + k;
-            if (!FloorWriteRow(l, layer, wantX, wantY, (unsigned)cy & (unsigned)(cells - 1), tex))
+            if (!FloorWriteRow(l, layer, wantX, wantY, (unsigned)cy & (unsigned)(cells - 1)))
                 return false;
         }
     }
@@ -2425,29 +2400,13 @@ void FloorUsed(const TileLayer *layer)
     }
 }
 
-// The fog groups and fades from the palette: false when the banks are not fades of bank 0 towards bank 7.
+// The fades from the palette: false when the banks are not fades of bank 0 towards bank 7.
 bool FloorFog(const TileLayer *layer)
 {
     FloorWin &f = sFloor;
     // The banks as the frame uses them (sBankMap: a snapshot taken mid-frame).
     const uint16 *b0 = sPalShadow[sBankMap[0]], *b7 = sPalShadow[sBankMap[7]];
     auto ch          = [](uint16 c, int k) { return k == 0 ? (c >> 11) << 3 : k == 1 ? ((c >> 5) & 63) << 2 : (c & 31) << 3; };
-    memset(f.group, 0, sizeof(f.group));
-    f.groupCount = 0;
-    for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i) {
-        if (!(f.used[i >> 5] & (1u << (i & 31))))
-            continue;
-        const uint32 c = (uint32)ch(b7[i], 0) | ((uint32)ch(b7[i], 1) << 8) | ((uint32)ch(b7[i], 2) << 16);
-        unsigned g     = 0;
-        while (g < f.groupCount && f.groupColour[g] != c)
-            ++g;
-        if (g == f.groupCount) {
-            if (f.groupCount >= FLOOR_GROUPS)
-                return false;
-            f.groupColour[f.groupCount++] = c;
-        }
-        f.group[i] = (uint8)(g + 1);
-    }
     // Each bank's fade: the best f over the used colours, then every colour within a step and a half of what it gives.
     f.fogAlpha[0] = 0;
     for (unsigned k = 1; k < PALETTE_BANK_COUNT; ++k) {
@@ -2513,7 +2472,7 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
         minY[k] = fminf(minY[k], fminf(ay, by)), maxY[k] = fmaxf(maxY[k], fmaxf(ay, by));
         ++count[k];
     }
-    if (count[0] + count[1] + count[2] < 8) {
+    if (count[0] + count[1] < 8) {
         sFloorWhy = "few lines";
         return true;
     }
@@ -2534,15 +2493,15 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
         for (int k = 0; k < FLOOR_LEVELS; ++k) {
             FloorLevel &l = f.level[k];
             l.texW = kFloorTexW[k], l.shift = kFloorShift[k], l.cellTex = kFloorCell[k];
-            if (vramSpaceFree() < l.texW * l.texW * 5 / 2 + VramReserve())
+            if (vramSpaceFree() < l.texW * l.texW * 4 + VramReserve())
                 break;
             if (!C3D_TexInitVRAM(&l.tex, (u16)l.texW, (u16)l.texW, GPU_RGBA5551))
                 break;
-            if (!C3D_TexInitVRAM(&l.mask, (u16)l.texW, (u16)l.texW, GPU_A4)) {
+            if (!C3D_TexInitVRAM(&l.fog, (u16)l.texW, (u16)l.texW, GPU_RGBA5551)) {
                 C3D_TexDelete(&l.tex);
                 break;
             }
-            for (C3D_Tex *t : { &l.tex, &l.mask }) {
+            for (C3D_Tex *t : { &l.tex, &l.fog }) {
                 C3D_TexSetFilter(t, GPU_NEAREST, GPU_NEAREST);
                 C3D_TexSetWrap(t, GPU_REPEAT, GPU_REPEAT);
             }
@@ -2554,7 +2513,7 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
             return true;
         }
     }
-    const u16 *tex = sTexPal[sBankMap[0]];
+    sFloorPal0 = sTexPal[sBankMap[0]], sFloorPal7 = sTexPal[sBankMap[7]];
     // Where each window should be: centred on its lines' box.
     int wantX[FLOOR_LEVELS], wantY[FLOOR_LEVELS];
     for (int k = 0; k < FLOOR_LEVELS; ++k) {
@@ -2579,7 +2538,7 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
         for (int k = 0; k < FLOOR_LEVELS; ++k) {
             FloorLevel &l = f.level[k];
             l.valid       = false;
-            if (l.alloc && FloorMove(l, layer, wantX[k], wantY[k], true, tex))
+            if (l.alloc && FloorMove(l, layer, wantX[k], wantY[k], true))
                 l.valid = true;
         }
         f.built = hash;
@@ -2594,7 +2553,7 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
             const float c = (float)l.CellPx(), cells = (float)l.Cells();
             const bool inside = minX[k] >= (l.ox + 1) * c && maxX[k] < (l.ox + cells - 1) * c && minY[k] >= (l.oy + 1) * c &&
                                 maxY[k] < (l.oy + cells - 1) * c;
-            if (!inside && !FloorMove(l, layer, wantX[k], wantY[k], false, tex))
+            if (!inside && !FloorMove(l, layer, wantX[k], wantY[k], false))
                 l.valid = false;
         }
 
@@ -2618,17 +2577,18 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
         }
     }
     static char why[48];
-    snprintf(why, sizeof(why), "%u+%u+%u/%d+%d+%d lines", lines[0], lines[1], lines[2], count[0], count[1], count[2]);
+    snprintf(why, sizeof(why), "%u+%u/%d+%d lines", lines[0], lines[1], count[0], count[1]);
     sFloorWhy = why;
-    const unsigned linesAll = lines[0] + lines[1] + lines[2];
+    const unsigned linesAll = lines[0] + lines[1];
     if (!linesAll)
         return true;
-    if (sQuadCount + linesAll * (1 + f.groupCount) > MAX_QUADS) {
+    if (sQuadCount + linesAll * 2 > MAX_QUADS) {
         memset(sLineDone, 0, sizeof(sLineDone));
         return true;
     }
-    // Passes: each window, then each fog group per bank. Coordinates in 1/16 texel from a multiple of the window's
-    // map size below its origin (2048 texels at most), as its texels repeat.
+    // Two quads a line: bank 0 times 1 - f, then bank 7 times f added (lines in bank 0 skip the second). Coordinates
+    // in 1/16 texel from a multiple of the window's map size below its origin (2048 texels at most), as its texels
+    // repeat.
     unsigned q  = sQuadCount;
     uint32 *w32 = (uint32 *)&sVbo[sCur][q * 4];
     for (int k = 0; k < FLOOR_LEVELS; ++k) {
@@ -2638,48 +2598,41 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
         const int64 span    = (int64)(l.texW << l.shift);
         const int64 baseX = (int64)floorf((float)l.ox * l.CellPx() / span) * span, baseY = (int64)floorf((float)l.oy * l.CellPx() / span) * span;
         const unsigned sh = 12 + l.shift; // 16.16 map pixels -> 1/16 texel
-        for (unsigned pass = 0; pass <= f.groupCount; ++pass)
-            for (int y = y1; y < y2; ++y) {
-                if (sLineDone[y - y1] != 1 + k)
-                    continue;
-                const unsigned bank = sLineBuf[y];
-                if (pass && !f.fogAlpha[bank])
-                    continue;
-                const ScanlineInfo &s = first[y - y1];
-                const int8 depth      = feet > 0 ? RotoLineDepth(feet, s.deform.x, s.deform.y) : sDepth;
-                uint8 ptex = (uint8)(TEX_FLOOR0 + k), pblend = BLEND_NORMAL;
-                uint32 constant = 0;
-                uint8 fog       = 0;
-                if (pass) {
-                    ptex     = (uint8)(TEX_FLOORMASK0 + k);
-                    pblend   = BLEND_FOG;
-                    constant = ((uint32)(pass * 17) << 24) | f.groupColour[pass - 1]; // the A4 nibble widened
-                    fog      = f.fogAlpha[bank]; // BLEND_FOG: the line's bank's fade
+        for (unsigned pass = 0; pass < 2; ++pass)
+        for (int y = y1; y < y2; ++y) {
+            if (sLineDone[y - y1] != 1 + k)
+                continue;
+            const unsigned fade = f.fogAlpha[sLineBuf[y] & 7];
+            if (pass && !fade)
+                continue;
+            const ScanlineInfo &s = first[y - y1];
+            const int8 depth      = feet > 0 ? RotoLineDepth(feet, s.deform.x, s.deform.y) : sDepth;
+            const uint8 ptex      = (uint8)((pass ? TEX_FLOORFOG0 : TEX_FLOOR0) + k), pblend = pass ? BLEND_ADD : BLEND_NORMAL;
+            Batch *last           = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
+            if (!last || last->tex != ptex || last->blend != pblend || last->depth != depth || last->scissor != sScissor) {
+                if (sBatchCount >= MAX_BATCHES) {
+                    sQuadCount = q;
+                    return Refuse(GpuRender::REASON_QUAD_LIMIT);
                 }
-                Batch *last = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
-                if (!last || last->tex != ptex || last->blend != pblend || last->constant != constant || last->depth != depth ||
-                    last->scissor != sScissor || last->fog != fog) {
-                    if (sBatchCount >= MAX_BATCHES) {
-                        sQuadCount = q;
-                        return Refuse(GpuRender::REASON_QUAD_LIMIT);
-                    }
-                    sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor, fog };
-                    last                    = &sBatches[sBatchCount - 1];
-                }
-                const int64 u0 = (int64)s.position.x - s.deform.x / 2 - (baseX << 16), v0 = (int64)s.position.y - s.deform.y / 2 - (baseY << 16);
-                const int64 u1 = u0 + (int64)s.deform.x * lineSize, v1 = v0 + (int64)s.deform.y * lineSize;
-                const int64 rnd = (int64)1 << (sh - 1);
-                const uint32 uv0 = (uint16)(int16)((u0 + rnd) >> sh) | ((uint32)(uint16)(int16)((v0 + rnd) >> sh) << 16);
-                const uint32 uv1 = (uint16)(int16)((u1 + rnd) >> sh) | ((uint32)(uint16)(int16)((v1 + rnd) >> sh) << 16);
-                const uint32 X0 = (uint32)(x1 << 2), X1 = (uint32)(x2 << 2);
-                const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
-                w32[0] = X0 | Y0, w32[1] = uv0, w32[2] = 0xFFFFFFFFu;
-                w32[3] = X1 | Y0, w32[4] = uv1, w32[5] = 0xFFFFFFFFu;
-                w32[6] = X1 | Y1, w32[7] = uv1, w32[8] = 0xFFFFFFFFu;
-                w32[9] = X0 | Y1, w32[10] = uv0, w32[11] = 0xFFFFFFFFu;
-                w32 += 12, ++q;
-                ++last->count;
+                sBatches[sBatchCount++] = { ptex, pblend, q, 0, 0, depth, sScissor };
+                last                    = &sBatches[sBatchCount - 1];
             }
+            const int64 u0 = (int64)s.position.x - s.deform.x / 2 - (baseX << 16), v0 = (int64)s.position.y - s.deform.y / 2 - (baseY << 16);
+            const int64 u1 = u0 + (int64)s.deform.x * lineSize, v1 = v0 + (int64)s.deform.y * lineSize;
+            const int64 rnd = (int64)1 << (sh - 1);
+            const uint32 uv0 = (uint16)(int16)((u0 + rnd) >> sh) | ((uint32)(uint16)(int16)((v0 + rnd) >> sh) << 16);
+            const uint32 uv1 = (uint16)(int16)((u1 + rnd) >> sh) | ((uint32)(uint16)(int16)((v1 + rnd) >> sh) << 16);
+            const uint32 X0 = (uint32)(x1 << 2), X1 = (uint32)(x2 << 2);
+            const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
+            const unsigned m  = pass ? fade : 255 - fade; // the texture times this grey (alpha 1: ADD adds it whole)
+            const uint32 rgba = m | (m << 8) | (m << 16) | 0xFF000000u;
+            w32[0] = X0 | Y0, w32[1] = uv0, w32[2] = rgba;
+            w32[3] = X1 | Y0, w32[4] = uv1, w32[5] = rgba;
+            w32[6] = X1 | Y1, w32[7] = uv1, w32[8] = rgba;
+            w32[9] = X0 | Y1, w32[10] = uv0, w32[11] = rgba;
+            w32 += 12, ++q;
+            ++last->count;
+        }
     }
     sStats.tileQuads += q - sQuadCount;
     sQuadCount = q;
@@ -3154,7 +3107,6 @@ bool GpuRender::Render(const Stream &stream)
 
     sCur = (sCur + 1) & 1;
     ++sRotoFrame;
-    sFloorRingUsed = 0; // the last frame's queued window copies are done (C3D_FrameBegin emptied the queue)
     // Both eyes when the 3D slider is up or DEBUG FORCE 3D is on (as if the slider were at the top: on a 2DS it
     // measures what 3D would cost; the right eye is drawn and never seen).
     sSlider = osGet3DSliderState();
@@ -3380,6 +3332,12 @@ bool GpuRender::Render(const Stream &stream)
     const u32 maskConst = maskFrame ? MaskConstant() : 0;
     // Depth matters to the 3D scenes, the stencil to the mask frame. Clear: depth to its far end for the depth mode in
     // use (24 low bits), stencil 0 (8 high bits).
+    u32 cmd3dWords = 0, cmdEye0Start = 0; // SITE TIMES: the left eye's command words, and those of its 3D scenes
+    unsigned instances3d = 0, scenes3d = 0;
+    {
+        u32 *cb, csz;
+        GPUCMD_GetBuffer(&cb, &csz, &cmdEye0Start);
+    }
     C3D_RenderTarget *const eyeTarget[2] = { target, sStereo ? (C3D_RenderTarget *)C3DPresent::TargetRight() : NULL };
     C3DPresent::SetStereo(sStereo);
     for (int eye = 0; eye < (sStereo ? 2 : 1); ++eye) {
@@ -3389,6 +3347,9 @@ bool GpuRender::Render(const Stream &stream)
         // Never overflow the command buffer (a panic, a frozen console): the right eye only when it fits again.
         u32 *cbuf, csize, coffset;
         GPUCMD_GetBuffer(&cbuf, &csize, &coffset);
+        sStats.cmdEyeKB = (coffset - cmdEye0Start) * 4 / 1024;
+        sStats.cmd3dKB  = cmd3dWords * 4 / 1024;
+        sStats.instances3d = instances3d, sStats.scenes3d = scenes3d;
         if (coffset * 2 > csize - csize / 16) {
             ++sStats.eyesDropped;
             break;
@@ -3425,6 +3386,7 @@ bool GpuRender::Render(const Stream &stream)
         if (GpuRender::gpuSkip) {
             const unsigned kind = bt.tex == TEX_TILE_FINE ? 1 : bt.tex == TEX_3D ? 2 : bt.tex == TEX_TILE ? 4 : bt.tex == TEX_SPRITE ? 8
                                 : bt.tex >= TEX_FLOOR0 ? 16 : 0;
+            (void)kind;
             if (GpuRender::gpuSkip & kind)
                 continue;
         }
@@ -3440,7 +3402,16 @@ bool GpuRender::Render(const Stream &stream)
             curScissor = bt.scissor;
         }
         if (bt.tex == TEX_3D) {
+            u32 *cb0, csz0, coff0;
+            GPUCMD_GetBuffer(&cb0, &csz0, &coff0);
             Draw3DSceneGpu(bt.first);
+            u32 *cb1, csz1, coff1;
+            GPUCMD_GetBuffer(&cb1, &csz1, &coff1);
+            if (!eye) {
+                cmd3dWords += coff1 - coff0;
+                instances3d += (unsigned)sDraw3D[bt.first].h->count;
+                ++scenes3d;
+            }
             bind2D(); // the 2D state again, textures and blending set anew
             curBlend = curTex = -1;
             curDepth = 0;
@@ -3456,10 +3427,10 @@ bool GpuRender::Render(const Stream &stream)
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &m);
             curDepth = bt.depth;
         }
-        if (curTex != bt.tex && bt.tex >= TEX_FLOOR0 && bt.tex <= TEX_FLOORMASK2) {
-            const bool mask     = bt.tex >= TEX_FLOORMASK0;
-            const FloorLevel &l = sFloor.level[bt.tex - (mask ? TEX_FLOORMASK0 : TEX_FLOOR0)];
-            C3D_TexBind(0, (C3D_Tex *)(mask ? &l.mask : &l.tex));
+        if (curTex != bt.tex && bt.tex >= TEX_FLOOR0 && bt.tex <= TEX_FLOORFOG1) {
+            const bool fog      = bt.tex >= TEX_FLOORFOG0;
+            const FloorLevel &l = sFloor.level[bt.tex - (fog ? TEX_FLOORFOG0 : TEX_FLOOR0)];
+            C3D_TexBind(0, (C3D_Tex *)(fog ? &l.fog : &l.tex));
             C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / (l.texW * 16.0f), -1.0f / (l.texW * 16.0f), 0.0f, 0.0f);
             curTex = bt.tex;
         }
@@ -3483,7 +3454,7 @@ bool GpuRender::Render(const Stream &stream)
             C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / w, -1.0f / h, 0.0f, 0.0f);
             curTex = bt.tex;
         }
-        if (bt.blend == BLEND_HOT || bt.blend == BLEND_FOG) {
+        if (bt.blend == BLEND_HOT) {
             // A rotozoom texture's hot colour: where the mask equals the reference, its colour now, opaque. DEPTH TINT
             // shows the planes, not the colours: skipped there.
             if (GpuRender::depthTint)
@@ -3495,12 +3466,7 @@ bool GpuRender::Render(const Stream &stream)
             C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
             C3D_TexEnvColor(env, 0xFF000000u | (bt.constant & 0xFFFFFFu));
             C3D_AlphaTest(true, GPU_EQUAL, (int)(bt.constant >> 24));
-            if (bt.blend == BLEND_FOG) { // the group's fog colour blended in by the line's fade
-                C3D_BlendingColor((u32)bt.fog << 24);
-                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_ALPHA, GPU_ONE_MINUS_CONSTANT_ALPHA, GPU_ZERO, GPU_ONE);
-            }
-            else
-                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
             if (maskFrame) { // what it covers is no longer the mask colour
                 C3D_StencilTest(true, GPU_ALWAYS, 0, 0xFF, 0xFF);
                 C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_ZERO);
@@ -3596,6 +3562,7 @@ bool GpuRender::Render(const Stream &stream)
             ResetTexEnv();
             curBlend = -1; // the debug view may have changed the blending
             curTint  = -1000;
+
             C3D_AlphaTest(true, GPU_GREATER, 0);
             C3D_DepthTest(true, GPU_ALWAYS, GPU_WRITE_COLOR);
         };

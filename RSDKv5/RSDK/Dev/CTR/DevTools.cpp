@@ -76,6 +76,15 @@ static volatile int sPendingCategory = -1, sPendingScene = -1;
 static char sOrderCur[400], sOrderLast[400];
 static volatile bool sGoto; // SITE GOTO: move the player at the end of the frame
 static volatile bool sUfoTime; // SITE SET ufotime 1: the Special Stage's countdown never runs out (not saved)
+static volatile bool sUfoNoFall; // SITE SET ufonofall 1: the Special Stage's holes are ground (not saved)
+
+// GetTile asks: the Special Stage's player falls where the playfield has no tile (UFO_Player_HandleSpeedUp); with
+// the switch on such a tile reads as tile 0, plain ground, in a Special Stage only. Keep it the same when recording a
+// run and playing it.
+bool RSDK::DevNoFall()
+{
+    return sUfoNoFall && sceneInfo.listData && !strncmp(sceneInfo.listData[sceneInfo.listPos].folder, "UFO", 3);
+}
 // The Special Stage's static variables as the game (Plus, GAME_VERSION 1.06) lays them out, up to what is used here.
 struct UfoSetupStatics {
     uint16 classID;
@@ -116,72 +125,11 @@ static char sRunResult[96] = "-";
 static bool sRunFreezeAtEnd; // RUNPLAY N F: freeze the objects on the last pass (to compare two playbacks' pictures)
 static const char *kRunPath = "sdmc:/3ds/Sonic Mania 3DS/debug/run.bin";
 static unsigned sRunRecLimit; // RUNREC N: stop by itself after N passes, frozen (to compare with RUNPLAY N F)
-// The objects' static variables when the recording started: a reload resets only what each class's StageLoad sets
-// (the Special Stage's frame counter, the camera...), so the playback starts from a copy of them, or it drifts off the
-// route. Per class: its size (int32) then its bytes, in the stage's class order.
-enum { RUN_STATICS_MAX = 96 * 1024 };
-static uint8 sRunStatics[RUN_STATICS_MAX];
-static uint32 sRunStaticsSize;
-
-// True when `v` points into the engine's data storage (AllocateStorage): the storage tracks the variable that holds
-// each allocation, so such a word is never overwritten (a restored pointer from another load corrupted it and the next
-// scene load crashed in DefragmentAndGarbageCollectStorage).
-static bool InStorage(uint32 v)
-{
-    for (int32 set = 0; set < DATASET_MAX; ++set) {
-        const uint32 lo = (uint32)(uintptr_t)dataStorage[set].memoryTable;
-        if (lo && v >= lo && v < lo + dataStorage[set].storageLimit)
-            return true;
-    }
-    return false;
-}
-
-// Puts back a class's recorded statics, word by word, keeping the words that hold storage pointers (now or then).
-static void RunStaticsRestore(uint8 *dst, const uint8 *src, uint32 size)
-{
-    uint32 i = 0;
-    for (; i + 4 <= size; i += 4) {
-        uint32 now, was;
-        memcpy(&now, dst + i, 4);
-        memcpy(&was, src + i, 4);
-        if (!InStorage(now) && !InStorage(was))
-            memcpy(dst + i, &was, 4);
-    }
-    for (; i < size; ++i)
-        dst[i] = src[i];
-}
-
-static void RunStaticsCopy(bool save)
-{
-    uint32 off = 0;
-    bool same = true;
-    for (int32 i = 0; i < sceneInfo.classCount; ++i) {
-        ObjectClass &oc = objectClassList[stageObjectIDs[i]];
-        const int32 size = oc.staticVars && *oc.staticVars ? oc.staticClassSize : 0;
-        if (off + 4 + (uint32)(size > 0 ? size : 0) > RUN_STATICS_MAX)
-            break;
-        if (save) {
-            memcpy(sRunStatics + off, &size, 4);
-            if (size > 0)
-                memcpy(sRunStatics + off + 4, *oc.staticVars, (size_t)size);
-        }
-        else {
-            int32 was;
-            memcpy(&was, sRunStatics + off, 4);
-            if (off + 4 > sRunStaticsSize || was != size) {
-                same = false; // another build or scene: left as loaded
-                break;
-            }
-            if (size > 0)
-                RunStaticsRestore((uint8 *)*oc.staticVars, sRunStatics + off + 4, (uint32)size);
-        }
-        off += 4 + (uint32)(size > 0 ? size : 0);
-    }
-    if (save)
-        sRunStaticsSize = off;
-    else if (!same)
-        DevTools::Log("run: the recorded statics do not match this scene's classes, not restored");
-}
+// A run starts from a full load of its scene (forceHardReset), in the recording and in the playback: a reload of the
+// scene being played keeps the objects' static variables (the Special Stage's frame counter, the camera...), a load
+// from another scene makes them anew, and the playback drifted off the route. (Copying the statics instead also
+// copied what the load assigns, sprite sheet and sound IDs, storage pointers: garbage on the 2DS.)
+static volatile bool sPendingHard;
 
 static void RunSave()
 {
@@ -191,8 +139,6 @@ static void RunSave()
     const int32 hdr[3] = { sRunCategory, sRunListPos, (int32)sRunCount };
     fwrite(hdr, sizeof(hdr), 1, f);
     fwrite(sRunKeys, 2, sRunCount, f);
-    fwrite(&sRunStaticsSize, 4, 1, f);
-    fwrite(sRunStatics, 1, sRunStaticsSize, f);
     fclose(f);
 }
 static volatile int sShotRequest; // 1 top screen, 2 bottom screen, 3 top screen's right eye
@@ -848,6 +794,8 @@ static void HandleSession(int ctrl)
                     GpuRender::floorWindows = v != 0;
                 else if (!strncmp(path, "ufotime", 7))
                     sUfoTime = v != 0;
+                else if (!strncmp(path, "ufonofall", 9))
+                    sUfoNoFall = v != 0;
                 else if (!strncmp(path, "depthtint", 9))
                     GpuRender::depthTint = v != 0;
                 else if (!strncmp(path, "stereofar", 9))
@@ -859,7 +807,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|floorwin|gpuskip <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|ufonofall|floorwin|gpuskip <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
@@ -1008,7 +956,8 @@ static void HandleSession(int ctrl)
                 sRunCount = 0, sRunContent = GpuFrame::contentVersion;
                 sRunRecLimit = path ? (unsigned)atoi(path) : 0;
                 sRunMode = RUN_ARM_REC;
-                // Reloaded by the main thread (FrameEnd), as SITE SCENE does.
+                // Loaded anew by the main thread (FrameEnd), as SITE SCENE does.
+                sPendingHard     = true;
                 sPendingCategory = sRunCategory;
                 sPendingScene    = sRunListPos - sceneInfo.listCategory[sRunCategory].sceneOffsetStart;
                 Reply(s, "200 recording from the reload of category %d list %d", sRunCategory, sRunListPos);
@@ -1032,10 +981,6 @@ static void HandleSession(int ctrl)
                 if (f) {
                     if (fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[2] > 0 && hdr[2] <= RUN_MAX)
                         sRunCount = (unsigned)fread(sRunKeys, 2, (size_t)hdr[2], f);
-                    sRunStaticsSize = 0; // older recordings end with the keys
-                    if (fread(&sRunStaticsSize, 4, 1, f) != 1 || sRunStaticsSize > RUN_STATICS_MAX ||
-                        fread(sRunStatics, 1, sRunStaticsSize, f) != sRunStaticsSize)
-                        sRunStaticsSize = 0;
                     fclose(f);
                 }
                 unsigned limit = 0;
@@ -1051,6 +996,7 @@ static void HandleSession(int ctrl)
                     sRunCategory = hdr[0], sRunListPos = hdr[1];
                     sRunPos = 0, sRunContent = GpuFrame::contentVersion;
                     sRunMode = RUN_ARM_PLAY;
+                    sPendingHard     = true;
                     sPendingCategory = sRunCategory;
                     sPendingScene    = sRunListPos - sceneInfo.listCategory[sRunCategory].sceneOffsetStart;
                     snprintf(sRunResult, sizeof(sRunResult), "playing %u passes", sRunCount);
@@ -1061,9 +1007,9 @@ static void HandleSession(int ctrl)
                 // The frame's costs in one short line (ms; STATE's is cut by the FTP limit): logic, recording, flip
                 // (pcopy geometry, pframe citro3d frame), wait, and the GPU's own drawing time.
                 const GpuRender::Stats &g = GpuRender::GetStats();
-                Reply(s, "200 frame %.1f upd %.1f draw %.1f flip %.1f pcopy %.1f pframe %.1f wait %.1f | gpu draw %.1f submit %.1f | quads %u batches %u cmdbuf %u%% eyes dropped %u",
+                Reply(s, "200 frame %.1f upd %.1f draw %.1f flip %.1f pcopy %.1f pframe %.1f wait %.1f | gpu draw %.1f submit %.1f | quads %u batches %u cmdbuf %u%% eye %u KB 3d %u KB (%u models in %u scenes) dropped %u",
                       sLastFrameMs, sLastStageMs[DevTools::STAGE_UPDATE], sLastStageMs[DevTools::STAGE_DRAW], sLastStageMs[DevTools::STAGE_FLIP], sLastStageMs[DevTools::STAGE_PCOPY],
-                      sLastStageMs[DevTools::STAGE_PFRAME], sLastStageMs[DevTools::STAGE_WAIT], g.gpuDrawMs, g.gpuProcMs, g.quads, g.batches, g.cmdBufPct, g.eyesDropped);
+                      sLastStageMs[DevTools::STAGE_PFRAME], sLastStageMs[DevTools::STAGE_WAIT], g.gpuDrawMs, g.gpuProcMs, g.quads, g.batches, g.cmdBufPct, g.cmdEyeKB, g.cmd3dKB, g.instances3d, g.scenes3d, g.eyesDropped);
             }
             else if (!strcmp(sub, "EMIT")) {
                 // pcopy split: before the commands, then the geometry building per command type (ms, last frame).
@@ -1326,11 +1272,6 @@ void DevTools::RunKeys(uint32 *held, uint32 *down)
         SetRandSeed(1624633040);
         // Statics the Special Stage does not reset on a reload (its frame counter: every other frame does things):
         // from the same values in the recording and the playback.
-        // The objects' statics: copied when recording, put back when playing (see sRunStatics).
-        if (mode == RUN_ARM_REC)
-            RunStaticsCopy(true);
-        else if (sRunStaticsSize)
-            RunStaticsCopy(false);
         sRunFrames0 = sTotGpu + sTotCpu;
         sRunTick0   = svcGetSystemTick();
         Log("run: %s from category %d list %d", mode == RUN_ARM_REC ? "recording" : "playing", sRunCategory, sRunListPos);
@@ -1741,6 +1682,10 @@ bool DevTools::FrameEnd()
         sceneInfo.activeCategory = (uint8)sPendingCategory;
         sceneInfo.listPos        = (uint16)(l->sceneOffsetStart + sPendingScene);
         sceneInfo.state          = ENGINESTATE_LOAD;
+        if (sPendingHard) { // a recorded run: a full load, not a reload of the same scene
+            ForceHardReset(true);
+            sPendingHard = false;
+        }
         DevTools::Log("scene request: category %d scene %d", sPendingCategory, sPendingScene);
         sPendingScene = sPendingCategory = -1;
     }

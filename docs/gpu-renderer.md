@@ -210,6 +210,56 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Installs: the New 3DS (192.168.1.133) runs the dev build too; `./build_3ds.sh --install 192.168.1.133` works there
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS).
 
+## Session 4 hand-off (2026-10-23, end): reliable runs, the command buffer
+
+- **Recorded runs are reliable now.** A run starts from a full load of its scene (`forceHardReset`) in the recording
+  and in the playback, with the RNG seeded: a reload of the scene being played keeps the objects' statics, a load from
+  another scene makes them anew. The earlier fix (copying the statics) also copied what the load assigns (sprite
+  sheet and sound IDs, storage pointers): garbage and a crash on the 2DS; removed. Recorded keys include the circle
+  pad (Azahar's arrow keys). `tools/runs/ss2-owner-30s.bin` (see its README) replays on the 2DS to the recording's
+  picture, also the first playback after boot.
+- `SITE SET ufonofall 1`: the Special Stage's holes read as ground (`GetTile` returns tile 0 for an empty playfield
+  tile, Special Stages only); with `ufotime 1`, for blind test routes. Keep both the same when recording and playing.
+- **The owner's run on the 2DS with FORCE 3D: 29.5-30.0 fps** (18.4 before the rotozoom textures); floor windows on
+  31.3-31.4.
+- **Right eyes dropped**: the left eye may use at most ~47 % of the 256 KB command buffer, or the right eye is skipped
+  (16 per run of the owner's route). At the run's last frame the left eye used 90 KB, 76 KB of them in the 3D scenes.
+  Caching the vertex buffer / attribute set-up between model instances changed nothing (reverted; it may also have
+  caused glitches on the chased UFO the owner saw). In Azahar a frame with 10 models in 9 scenes took 12 KB: ~1.3 KB
+  a scene, so the cost is per scene, not per model. Suspect: `C3D_BindProgram` switching between the 2D and the 3D
+  shader for every scene (citro3d uploads the shader code on a program change), plus the scene's uniforms and state.
+  **Next:** keep the 3D program bound across consecutive 3D batches / put both shaders in one DVLB (same code, two
+  entry points) so a switch uploads nothing; or a larger command buffer (`C3D_Init(0x40000)` in C3DPresent.cpp; linear
+  free in play ~496 KB). Check with `SITE TIMES` (`eye N KB 3d N KB (M models in S scenes) dropped D`).
+- Debug added: `SITE TIMES` (GPU drawing time, command buffer use), `SITE EMIT` (pcopy per command type),
+  `SITE SET gpuskip` (the 2DS hung once with it), `SITE SET floorwin`, `ufotime`, `ufonofall`; the DEBUG tab shows
+  update / draw / flip / idle in their bar colours.
+- Open: Special Stage loads took ~30 s late in the session (11 s in the morning); the chased UFO's glitches (check
+  with the caching reverted); lines as one quad not measured on their own.
+
+## Measuring with recorded runs; the floor windows again (2026-10-23, late)
+
+- **FRAME SKIP is on by default** and makes `SITE STATE`'s fps count logic passes: the "59 fps" figures of the
+  sections below were measured with it on and are wrong. Real figures come from `RUNPLAY` (drawn frames a second).
+- Recorded runs (`RUNREC N` / `RUNPLAY N F`): the keys of each logic pass (buttons and circle pad) from a scene's
+  reload, the RNG seeded, and the objects' statics copied at the start of the recording and put back at the start of
+  the playback (a reload resets only what StageLoad sets), except words that point into the engine's data storage
+  (restoring those drifted the 2DS's replay and crashed the next scene load in DefragmentAndGarbageCollectStorage).
+  A 30 s run of the owner's, recorded in Azahar, replays on the 2DS to the same picture. The first playback after
+  the game starts ended on a black screen once; Special Stage loads took ~30 s in the late session (11 s earlier): to
+  look at.
+- The owner's Special Stage 2 run on the 2DS with FORCE 3D: 18.4 fps as tile runs (before the rotozoom textures),
+  29.7-30.0 fps now; with the floor windows 31.3-31.4.
+- Floor windows rewritten: two 512x512 levels (full and half resolution, steps up to 1 and 2), each kept in bank 0
+  and in bank 7; a line is two quads (bank 0 times 1 - f, then bank 7 times f added) instead of a pass per fog group.
+  The copies are synchronous again: queued copies (GX_TextureCopy from a ring) corrupted textures on the 2DS when a
+  frame was refused or the scene changed before the queue ran them (garbage on the floor until a restart), and
+  `C3D_TexBind(1, NULL)` (to use a second texture unit) crashes in citro3d 1.7.1.
+- Same frozen frame, windows off / on: pcopy 13.5 / 9.7 ms, GPU drawing 12.0 / 12.8 ms, frame 28 / 25.5 ms,
+  quads 6062 / 3487. The GPU (two eyes) is the limit now, and the command buffer peaks at 93 %: 213 right eyes
+  dropped in a few runs (judder in 3D).
+- Lines (`EmitLine`) are one parallelogram a pixel thick instead of a quad per run of pixels.
+
 ## Rotozoom textures per palette bank; Special Stage 2 at 59 fps (perf/special-floor, 2026-10-23)
 
 - What Special Stage 2 spent on the 2DS was its small 3D floor (a 16x16-tile grid, 256x256 px, `UFO_Setup_Scanline_3DFloor`
