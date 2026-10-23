@@ -552,12 +552,25 @@ without FORCE 3D, sampled 15 s after the load, `tools/site.sh STATE`):
 - 2DS: Special Stage 7 ~18 -> ~60 fps, 1+ ~19 -> ~60 (all frames on the GPU, the picture as the CPU's). With FORCE 3D
   7 runs ~31 fps: the GPU is the limit (~21 ms for two eyes of a mask frame).
 
+## Special Stage 4: animated tiles and one faded copy (perf/ss4-palette, 2026-10-23, #12)
+
+- Not the palette (two dumps a frame apart: no entry changed): UFO_Water rewrites tiles 712-775 every frame
+  (`DrawAniTiles`), used only by the small rotozoom layer (the water ceiling, 16x16 tiles). The tileset's epoch
+  (`sTileEpoch`) is global, so the floor windows, which never use those tiles, were rebuilt every frame and never drawn
+  (`floor changing`), and the water's texture never held (`roto texture changing`): tile runs, ~13 fps.
+- The floor windows keep the base tiles their map uses (`FloorWin::tileUsed`) and count only those
+  (`sTileChanged`, the tiles whose pixels changed this frame): `tileGen` replaces the epoch in their hash.
+- A RotoTex up to 256x256 is rebuilt at once, every frame if need be (bigger ones still wait for a change to hold).
+- In a Special Stage whose banks are fades (the floor's check, `FloorFadeReady`), a rotozoom layer keeps a bank 0 copy
+  only and its lines fade like the floor windows' (`Batch::fade`: the floor's combiner): one copy rebuilt a frame
+  instead of six. Stage 2's small floor goes the same way (its fog now the floor's, black at 60 %).
+- 2DS: Special Stage 4 ~13 -> ~58 fps, the picture as the CPU's. Special Stage 2 run unchanged (57.9 / 50.0 with 3D).
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
 
-0. Special Stages: #12 Special Stage 4's animated floor palette, the GPU time of a mask frame with 3D (Special Stage 7:
-   ~21 ms for two eyes), #13 the 3D
+0. Special Stages: the GPU time of a mask frame with 3D (Special Stage 7: ~21 ms for two eyes), #13 the 3D
    scenes' depth order, #10 the floor through the track; the title with the floor levels and the shader binary
    (not checked yet). What is left of a 3D frame (~20 ms on the 2DS: logic ~3.5, recording ~2.5, geometry ~5, the two
    eyes' submit ~5).

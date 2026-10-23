@@ -83,6 +83,7 @@ struct Batch {
     uint8 fog;             // TEX_ROTO*: the bank copy
     uint8 uvk;             // TEX_ROTO*: texel coordinates in 1/16 texel << uvk (lines with a long span)
     uint8 disjoint;        // its quads never overlap (one a screen line): a masked ink draws them in one go
+    uint8 fade;            // faded to the floor's fog colour by the vertex alpha's complement (as TEX_FLOOR*)
 };
 
 // Scissor rectangles (screen pixels x0, y0, x1, y1) of this frame: a rotated sprite or a 3D scene under a clip smaller
@@ -196,6 +197,8 @@ u32 VramReserve()
 RotoTex sRotoTex[ROTO_TEX_SLOTS];
 const void *sRotoTexFailed; // a layer or sheet whose texture could not be allocated (not tried again until the next scene)
 uint32 sTileEpoch;               // bumped when animated tiles change the tileset
+uint32 sTileChanged[TILE_COUNT / 32]; // base tiles whose pixels changed this frame (the floor windows check theirs)
+bool sTileChangedAny;
 const char *sRotoTexWhy = "-";   // why the last rotozoom layer was not drawn from its texture (SITE REFUSED)
 uint32 sRotoFrame;               // GPU frames, to free textures no longer drawn
 
@@ -2008,6 +2011,11 @@ bool BuildRotoMask(RotoTex &r, const RotoSrc &src)
 
 // The layer's lines [y1, y2) as one quad each from its texture. *handled false: not possible this frame (too big, no
 // VRAM, lines in different banks, content still changing, coordinates out of range): the caller draws tile runs.
+// The Special Stage floor's fog (FloorWin, below): whether its banks are fades of bank 0 (FloorFog held), and a
+// line's fade in its bank (0..255, the owner's percentage applied).
+bool FloorFadeReady();
+unsigned FloorFade(unsigned bank);
+
 // `src` a layer, or a sheet drawn with `blend0` and the vertex colour `rgba0` (a layer: BLEND_NORMAL, opaque white).
 bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo *first, int x1, int x2, int y1, int y2, float feet, bool *handled,
                  uint8 blend0 = BLEND_NORMAL, uint32 rgba0 = 0xFFFFFFFFu)
@@ -2023,9 +2031,13 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
         return true;
     // The palette banks its lines use: a copy of the texture each (the Special Stage's fog banks per line). Within
     // ROTO_BANK_BUDGET of VRAM, the title's one-bank island aside.
+    // In a Special Stage whose fog banks are fades (the floor's check), a layer keeps bank 0 only and each line fades by
+    // the vertex alpha as the floor windows do: one copy to build instead of one a bank (Special Stage 4's water
+    // animates every frame in six banks).
+    const bool fadeMode = sUfoScene && src.layer && blend0 == BLEND_NORMAL && FloorFadeReady();
     unsigned banks = 0, bankCount = 0;
     for (int y = y1; y < y2; ++y)
-        banks |= 1u << (sLineBuf[y] & 7);
+        banks |= 1u << (fadeMode ? 0 : sLineBuf[y] & 7);
     for (unsigned b = 0; b < 8; ++b)
         bankCount += (banks >> b) & 1;
     if (bankCount > 1 && w * h * 2 * bankCount > ROTO_BANK_BUDGET)
@@ -2115,7 +2127,9 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
             rb.seenFrames = rb.seen == hash ? rb.seenFrames + 1 : 1;
             rb.seen       = hash;
             sRotoTexWhy   = "changing";
-            if (rb.seenFrames < 2)
+            // A small texture is rebuilt at once, every frame if need be (Special Stage 4's water, 256x256, animates its
+            // tiles every frame: as tile runs it took ~10 ms and 4500 quads); a big one waits for the change to hold.
+            if (rb.seenFrames < 2 && w * h > 256 * 256)
                 return true;
             if (!BuildRotoTex(rb.tex, w, h, src, sTexPal[sBankMap[b]]))
                 return true;
@@ -2185,7 +2199,7 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
     const unsigned slot   = (unsigned)(r - sRotoTex);
     const int lineSize    = x2 - x1;
     const uint32 maskX    = (w << 16) - 1, maskY = (h << 16) - 1;
-    const unsigned passes = 1 + (r->maskValid ? r->hotCount : 0);
+    const unsigned passes = 1 + (r->maskValid && !fadeMode ? r->hotCount : 0);
     const unsigned need   = (unsigned)(y2 - y1) * passes;
     sRotoTexWhy = "quads";
     if (sQuadCount + need > MAX_QUADS)
@@ -2203,7 +2217,7 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
     for (unsigned pass = 0; pass < passes; ++pass)
     for (int y = y1; y < y2; ++y) {
         const ScanlineInfo &s = first[y - y1];
-        const unsigned b      = sLineBuf[y] & 7;
+        const unsigned lb     = sLineBuf[y] & 7, b = fadeMode ? 0 : lb;
         const int8 depth      = feet > 0 ? RotoLineDepth(feet, s.deform.x, s.deform.y) : sDepth;
         // Pass 0 the line's bank's copy; pass k the mask's hot colour k - 1 in that bank now (as the atlases quantise
         // it).
@@ -2232,19 +2246,19 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
         const uint8 sub = pass ? 0 : (uint8)b; // the bank copy (Batch::fog holds it for TEX_ROTO*)
         Batch *last     = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
         if (!last || last->tex != ptex || last->blend != pblend || last->constant != constant || last->depth != depth || last->scissor != sScissor ||
-            last->fog != sub || last->uvk != k) {
+            last->fog != sub || last->uvk != k || last->fade != (uint8)fadeMode) {
             if (sBatchCount >= MAX_BATCHES) {
                 sQuadCount = q;
                 return Refuse(GpuRender::REASON_QUAD_LIMIT);
             }
-            sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor, sub, (uint8)k, 1 };
+            sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor, sub, (uint8)k, 1, (uint8)fadeMode };
             last                    = &sBatches[sBatchCount - 1];
         }
         const uint32 uv0 = (uint16)(int16)((u0 + rnd) >> sh) | ((uint32)(uint16)(int16)((v0 + rnd) >> sh) << 16);
         const uint32 uv1 = (uint16)(int16)((u1 + rnd) >> sh) | ((uint32)(uint16)(int16)((v1 + rnd) >> sh) << 16);
         const uint32 X0 = (uint32)(x1 << 2), X1 = (uint32)(x2 << 2);
         const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
-        const uint32 rgba = pass ? 0xFFFFFFFFu : rgba0;
+        const uint32 rgba = pass ? 0xFFFFFFFFu : fadeMode ? 0x00FFFFFFu | ((uint32)(255 - FloorFade(lb)) << 24) : rgba0;
         w32[0] = X0 | Y0, w32[1] = uv0, w32[2] = rgba;
         w32[3] = X1 | Y0, w32[4] = uv1, w32[5] = rgba;
         w32[6] = X1 | Y1, w32[7] = uv1, w32[8] = rgba;
@@ -2307,11 +2321,15 @@ struct FloorWin {
     u32 fogColor;                       // what the lines fade to: bank 7's average over the floor (0xAABBGGRR)
     uint32 used[8];
     uint32 weight[PALETTE_BANK_SIZE];   // the floor's pixels of each palette index (map cells x tile pixels)
+    uint32 tileUsed[TILE_COUNT / 32];   // base tiles the map uses
+    uint32 tileGen;                     // bumped when one of them changes (UFO_Water animates tiles the floor never uses)
     bool usedOk;
-    uint32 usedEpoch;
 };
 FloorWin sFloor;
 bool sFloorFailed;
+
+bool FloorFadeReady() { return GpuRender::floorWindows && sFloor.fogOk && sFloor.built; }
+unsigned FloorFade(unsigned bank) { return sFloor.fogAlpha[bank & 7] * (unsigned)GpuRender::floorFogPercent / 100; }
 const char *sFloorWhy = "-"; // the floor windows' state for SITE REFUSED (the last frame with a floor)
 uint8 sLineDone[SCREEN_YSIZE]; // per line of the rotozoom layer being emitted: 1 + the window level drawing it, 0 none
 const u16 *sFloorPal0; // the texel table of bank 0 the cells are written with
@@ -2466,6 +2484,7 @@ void FloorUsed(const TileLayer *layer)
         memset(tileCount, 0, sizeof(tileCount));
         memset(f.used, 0, sizeof(f.used));
         memset(f.weight, 0, sizeof(f.weight));
+        memset(f.tileUsed, 0, sizeof(f.tileUsed));
         const unsigned n = (1u << layer->widthShift) << layer->heightShift;
         for (unsigned i = 0; i < n; ++i)
             if (layer->layout[i] != 0xFFFF)
@@ -2473,6 +2492,7 @@ void FloorUsed(const TileLayer *layer)
         for (unsigned t = 0; t < TILE_COUNT * 4; ++t) {
             if (!tileCount[t])
                 continue;
+            f.tileUsed[(t & (TILE_COUNT - 1)) >> 5] |= 1u << (t & 31);
             const uint8 *src = &tilesetPixels[TILE_DATASIZE * (t & (TILE_COUNT - 1))];
             for (unsigned k = 0; k < TILE_DATASIZE; ++k) {
                 f.used[src[k] >> 5] |= 1u << (src[k] & 31);
@@ -2589,10 +2609,20 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
 
     // The content: the colours the floor uses in every bank, tileset epoch, layout pointer. Rebuilt once it has held
     // (other colours change every frame in some stages).
-    if (f.usedEpoch != sTileEpoch)
-        f.usedOk = false, f.usedEpoch = sTileEpoch;
+    // Only the tiles the map uses count (Special Stage 4's water animates tiles of another layer every frame: with the
+    // tileset's epoch the windows were rebuilt every frame and never drawn, ~13 fps).
     FloorUsed(layer);
-    uint32 hash = 2166136261u ^ sTileEpoch * 16777619u ^ (uint32)(uintptr_t)layer->layout;
+    if (sTileChangedAny) {
+        bool hit = false;
+        for (unsigned w = 0; w < TILE_COUNT / 32 && !hit; ++w)
+            hit = (f.tileUsed[w] & sTileChanged[w]) != 0;
+        if (hit) {
+            ++f.tileGen;
+            f.usedOk = false;
+            FloorUsed(layer);
+        }
+    }
+    uint32 hash = 2166136261u ^ f.tileGen * 16777619u ^ (uint32)(uintptr_t)layer->layout;
     for (unsigned b = 0; b < PALETTE_BANK_COUNT; ++b) {
         const uint16 *pal = sPalShadow[sBankMap[b]];
         for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i)
@@ -3250,6 +3280,10 @@ bool GpuRender::Render(const Stream &stream)
         ResetCaches();
     }
     TrackPalette(false, stream.basePalette);
+    if (sTileChangedAny) {
+        memset(sTileChanged, 0, sizeof(sTileChanged));
+        sTileChangedAny = false;
+    }
     if (tileDirtyAny) {
         // Animated tiles rewritten since the last GPU frame: their copies (every bank, every flip variant) go stale.
         tileDirtyAny = false;
@@ -3269,6 +3303,8 @@ bool GpuRender::Render(const Stream &stream)
                     continue;
                 sTileHash[t] = h;
                 ++sTileEpoch; // the rotozoom textures made from the tileset are stale
+                sTileChanged[t >> 5] |= 1u << (t & 31);
+                sTileChangedAny = true;
                 for (unsigned v = 0; v < 4; ++v) {
                     sTileGroupsOk[t + v * TILE_COUNT] = 0;
                     for (unsigned b = 0; b < BANKS; ++b)
@@ -3613,6 +3649,7 @@ bool GpuRender::Render(const Stream &stream)
             curDepth = bt.depth;
         }
         const bool floorTex = bt.tex >= TEX_FLOOR0 && bt.tex <= TEX_FLOOR4;
+        const bool fadeEnv  = floorTex || bt.fade; // the floor's fade in the combiner
         if (curTex != bt.tex && floorTex) {
             const FloorLevel &l = sFloor.level[bt.tex - TEX_FLOOR0];
             C3D_TexBind(0, (C3D_Tex *)&l.tex);
@@ -3684,7 +3721,7 @@ bool GpuRender::Render(const Stream &stream)
         };
         if (tinted && curTint != bt.depth)
             applyTint();
-        else if (!tinted && floorTex) {
+        else if (!tinted && fadeEnv) {
             // A floor window line: the texture faded by the vertex alpha's complement towards the fog colour
             // (INTERPOLATE: texture * a + fog * (1 - a)), opaque where the map is.
             if (curTint != -2000) {
@@ -3736,7 +3773,7 @@ bool GpuRender::Render(const Stream &stream)
         // The second pass: stencil 1 where the drawn colour is the mask colour (blended colours are not judged). After
         // a masked draw only where it drew (2 -> 1); a 2 left behind means "drawn over, not the mask colour".
         auto secondPass = [&](unsigned first, unsigned count) {
-            SetCompareTexEnv(maskConst, bt.tex >= TEX_FLOOR0 && bt.tex <= TEX_FLOOR4);
+            SetCompareTexEnv(maskConst, (bt.tex >= TEX_FLOOR0 && bt.tex <= TEX_FLOOR4) || bt.fade);
             if (GpuRender::depthMode & 8) {
                 // debug: paint the result unblended; with bit 7 the final alpha as grey
                 C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
