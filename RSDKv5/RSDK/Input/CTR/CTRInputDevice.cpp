@@ -35,6 +35,7 @@ void RSDK::SKU::InputDeviceCTR::UpdateInput()
   kHeld |= inject;
   kDown |= inject & ~prevInject;
   prevInject = inject;
+  RSDK::DevTools::RunKeys(&kHeld, &kDown);
 #endif
 
   if (kDown || kHeld)

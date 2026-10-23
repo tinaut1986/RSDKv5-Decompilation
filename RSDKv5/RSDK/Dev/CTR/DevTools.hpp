@@ -89,6 +89,10 @@ extern int swMaxSkip;    // most passes skipped in a row
 extern bool swDraw;      // run the draw lists (off isolates the cost of the logic)
 extern bool swFlipCopy;  // copy the frame into the screen (off isolates the cost of the flip)
 extern uint32 injectKeys; // 3DS key mask held on top of the real buttons (SITE INPUT)
+// Recorded runs (SITE RUNREC / RUNSTOP / RUNPLAY): the 3DS keys of every logic pass from a scene's load, played back
+// from the same load to compare builds on one route. Called by the input device with the real keys; during playback
+// it replaces them.
+void RunKeys(uint32 *held, uint32 *down);
 extern bool freeze;       // skip the objects' update, keep drawing (SITE FREEZE): the same frame in both renderers
 extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy (part of the GPU mode)
 extern bool swGpuRender;   // execute recorded frames on the GPU (needs swRecord and swGpuPresent)

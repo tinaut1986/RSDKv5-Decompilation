@@ -80,6 +80,18 @@ static int32 sGotoX, sGotoY;
 // SITE HIDE <ObjectName>: one class not drawn (to see what it covers); SITE HIDE alone shows it again. Not saved.
 static uint32 sHideHash[4];
 static volatile bool sHideSet;
+// Recorded runs: keys per logic pass (12 bits used) from the end of a scene load.
+enum { RUN_MAX = 60 * 60 * 5 }; // five minutes
+enum RunMode { RUN_OFF, RUN_ARM_REC, RUN_REC, RUN_ARM_PLAY, RUN_PLAY };
+static uint16 sRunKeys[RUN_MAX];
+static unsigned sRunCount, sRunPos;
+static volatile int sRunMode;
+static uint32 sRunContent; // GpuFrame::contentVersion when armed: a new value means the scene has been loaded
+static int sRunCategory = -1, sRunListPos = -1;
+static unsigned sRunFrames0;
+static u64 sRunTick0;
+static char sRunResult[96] = "-";
+static const char *kRunPath = "sdmc:/3ds/Sonic Mania 3DS/debug/run.bin";
 static volatile int sShotRequest; // 1 top screen, 2 bottom screen, 3 top screen's right eye
 
 struct Session {
@@ -885,6 +897,58 @@ static void HandleSession(int ctrl)
                 DevTools::freeze = path && atoi(path) != 0;
                 Reply(s, "200 freeze %d", (int)DevTools::freeze);
             }
+            else if (!strcmp(sub, "RUNREC")) {
+                // The current scene again from its load, recording the keys until RUNSTOP (or five minutes).
+                sRunCategory = sceneInfo.activeCategory, sRunListPos = sceneInfo.listPos;
+                sRunCount = 0, sRunContent = GpuFrame::contentVersion;
+                sRunMode = RUN_ARM_REC;
+                // Reloaded by the main thread (FrameEnd), as SITE SCENE does.
+                sPendingCategory = sRunCategory;
+                sPendingScene    = sRunListPos - sceneInfo.listCategory[sRunCategory].sceneOffsetStart;
+                Reply(s, "200 recording from the reload of category %d list %d", sRunCategory, sRunListPos);
+            }
+            else if (!strcmp(sub, "RUNSTOP")) {
+                if (sRunMode == RUN_REC || sRunMode == RUN_ARM_REC) {
+                    sRunMode = RUN_OFF;
+                    FILE *f  = fopen(kRunPath, "wb");
+                    if (f) {
+                        const int32 hdr[3] = { sRunCategory, sRunListPos, (int32)sRunCount };
+                        fwrite(hdr, sizeof(hdr), 1, f);
+                        fwrite(sRunKeys, 2, sRunCount, f);
+                        fclose(f);
+                    }
+                    snprintf(sRunResult, sizeof(sRunResult), "recorded %u passes (%.1f s) of category %d list %d", sRunCount, sRunCount / 60.0f,
+                             sRunCategory, sRunListPos);
+                }
+                else
+                    sRunMode = RUN_OFF;
+                Reply(s, "200 %s", sRunResult);
+            }
+            else if (!strcmp(sub, "RUNPLAY")) {
+                // The recorded run (debug/run.bin) from its scene's load; RUN shows the result (drawn fps).
+                FILE *f = fopen(kRunPath, "rb");
+                int32 hdr[3] = { -1, -1, 0 };
+                if (f) {
+                    if (fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[2] > 0 && hdr[2] <= RUN_MAX)
+                        sRunCount = (unsigned)fread(sRunKeys, 2, (size_t)hdr[2], f);
+                    fclose(f);
+                }
+                if (hdr[0] < 0 || !sRunCount)
+                    Reply(s, "550 no recorded run (RUNREC, then RUNSTOP)");
+                else {
+                    sRunCategory = hdr[0], sRunListPos = hdr[1];
+                    sRunPos = 0, sRunContent = GpuFrame::contentVersion;
+                    sRunMode = RUN_ARM_PLAY;
+                    sPendingCategory = sRunCategory;
+                    sPendingScene    = sRunListPos - sceneInfo.listCategory[sRunCategory].sceneOffsetStart;
+                    snprintf(sRunResult, sizeof(sRunResult), "playing %u passes", sRunCount);
+                    Reply(s, "200 playing %u passes of category %d list %d", sRunCount, sRunCategory, sRunListPos);
+                }
+            }
+            else if (!strcmp(sub, "RUN")) {
+                static const char *kMode[] = { "off", "armed to record", "recording", "armed to play", "playing" };
+                Reply(s, "200 %s %u/%u | %s", kMode[sRunMode], sRunMode == RUN_PLAY ? sRunPos : sRunCount, sRunCount, sRunResult);
+            }
             else if (!strcmp(sub, "INPUT")) {
                 // SITE INPUT <hex mask of 3DS keys, e.g. 10 = A, 10 = KEY_A bit>: held until set to 0.
                 DevTools::injectKeys = path ? (uint32)strtoul(path, NULL, 16) : 0;
@@ -1113,6 +1177,45 @@ int DevTools::optFps          = 0;
 int DevTools::optHud          = 1;
 int DevTools::uiTab           = 0;
 bool DevTools::swForce3D      = false;
+
+void DevTools::RunKeys(uint32 *held, uint32 *down)
+{
+    const int mode = sRunMode;
+    if (mode == RUN_OFF)
+        return;
+    // Armed: wait for the reload to end (the first regular pass with a new content version).
+    if (mode == RUN_ARM_REC || mode == RUN_ARM_PLAY) {
+        if (GpuFrame::contentVersion == sRunContent || sceneInfo.state == ENGINESTATE_LOAD) {
+            if (mode == RUN_ARM_PLAY)
+                *held = *down = 0;
+            return;
+        }
+        sRunMode    = mode == RUN_ARM_REC ? RUN_REC : RUN_PLAY;
+        sRunFrames0 = sTotGpu + sTotCpu;
+        sRunTick0   = svcGetSystemTick();
+        Log("run: %s from category %d list %d", mode == RUN_ARM_REC ? "recording" : "playing", sRunCategory, sRunListPos);
+    }
+    if (sRunMode == RUN_REC) {
+        if (sRunCount < RUN_MAX)
+            sRunKeys[sRunCount++] = (uint16)(*held & 0xFFF);
+        return;
+    }
+    // Playing: the recorded keys instead of the real ones; at the end, the drawn frames a second over the run.
+    if (sRunPos < sRunCount) {
+        const uint32 prev = sRunPos ? sRunKeys[sRunPos - 1] : 0;
+        *held             = sRunKeys[sRunPos];
+        *down             = sRunKeys[sRunPos] & ~prev;
+        ++sRunPos;
+        return;
+    }
+    const float secs = (float)(svcGetSystemTick() - sRunTick0) / SYSCLOCK_ARM11;
+    const unsigned frames = sTotGpu + sTotCpu - sRunFrames0;
+    snprintf(sRunResult, sizeof(sRunResult), "played %u passes in %.1f s: %u frames drawn, %.1f fps", sRunCount, secs, frames,
+             secs > 0 ? frames / secs : 0.0f);
+    Log("run: %s", sRunResult);
+    sRunMode = RUN_OFF;
+    *held = *down = 0;
+}
 
 bool DevTools::HideEntityClass(uint16 classID)
 {
