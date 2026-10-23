@@ -795,6 +795,10 @@ static void HandleSession(int ctrl)
                     Port::hud = v < 0 || v > 2 ? 1 : v;
                 else if (!strncmp(path, "lock30", 6))
                     Port::lock30 = v != 0;
+                else if (!strncmp(path, "heapcheck", 9)) // debug: walk the heap's chunks every frame, log the first broken one
+                    DevTools::heapCheck = v != 0;
+                else if (!strncmp(path, "music", 5)) // debug: streams (music) off, to tell them from other faults; not saved
+                    engine.streamsEnabled = v != 0;
                 else if (!strncmp(path, "force3d", 7))
                     DevTools::swForce3D = v != 0;
                 else if (!strncmp(path, "gpuskip", 7))
@@ -1762,8 +1766,55 @@ static void Capture()
     sStep = 1;
 }
 
+// SET heapcheck 1 (debug): newlib's heap is one run of chunks from the start of the heap to the break, each with its
+// size (and two flag bits) in the word before its data. Walked every frame: the first chunk whose size does not fit is
+// logged with the chunk before it, which is likely the one written past its end (its size and first bytes say what it
+// holds), and the words around the bad header (the data that overwrote it).
+bool DevTools::heapCheck;
+extern "C" {
+extern char *fake_heap_start;
+void *_sbrk_r(struct _reent *, ptrdiff_t);
+}
+static bool HeapWalk(const char *where)
+{
+    static bool reported;
+    if (reported)
+        return false;
+    char *p   = (char *)(((uintptr_t)fake_heap_start + 7) & ~(uintptr_t)7);
+    char *top = (char *)_sbrk_r(_REENT, 0);
+    char *prev = NULL;
+    unsigned prevSize = 0, n = 0;
+    while (p + 8 <= top) {
+        const unsigned size = *(unsigned *)(p + 4) & ~7u;
+        if (size < 16 || p + size > top) {
+            reported = true;
+            const unsigned *w = (const unsigned *)p;
+            DevTools::Log("heapcheck (%s): chunk %u at %p has size %08x (top %p); the one before: %p, %u bytes", where, n, p, *(unsigned *)(p + 4), top, prev,
+                prevSize);
+            DevTools::Log("heapcheck: header words %08x %08x %08x %08x %08x %08x %08x %08x", w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+            if (prev) {
+                const unsigned *q = (const unsigned *)(prev + 8);
+                DevTools::Log("heapcheck: before's data %08x %08x %08x %08x %08x %08x %08x %08x", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
+                const unsigned *e = (const unsigned *)(p - 32);
+                DevTools::Log("heapcheck: before's last words %08x %08x %08x %08x %08x %08x %08x %08x", e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]);
+            }
+            return false;
+        }
+        prev = p, prevSize = size;
+        p += size;
+        ++n;
+    }
+    return true;
+}
+void DevTools::HeapCheck(const char *where)
+{
+    if (heapCheck)
+        HeapWalk(where);
+}
+
 bool DevTools::FrameEnd()
 {
+    HeapCheck("frame end");
     if (sShotRequest) {
         const int request = sShotRequest;
         sShotRequest      = 0;

@@ -288,9 +288,10 @@ void GpuFrame::Flush()
                 TileLayer *layer = (TileLayer *)(uintptr_t)p[0];
                 // The scanline table the layer's draw reads was filled by ProcessParallax just before the call;
                 // later layers overwrote it, so the copy taken then goes back.
-                const int y1 = c.clip[1], y2 = c.clip[3];
-                if (y2 > y1)
-                    memcpy(&scanlines[y1], sArena + c.arena, (size_t)(y2 - y1) * sizeof(ScanlineInfo));
+                const bool columns = c.kind == LAYER_VSCROLL; // one entry a column (RecLayer)
+                const int first = columns ? c.clip[0] : c.clip[1], last = columns ? c.clip[2] : c.clip[3];
+                if (last > first)
+                    memcpy(&scanlines[first], sArena + c.arena, (size_t)(last - first) * sizeof(ScanlineInfo));
                 switch (c.kind) {
                     case LAYER_HSCROLL: DrawLayerHScroll(layer); break;
                     case LAYER_VSCROLL: DrawLayerVScroll(layer); break;
@@ -519,15 +520,19 @@ uint8 *GpuFrame::RecScene3D(uint32 bytes)
 
 bool GpuFrame::RecLayer(TileLayer *layer, int kind)
 {
-    const int y1 = currentScreen->clipBound_Y1, y2 = currentScreen->clipBound_Y2;
-    const unsigned lines = y2 > y1 ? (unsigned)(y2 - y1) : 0;
+    // The entries the layer's draw reads: one a line, or one a column for a vertical-scroll layer (columns 240 and up
+    // were not copied before, and the replay drew them with whatever the table held).
+    const bool columns = kind == LAYER_VSCROLL;
+    const int first = columns ? currentScreen->clipBound_X1 : currentScreen->clipBound_Y1;
+    const int last  = columns ? currentScreen->clipBound_X2 : currentScreen->clipBound_Y2;
+    const unsigned lines = last > first ? (unsigned)(last - first) : 0;
     Cmd *c = BeginCmd(CMD_LAYER, lines * (unsigned)sizeof(ScanlineInfo));
     if (!c)
         return false;
     c->kind = (uint8)kind;
     c->p[0] = (int32)(uintptr_t)layer;
     if (lines)
-        memcpy(sArena + c->arena, &scanlines[y1], lines * sizeof(ScanlineInfo));
+        memcpy(sArena + c->arena, &scanlines[first], lines * sizeof(ScanlineInfo));
     return true;
 }
 

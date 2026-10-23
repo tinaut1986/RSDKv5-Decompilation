@@ -1145,6 +1145,9 @@ void BottomUi::LoadBegin(const char *title)
 
 void BottomUi::LoadPhase(const char *step, float lo, float hi)
 {
+#if MANIA_DEV_TOOLS
+    DevTools::HeapCheck(step);
+#endif
     if (!sLoad.active)
         return;
     Upper(sLoad.step, sizeof(sLoad.step), step);
@@ -1156,6 +1159,13 @@ void BottomUi::LoadPhase(const char *step, float lo, float hi)
 
 void BottomUi::LoadItem(int i, int n)
 {
+#if MANIA_DEV_TOOLS
+    if (DevTools::heapCheck) {
+        char where[64];
+        snprintf(where, sizeof(where), "%s %d/%d", sLoad.step, i, n);
+        DevTools::HeapCheck(where);
+    }
+#endif
     if (!sLoad.active || n <= 0)
         return;
     sLoad.progress = sLoad.lo + (sLoad.hi - sLoad.lo) * i / n;
@@ -1164,6 +1174,9 @@ void BottomUi::LoadItem(int i, int n)
 
 void BottomUi::LoadDetail(const char *file)
 {
+#if MANIA_DEV_TOOLS
+    DevTools::HeapCheck(file ? file : "file");
+#endif
     if (!sLoad.active)
         return;
     const char *slash = file ? strrchr(file, '/') : NULL;

@@ -1824,7 +1824,13 @@ bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int k
     for (int y = y1; y < y2; ++y)
         for (int x = x1; x < x2; ++x)
             scr.frameBuffer[y * scr.pitch + x] = SOFT_KEY;
-    memcpy(&scanlines[y1], sl, (size_t)h * sizeof(ScanlineInfo));
+    // The recorded entries back where they were taken from: lines, or columns for a vertical-scroll layer (RecLayer).
+    if (kind == LAYER_VSCROLL) {
+        if (c.clip[2] > c.clip[0])
+            memcpy(&scanlines[c.clip[0]], sl, (size_t)(c.clip[2] - c.clip[0]) * sizeof(ScanlineInfo));
+    }
+    else if (c.clip[3] > c.clip[1])
+        memcpy(&scanlines[c.clip[1]], sl, (size_t)(c.clip[3] - c.clip[1]) * sizeof(ScanlineInfo));
     static uint8 keepLines[SCREEN_YSIZE];
     memcpy(keepLines, gfxLineBuffer, sizeof(keepLines));
     memcpy(gfxLineBuffer, sLineBuf, sizeof(keepLines));
