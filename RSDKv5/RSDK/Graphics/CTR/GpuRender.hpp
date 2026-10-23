@@ -70,9 +70,12 @@ extern unsigned depthMode;
 extern int stereoFar;
 // DEPTH TINT (debug, not saved): every 2D batch painted one flat blue by its stereo depth, slider down too.
 extern bool depthTint;
-// The Special Stage floor from map windows (FloorWin). Off: on the 2DS it was slower than the tile runs (the window
-// moves' synchronous copies wait for the GPU, the fog passes add fill). SITE SET floorwin 1 to try it; not saved.
+// The Special Stage floor from map windows (FloorWin), on by default; SITE SET floorwin 0 for the tile runs (not saved).
 extern bool floorWindows;
+// The floor windows' lines fade to black (default) or to bank 7's average colour (SITE SET floorfogavg 1), by this
+// percentage of the game's fade (SITE SET floorfog N, 0-100, default 60); neither saved.
+extern bool floorFogAverage;
+extern int floorFogPercent;
 // SITE SET gpuskip N (debug, not saved): batch kinds not drawn, to weigh their GPU time (bits: see the draw loop).
 extern unsigned gpuSkip;
 // The last 3D frame's depths ("L<layer> g<group> near..far | ... far N playfield #i sprites behind n"), SITE DEPTHS.
