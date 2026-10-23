@@ -95,6 +95,7 @@ tools/site.sh DEPTHS                        # last 3D frame's layer depths; debu
 tools/site.sh "SET depthtint 1"             # debug: paint every 2D batch by its stereo depth (DEPTH TINT button), slider down too
 tools/site.sh "HIDE TitleLogo"              # debug: stop drawing one object class ("HIDE" alone undoes it)
 tools/site.sh "SET ufotime 1"               # debug: the Special Stage countdown stays at 50+ (test it at leisure); not saved
+tools/site.sh TIMES                         # one short line: frame, upd, draw, flip (pcopy, pframe), wait, GPU drawing time, quads, batches
 tools/site.sh RUNREC | RUNSTOP | RUNPLAY | RUN  # record the owner's keys from the current scene's reload, save debug/run.bin,
                                             # replay it from the same reload; RUN: state and the result (real drawn fps)
 tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU drew too; right = right eye in 3D)

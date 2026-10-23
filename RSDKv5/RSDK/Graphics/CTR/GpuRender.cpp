@@ -3610,6 +3610,10 @@ bool GpuRender::Render(const Stream &stream)
         sStats.cmdBufPct = pct > sStats.cmdBufPct ? pct : sStats.cmdBufPct;
     }
     C3D_FrameEnd(0);
+    // citro3d's timings of the last finished GPU frame: drawing (the PICA's work) and processing (the CPU's submit).
+    sStats.gpuDrawMs = C3D_GetDrawingTime();
+    sStats.gpuProcMs = C3D_GetProcessingTime();
+    sStats.batches   = sBatchCount;
     GPU_TIME(STAGE_PFRAME, t);
     return true;
 }

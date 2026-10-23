@@ -42,6 +42,8 @@ struct Stats {
     unsigned rotoSoftRuns, rotoSoftQuads; // rotozoom layers sent to the software: too many runs / quads (total)
     unsigned rotoUs, rotoQuads; // rotozoom layers as tile runs: build time (us) and quads (last frame)
     unsigned rotoTexBuilds; // rotozoom layers drawn into their own texture (RotoTex), times built (total)
+    float gpuDrawMs, gpuProcMs; // citro3d: the last GPU frame's drawing time and its submit time (ms)
+    unsigned batches;           // batches of the last frame
     unsigned eyesDropped;   // right eyes not drawn because the command buffer would not hold them (total)
     unsigned cmdBufPct;     // most of the GPU command buffer a frame has used (%), since boot
     unsigned tileEvictions; // times the full tile atlas gave back the cells not used in the frame (total)

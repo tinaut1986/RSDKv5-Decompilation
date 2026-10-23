@@ -945,6 +945,14 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 playing %u passes of category %d list %d", sRunCount, sRunCategory, sRunListPos);
                 }
             }
+            else if (!strcmp(sub, "TIMES")) {
+                // The frame's costs in one short line (ms; STATE's is cut by the FTP limit): logic, recording, flip
+                // (pcopy geometry, pframe citro3d frame), wait, and the GPU's own drawing time.
+                const GpuRender::Stats &g = GpuRender::GetStats();
+                Reply(s, "200 frame %.1f upd %.1f draw %.1f flip %.1f pcopy %.1f pframe %.1f wait %.1f | gpu draw %.1f submit %.1f | quads %u batches %u cmdbuf %u%% eyes dropped %u",
+                      sLastFrameMs, sLastStageMs[DevTools::STAGE_UPDATE], sLastStageMs[DevTools::STAGE_DRAW], sLastStageMs[DevTools::STAGE_FLIP], sLastStageMs[DevTools::STAGE_PCOPY],
+                      sLastStageMs[DevTools::STAGE_PFRAME], sLastStageMs[DevTools::STAGE_WAIT], g.gpuDrawMs, g.gpuProcMs, g.quads, g.batches, g.cmdBufPct, g.eyesDropped);
+            }
             else if (!strcmp(sub, "RUN")) {
                 static const char *kMode[] = { "off", "armed to record", "recording", "armed to play", "playing" };
                 Reply(s, "200 %s %u/%u | %s", kMode[sRunMode], sRunMode == RUN_PLAY ? sRunPos : sRunCount, sRunCount, sRunResult);
