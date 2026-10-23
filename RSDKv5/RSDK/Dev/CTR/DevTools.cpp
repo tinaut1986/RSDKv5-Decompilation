@@ -76,11 +76,33 @@ static volatile int sPendingCategory = -1, sPendingScene = -1;
 static char sOrderCur[400], sOrderLast[400];
 static volatile bool sGoto; // SITE GOTO: move the player at the end of the frame
 static volatile bool sUfoTime; // SITE SET ufotime 1: the Special Stage's countdown never runs out (not saved)
+// The Special Stage's static variables as the game (Plus, GAME_VERSION 1.06) lays them out, up to what is used here.
+struct UfoSetupStatics {
+    uint16 classID;
+    uint8 active;
+    void (*deformCB)();
+    int32 timedOut, encoreStage, machLevel, scoreBonus, machPoints, rings, timer, ringFrame, ringPan, spherePan;
+};
+static UfoSetupStatics *UfoSetup()
+{
+    static uint32 hash[4];
+    static bool hashed;
+    if (!hashed) {
+        GEN_HASH_MD5("UFO_Setup", hash);
+        hashed = true;
+    }
+    for (int32 i = 0; i < sceneInfo.classCount; ++i) {
+        ObjectClass &oc = objectClassList[stageObjectIDs[i]];
+        if (HASH_MATCH_MD5(oc.hash, hash) && oc.staticVars && *oc.staticVars)
+            return (UfoSetupStatics *)*oc.staticVars;
+    }
+    return NULL;
+}
 static int32 sGotoX, sGotoY;
 // SITE HIDE <ObjectName>: one class not drawn (to see what it covers); SITE HIDE alone shows it again. Not saved.
 static uint32 sHideHash[4];
 static volatile bool sHideSet;
-// Recorded runs: keys per logic pass (12 bits used) from the end of a scene load.
+// Recorded runs: keys per logic pass from the end of a scene load (12 button bits, the circle pad's 4 in 12-15).
 enum { RUN_MAX = 60 * 60 * 5 }; // five minutes
 enum RunMode { RUN_OFF, RUN_ARM_REC, RUN_REC, RUN_ARM_PLAY, RUN_PLAY };
 static uint16 sRunKeys[RUN_MAX];
@@ -91,7 +113,60 @@ static int sRunCategory = -1, sRunListPos = -1;
 static unsigned sRunFrames0;
 static u64 sRunTick0;
 static char sRunResult[96] = "-";
+static bool sRunFreezeAtEnd; // RUNPLAY N F: freeze the objects on the last pass (to compare two playbacks' pictures)
 static const char *kRunPath = "sdmc:/3ds/Sonic Mania 3DS/debug/run.bin";
+static unsigned sRunRecLimit; // RUNREC N: stop by itself after N passes, frozen (to compare with RUNPLAY N F)
+// The objects' static variables when the recording started: a reload resets only what each class's StageLoad sets
+// (the Special Stage's frame counter, the camera...), so the playback starts from a copy of them, or it drifts off the
+// route. Per class: its size (int32) then its bytes, in the stage's class order.
+enum { RUN_STATICS_MAX = 96 * 1024 };
+static uint8 sRunStatics[RUN_STATICS_MAX];
+static uint32 sRunStaticsSize;
+
+static void RunStaticsCopy(bool save)
+{
+    uint32 off = 0;
+    bool same = true;
+    for (int32 i = 0; i < sceneInfo.classCount; ++i) {
+        ObjectClass &oc = objectClassList[stageObjectIDs[i]];
+        const int32 size = oc.staticVars && *oc.staticVars ? oc.staticClassSize : 0;
+        if (off + 4 + (uint32)(size > 0 ? size : 0) > RUN_STATICS_MAX)
+            break;
+        if (save) {
+            memcpy(sRunStatics + off, &size, 4);
+            if (size > 0)
+                memcpy(sRunStatics + off + 4, *oc.staticVars, (size_t)size);
+        }
+        else {
+            int32 was;
+            memcpy(&was, sRunStatics + off, 4);
+            if (off + 4 > sRunStaticsSize || was != size) {
+                same = false; // another build or scene: left as loaded
+                break;
+            }
+            if (size > 0)
+                memcpy(*oc.staticVars, sRunStatics + off + 4, (size_t)size);
+        }
+        off += 4 + (uint32)(size > 0 ? size : 0);
+    }
+    if (save)
+        sRunStaticsSize = off;
+    else if (!same)
+        DevTools::Log("run: the recorded statics do not match this scene's classes, not restored");
+}
+
+static void RunSave()
+{
+    FILE *f = fopen(kRunPath, "wb");
+    if (!f)
+        return;
+    const int32 hdr[3] = { sRunCategory, sRunListPos, (int32)sRunCount };
+    fwrite(hdr, sizeof(hdr), 1, f);
+    fwrite(sRunKeys, 2, sRunCount, f);
+    fwrite(&sRunStaticsSize, 4, 1, f);
+    fwrite(sRunStatics, 1, sRunStaticsSize, f);
+    fclose(f);
+}
 static volatile int sShotRequest; // 1 top screen, 2 bottom screen, 3 top screen's right eye
 
 struct Session {
@@ -903,6 +978,7 @@ static void HandleSession(int ctrl)
                 // The current scene again from its load, recording the keys until RUNSTOP (or five minutes).
                 sRunCategory = sceneInfo.activeCategory, sRunListPos = sceneInfo.listPos;
                 sRunCount = 0, sRunContent = GpuFrame::contentVersion;
+                sRunRecLimit = path ? (unsigned)atoi(path) : 0;
                 sRunMode = RUN_ARM_REC;
                 // Reloaded by the main thread (FrameEnd), as SITE SCENE does.
                 sPendingCategory = sRunCategory;
@@ -912,13 +988,7 @@ static void HandleSession(int ctrl)
             else if (!strcmp(sub, "RUNSTOP")) {
                 if (sRunMode == RUN_REC || sRunMode == RUN_ARM_REC) {
                     sRunMode = RUN_OFF;
-                    FILE *f  = fopen(kRunPath, "wb");
-                    if (f) {
-                        const int32 hdr[3] = { sRunCategory, sRunListPos, (int32)sRunCount };
-                        fwrite(hdr, sizeof(hdr), 1, f);
-                        fwrite(sRunKeys, 2, sRunCount, f);
-                        fclose(f);
-                    }
+                    RunSave();
                     snprintf(sRunResult, sizeof(sRunResult), "recorded %u passes (%.1f s) of category %d list %d", sRunCount, sRunCount / 60.0f,
                              sRunCategory, sRunListPos);
                 }
@@ -934,9 +1004,17 @@ static void HandleSession(int ctrl)
                 if (f) {
                     if (fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[2] > 0 && hdr[2] <= RUN_MAX)
                         sRunCount = (unsigned)fread(sRunKeys, 2, (size_t)hdr[2], f);
+                    sRunStaticsSize = 0; // older recordings end with the keys
+                    if (fread(&sRunStaticsSize, 4, 1, f) != 1 || sRunStaticsSize > RUN_STATICS_MAX ||
+                        fread(sRunStatics, 1, sRunStaticsSize, f) != sRunStaticsSize)
+                        sRunStaticsSize = 0;
                     fclose(f);
                 }
-                const unsigned limit = path ? (unsigned)atoi(path) : 0;
+                unsigned limit = 0;
+                char freezeArg[4] = "";
+                if (path)
+                    sscanf(path, "%u %3s", &limit, freezeArg);
+                sRunFreezeAtEnd = freezeArg[0] == 'F' || freezeArg[0] == 'f';
                 if (limit && limit < sRunCount)
                     sRunCount = limit;
                 if (hdr[0] < 0 || !sRunCount)
@@ -1218,20 +1296,37 @@ void DevTools::RunKeys(uint32 *held, uint32 *down)
         // The same random numbers in the recording and the playback (the game's ReplayRecorder seeds it the same
         // way); without it a replay drifted off the route.
         SetRandSeed(1624633040);
+        // Statics the Special Stage does not reset on a reload (its frame counter: every other frame does things):
+        // from the same values in the recording and the playback.
+        // The objects' statics: copied when recording, put back when playing (see sRunStatics).
+        if (mode == RUN_ARM_REC)
+            RunStaticsCopy(true);
+        else if (sRunStaticsSize)
+            RunStaticsCopy(false);
         sRunFrames0 = sTotGpu + sTotCpu;
         sRunTick0   = svcGetSystemTick();
         Log("run: %s from category %d list %d", mode == RUN_ARM_REC ? "recording" : "playing", sRunCategory, sRunListPos);
     }
     if (sRunMode == RUN_REC) {
+        if (sRunRecLimit && sRunCount >= sRunRecLimit) {
+            // Done: saved as RUNSTOP does, and frozen on this pass.
+            sRunMode = RUN_OFF;
+            freeze   = true;
+            RunSave();
+            snprintf(sRunResult, sizeof(sRunResult), "recorded %u passes, frozen", sRunCount);
+            return;
+        }
         if (sRunCount < RUN_MAX)
-            sRunKeys[sRunCount++] = (uint16)(*held & 0xFFF);
+            sRunKeys[sRunCount++] = (uint16)((*held & 0xFFF) | ((*held >> 16) & 0xF000)); // circle pad bits 28-31 -> 12-15
         return;
     }
     // Playing: the recorded keys instead of the real ones; at the end, the drawn frames a second over the run.
     if (sRunPos < sRunCount) {
-        const uint32 prev = sRunPos ? sRunKeys[sRunPos - 1] : 0;
-        *held             = sRunKeys[sRunPos];
-        *down             = sRunKeys[sRunPos] & ~prev;
+        // The buttons, and the circle pad's directions (KEY_LEFT etc. are the d-pad's or the circle pad's).
+        auto unpack       = [](uint16 k) { return (uint32)(k & 0xFFF) | ((uint32)(k & 0xF000) << 16); };
+        const uint32 prev = sRunPos ? unpack(sRunKeys[sRunPos - 1]) : 0;
+        *held             = unpack(sRunKeys[sRunPos]);
+        *down             = *held & ~prev;
         ++sRunPos;
         return;
     }
@@ -1241,6 +1336,8 @@ void DevTools::RunKeys(uint32 *held, uint32 *down)
              secs > 0 ? frames / secs : 0.0f);
     Log("run: %s", sRunResult);
     sRunMode = RUN_OFF;
+    if (sRunFreezeAtEnd)
+        freeze = true;
     *held = *down = 0;
 }
 
@@ -1600,28 +1697,10 @@ bool DevTools::FrameEnd()
     }
     if (sUfoTime) {
         // SITE SET ufotime 1: the Special Stage's countdown (UFO_Setup->rings, one a second, time over at 0) kept at
-        // 50 or more, to test the floor at leisure. The game's static struct as Plus (GAME_VERSION 1.06) lays it out.
-        struct UfoSetupStatics {
-            uint16 classID;
-            uint8 active;
-            void (*deformCB)();
-            int32 timedOut, encoreStage, machLevel, scoreBonus, machPoints, rings;
-        };
-        static uint32 hash[4];
-        static bool hashed;
-        if (!hashed) {
-            GEN_HASH_MD5("UFO_Setup", hash);
-            hashed = true;
-        }
-        for (int32 i = 0; i < sceneInfo.classCount; ++i) {
-            ObjectClass &oc = objectClassList[stageObjectIDs[i]];
-            if (HASH_MATCH_MD5(oc.hash, hash) && oc.staticVars && *oc.staticVars) {
-                UfoSetupStatics *u = (UfoSetupStatics *)*oc.staticVars;
-                if (u->rings < 50)
-                    u->rings = 50;
-                break;
-            }
-        }
+        // 50 or more, to test the floor at leisure.
+        UfoSetupStatics *u = UfoSetup();
+        if (u && u->rings < 50)
+            u->rings = 50;
     }
     if (sGoto) {
         sGoto = false;

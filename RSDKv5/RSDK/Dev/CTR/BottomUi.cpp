@@ -114,6 +114,18 @@ static void ButtonRect(int i, float *x, float *y)
     *y = BTN_TOP + (i / BTN_COLS) * (BTN_H + BTN_GAP);
 }
 
+// Draws `s` at x and returns the x after it (for a line in several colours).
+static float TextRun(const char *s, float x, float y, float scale, u32 color)
+{
+    C2D_Text t;
+    C2D_TextParse(&t, sTextBuf, s);
+    C2D_TextOptimize(&t);
+    C2D_DrawText(&t, C2D_WithColor, x, y, 0.5f, scale, scale, color);
+    float w = 0, h = 0;
+    C2D_TextGetDimensions(&t, scale, scale, &w, &h);
+    return x + w;
+}
+
 // `wrapW`: the line width for C2D_WordWrap (without it citro2d wraps after every word).
 static void Text(const char *s, float x, float y, float scale, u32 color, u32 flags = 0, float z = 0.5f, float wrapW = 0)
 {
@@ -150,10 +162,10 @@ static float DrawInfo(float top)
     Text(line, 118, y + 18, 0.45f, Rgb(160, 170, 180));
     y += 38;
 
-    // Stacked bar of one 16.7 ms frame: update | draw | flip
+    // Stacked bar of one 16.7 ms frame: update | draw | flip, the rest idle; each figure below in its segment's colour
     const float budget = 16.7f, barX = 8, barW = W - 16 - BAR_W - 4, barH = 12;
     C2D_DrawRectSolid(barX, y, 0.2f, barW, barH, Rgb(34, 40, 48));
-    const u32 colors[3] = { Rgb(80, 140, 235), Rgb(240, 150, 60), Rgb(130, 140, 150) };
+    const u32 colors[3] = { Rgb(80, 140, 235), Rgb(240, 150, 60), Rgb(150, 160, 170) };
     float x = barX;
     for (int i = 0; i < 3; ++i) {
         float w = st.stageMs[i] / budget * barW;
@@ -164,11 +176,25 @@ static float DrawInfo(float top)
         x += w;
     }
     y += 14;
-    snprintf(line, sizeof(line), "update %.1f   draw %.1f   flip %.1f   idle %.1f", st.stageMs[0], st.stageMs[1], st.stageMs[2], st.stageMs[12]);
-    Text(line, 8, y, 0.42f, Rgb(200, 205, 210));
+    {
+        static const char *kName[3] = { "update", "draw", "flip" };
+        float tx = 8;
+        for (int i = 0; i < 3; ++i) {
+            snprintf(line, sizeof(line), "%s %.1f   ", kName[i], st.stageMs[i]);
+            tx = TextRun(line, tx, y, 0.42f, colors[i]);
+        }
+        snprintf(line, sizeof(line), "idle %.1f", st.stageMs[DevTools::STAGE_WAIT]);
+        TextRun(line, tx, y, 0.42f, Rgb(95, 105, 120)); // the bar's empty part
+    }
     y += 11;
-    snprintf(line, sizeof(line), "layers %.1f  sprites %.1f  3d %.1f  faces %.1f", st.stageMs[3], st.stageMs[4], st.stageMs[7], st.stageMs[6]);
-    Text(line, 8, y, 0.38f, Rgb(140, 150, 160));
+    // What draw is made of (the draw lists' calls; in GPU mode their recording) and flip's GPU parts.
+    snprintf(line, sizeof(line), "layers %.1f  sprites %.1f  3d %.1f  faces %.1f", st.stageMs[DevTools::STAGE_LAYERS], st.stageMs[DevTools::STAGE_SPRITES],
+             st.stageMs[DevTools::STAGE_3D], st.stageMs[DevTools::STAGE_FACES]);
+    Text(line, 8, y, 0.38f, Rgb(200, 135, 70));
+    y += 11;
+    snprintf(line, sizeof(line), "flip: geometry %.1f  textures %.1f  GPU frame %.1f", st.stageMs[DevTools::STAGE_PCOPY], st.stageMs[DevTools::STAGE_PXFER],
+             st.stageMs[DevTools::STAGE_PFRAME]);
+    Text(line, 8, y, 0.38f, Rgb(125, 135, 145));
     y += 15;
 
     // Renderer: the mode, who drew the last frame, frames per renderer, and why the CPU drew them in GPU mode.
