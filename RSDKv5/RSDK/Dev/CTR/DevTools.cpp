@@ -727,6 +727,8 @@ static void HandleSession(int ctrl)
                     DevTools::swLock30 = v != 0;
                 else if (!strncmp(path, "force3d", 7))
                     DevTools::swForce3D = v != 0;
+                else if (!strncmp(path, "floorwin", 8))
+                    GpuRender::floorWindows = v != 0;
                 else if (!strncmp(path, "ufotime", 7))
                     sUfoTime = v != 0;
                 else if (!strncmp(path, "depthtint", 9))
@@ -740,7 +742,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|floorwin <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.

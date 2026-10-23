@@ -2194,10 +2194,12 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
 //   software's samples are 2-4 map pixels apart already; farther lines make few runs).
 // Each line is one quad from the finest window that holds it; the rest stay tile runs. The windows hold palette bank
 // 0; the fog banks 1-7 (UFO_Setup: bank k = bank 0 faded towards bank 7 by f_k, chosen per line by distance) are
-// painted over: an A8 mask holds each pixel's fog group (the distinct bank 7 colours its palette indices fade to,
-// (g + 1) * 32) and per line and group a pass blends the group's colour in by f_k (BLEND_FOG). Checked when the
-// palette changes: banks that are not such fades send the floor back to tile runs.
-enum { FLOOR_LEVELS = 2, FLOOR_GROUPS = 7 };
+// painted over: an A4 mask holds each pixel's fog group (the distinct bank 7 colours its palette indices fade to,
+// g + 1; the GPU widens it to (g + 1) * 17) and per line and group a pass blends the group's colour in by f_k
+// (BLEND_FOG). Checked when the palette changes: banks that are not such fades send the floor back to tile runs.
+// VRAM: 2.5 MB for level 0, 0.6 MB for level 1, each made only when FLOOR_RESERVE stays free for the 3D models (on
+// the 2DS the windows took it first and every frame with a 3D scene went to the CPU).
+enum { FLOOR_LEVELS = 2, FLOOR_GROUPS = 7, FLOOR_RESERVE = 800 * 1024 };
 const float FLOOR_STEP0 = 2.0f, FLOOR_STEP1 = 4.0f;
 struct FloorLevel {
     C3D_Tex tex, mask;
@@ -2215,7 +2217,7 @@ struct FloorWin {
     const TileLayer *layer;
     uint32 built, seen; // content hash the windows hold / was seen last frame
     unsigned seenFrames;
-    uint8 group[PALETTE_BANK_SIZE];   // fog group + 1 of each palette index, x 32 (0: transparent or unused)
+    uint8 group[PALETTE_BANK_SIZE];   // fog group + 1 of each palette index (0: transparent or unused), a mask nibble
     uint32 groupColour[FLOOR_GROUPS]; // the groups' bank 7 colours, 0xBBGGRR as the combiner takes them
     unsigned groupCount;
     uint8 fogAlpha[PALETTE_BANK_COUNT]; // f_k * 255
@@ -2265,14 +2267,14 @@ void FloorCell(const FloorLevel &l, const TileLayer *layer, u16 *col, uint8 *msk
                 const unsigned blk = ((by + j) * blocksW + bx + i) << 6;
                 const uint8 *sp    = &tilesetPixels[TILE_DATASIZE * t + j * 8 * 16 + i * 8];
                 u16 *c             = col + blk;
-                uint8 *m           = msk + blk;
+                uint8 *m           = msk + (blk >> 1); // A4: two texels a byte, the even Morton index low
                 for (unsigned y = 0; y < 8; ++y, sp += 16) {
                     u16 *b   = c + my[y];
-                    uint8 *a = m + my[y];
+                    uint8 *a = m + (my[y] >> 1);
                     b[0] = tex[sp[0]], b[1] = tex[sp[1]], b[4] = tex[sp[2]], b[5] = tex[sp[3]];
                     b[16] = tex[sp[4]], b[17] = tex[sp[5]], b[20] = tex[sp[6]], b[21] = tex[sp[7]];
-                    a[0] = grp[sp[0]], a[1] = grp[sp[1]], a[4] = grp[sp[2]], a[5] = grp[sp[3]];
-                    a[16] = grp[sp[4]], a[17] = grp[sp[5]], a[20] = grp[sp[6]], a[21] = grp[sp[7]];
+                    a[0] = (uint8)(grp[sp[0]] | grp[sp[1]] << 4), a[2] = (uint8)(grp[sp[2]] | grp[sp[3]] << 4);
+                    a[8] = (uint8)(grp[sp[4]] | grp[sp[5]] << 4), a[10] = (uint8)(grp[sp[6]] | grp[sp[7]] << 4);
                 }
             }
         return;
@@ -2287,8 +2289,10 @@ void FloorCell(const FloorLevel &l, const TileLayer *layer, u16 *col, uint8 *msk
             const int wx      = px0 + (int)(u * step + step / 2);
             const unsigned t  = FloorTileAt(layer, wx >> 4, wy >> 4);
             const uint8 idx   = tilesetPixels[TILE_DATASIZE * t + (wy & 15) * 16 + (wx & 15)];
-            col[blk + my[v] + mx[u]] = tex[idx];
-            msk[blk + my[v] + mx[u]] = grp[idx];
+            const unsigned m  = blk + my[v] + mx[u];
+            col[m]            = tex[idx];
+            uint8 &a          = msk[m >> 1];
+            a                 = (uint8)((m & 1) ? (a & 0x0F) | grp[idx] << 4 : (a & 0xF0) | grp[idx]);
         }
     }
 }
@@ -2301,14 +2305,14 @@ bool FloorWriteColumn(FloorLevel &l, const TileLayer *layer, int ox, int oy, uns
         return false;
     const unsigned cells = l.Cells(), bpc = l.cellTex / 8, blocksW = l.texW / 8;
     u16 *col   = (u16 *)staging;
-    uint8 *msk = staging + cells * bpc * bpc * 128;
+    uint8 *msk = staging + cells * bpc * bpc * 128; // A4 mask: 32 bytes a block
     const int cx = ox + (int)((sx - (unsigned)ox) & (cells - 1));
     for (unsigned sy = 0; sy < cells; ++sy) {
         const int cy = oy + (int)((sy - (unsigned)oy) & (cells - 1));
         FloorCell(l, layer, col, msk, bpc, 0, sy * bpc, cx, cy, tex);
     }
     CopyToVramStrided(col, (u8 *)l.tex.data + sx * bpc * 128, cells * bpc * bpc * 128, bpc * 128, (blocksW - bpc) * 128);
-    CopyToVramStrided(msk, (u8 *)l.mask.data + sx * bpc * 64, cells * bpc * bpc * 64, bpc * 64, (blocksW - bpc) * 64);
+    CopyToVramStrided(msk, (u8 *)l.mask.data + sx * bpc * 32, cells * bpc * bpc * 32, bpc * 32, (blocksW - bpc) * 32);
     return true;
 }
 
@@ -2326,7 +2330,7 @@ bool FloorWriteRow(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsign
         FloorCell(l, layer, col, msk, blocksW, sx * bpc, 0, cx, cy, tex);
     }
     CopyToVram(col, (u8 *)l.tex.data + sy * bpc * blocksW * 128, blocksW * bpc * 128);
-    CopyToVram(msk, (u8 *)l.mask.data + sy * bpc * blocksW * 64, blocksW * bpc * 64);
+    CopyToVram(msk, (u8 *)l.mask.data + sy * bpc * blocksW * 32, blocksW * bpc * 32);
     return true;
 }
 
@@ -2401,7 +2405,7 @@ bool FloorFog(const TileLayer *layer)
                 return false;
             f.groupColour[f.groupCount++] = c;
         }
-        f.group[i] = (uint8)((g + 1) * 32);
+        f.group[i] = (uint8)(g + 1);
     }
     // Each bank's fade: the best f over the used colours, then every colour within a step and a half of what it gives.
     f.fogAlpha[0] = 0;
@@ -2433,8 +2437,10 @@ bool FloorFog(const TileLayer *layer)
 bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, int y1, int y2, float feet)
 {
     memset(sLineDone, 0, sizeof(sLineDone));
-    if (!sUfoScene || (GpuRender::depthMode & 512) || sFloorFailed)
+    if (!GpuRender::floorWindows || !sUfoScene || (GpuRender::depthMode & 512) || sFloorFailed) {
+        sFloorWhy = GpuRender::floorWindows ? sFloorWhy : "off";
         return true;
+    }
     // Only a layer too big for a texture of its own (the floor), and one at a time: the stage's other rotozoom layers
     // (UFO2's small 3D floor, in fog banks per line) are left to the tile runs.
     FloorWin &f = sFloor;
@@ -2486,9 +2492,11 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
         for (int k = 0; k < FLOOR_LEVELS; ++k) {
             FloorLevel &l = f.level[k];
             l.texW = kTexW[k], l.shift = kShift[k], l.cellTex = kCell[k];
+            if (vramSpaceFree() < l.texW * l.texW * 5 / 2 + FLOOR_RESERVE)
+                break;
             if (!C3D_TexInitVRAM(&l.tex, (u16)l.texW, (u16)l.texW, GPU_RGBA5551))
                 break;
-            if (!C3D_TexInitVRAM(&l.mask, (u16)l.texW, (u16)l.texW, GPU_A8)) {
+            if (!C3D_TexInitVRAM(&l.mask, (u16)l.texW, (u16)l.texW, GPU_A4)) {
                 C3D_TexDelete(&l.tex);
                 break;
             }
@@ -2602,7 +2610,7 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
                 if (pass) {
                     ptex     = (uint8)(TEX_FLOORMASK0 + k);
                     pblend   = BLEND_FOG;
-                    constant = ((uint32)(pass * 32) << 24) | f.groupColour[pass - 1];
+                    constant = ((uint32)(pass * 17) << 24) | f.groupColour[pass - 1]; // the A4 nibble widened
                     fog      = f.fogAlpha[bank]; // BLEND_FOG: the line's bank's fade
                 }
                 Batch *last = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
@@ -2910,6 +2918,7 @@ void ResetTexEnv()
 unsigned GpuRender::depthMode = 0;
 int GpuRender::stereoFar       = 6;
 bool GpuRender::depthTint      = false;
+bool GpuRender::floorWindows   = false;
 const char *GpuRender::RotoTexWhy()
 {
     static char buf[48];

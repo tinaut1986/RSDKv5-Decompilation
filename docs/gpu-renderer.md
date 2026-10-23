@@ -223,18 +223,26 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
   runs (`sLineDone`). VRAM: 3.75 MB (both windows and masks); ~185 KB left in the Special Stage.
 - **Fog**: UFO_Setup makes banks 1-6 as `SetPaletteFade(k, 0, 7, 36k)` over indices 160-255 and picks the bank per
   line by distance; bank 7 holds a fog colour per ramp of 8 (green, blue, grey, red...: 6 distinct in stage 1). The
-  windows hold bank 0, an A8 mask holds each pixel's fog group ((g + 1) * 32, the distinct bank 7 colours of the indices
+  windows hold bank 0, an A4 mask holds each pixel's fog group (g + 1, the distinct bank 7 colours of the indices
   it uses), and per line and group a pass blends the group colour in by f_k (`BLEND_FOG`: alpha test EQUAL, constant
   colour, blend constant alpha). `FloorFog` fits f_k per bank from the palette and refuses (tile runs) when a bank is
   not such a fade within a step and a half.
 - Rebuilt when the colours the floor uses (any bank), the layout or its tiles change, once held two frames.
   `sTileEpoch` now moves only when an animated tile's picture really changes (DrawAniTile rewrites tiles every frame,
   mostly the same).
-- Results in Azahar (frozen frames, turning): stage 1 floor 2780-5020 quads as runs -> 720-1580; stage 2 frame
+- Results in Azahar (frozen frames, turning; quad counts only): stage 1 floor 2780-5020 quads as runs -> 720-1580; stage 2 frame
   ~6950 -> 2500-3300 quads (it no longer goes over the 6000-quad limit). Against the CPU renderer the windows differ as
   much as the runs did (stage 2: 466 vs 507 pixels); the level-1 lines (rows ~140-160) differ a few hundred pixels more
   from the reduced resolution, hardly visible (fogged). With FORCE 3D cmdbuf peaked at 37 %.
-- Not measured on hardware (consoles off): the point is the 2DS's floor build (~4-6 ms of CPU turning) and GPU time.
+- **Measured on the 2DS (2026-10-23): slower than the tile runs, so off by default** (`SITE SET floorwin 1`, not
+  saved). Turning in stage 1: windows 55.1 fps (pcopy 6.5 ms, pframe 3.1) vs runs 59.9 (5.4, 1.5); with FORCE 3D 45.5
+  (22 right eyes dropped) vs 58.6. Stage 2: 43.9 vs 48.6. Frozen (no window moves) both cost the same (pcopy 12.7 vs
+  13.2 in stage 2). Causes: a window move's copies are `C3D_SyncTextureCopy`, which waits for the GPU's queue; the fog
+  passes (one per group, full lines, twice in 3D) add GPU fill. The first try also took the VRAM the 3D models
+  needed (every 3D frame to the CPU): masks are A4 now and each window keeps FLOOR_RESERVE (800 KB) free.
+- What stage 2 really spends (~12 ms of pcopy) is its small 3D floor drawn in software every frame: the next target.
+  To revive the windows: queue the copies (GX_TextureCopy into the frame's queue, a staging area per copy) and fog
+  without per-group passes.
 - Still: stage 2's small 3D floor (16x16 tiles, fog banks per line) is tile runs and sometimes a software layer
   (`RotoTex` needs one bank: the same fog passes would do); `SITE SET depthmode 256` (rotozoom layers in software,
   debug) draws that layer black, the CPU renderer draws it: a bug of the debug mode.
@@ -263,8 +271,9 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Debug: `SITE SET depthmode 512` draws them as tile runs again; `SITE REFUSED` ends with `roto texture <why>` (`-`
   drawn from it; `too big`, `no vram`, `banks` lines in several palette banks, `changing`, `quads`, `range`) and the
   VRAM free; `SITE STATE` `roto N us M quads tex B` (B: builds since boot).
-- Not measured on hardware yet (consoles off): expected to save most of the title's roto build time (~3.4 ms of CPU on
-  the New 3DS for 3362 quads) and GPU time; check `SITE STATE` and fps on the 2DS.
+- Measured on the 2DS (2026-10-23): roto build 3.9 -> 0.9 ms, pcopy 5.3 -> 1.3 ms, 55.0 -> 58.5 fps; with FORCE 3D
+  56.2 -> 57.2 fps, the GPU slower (pframe 4.0 -> 7.7 ms: the hot passes, and sampling a big texture at steps of up to
+  2.5 texels).
 - Next: the Special Stage floor (~512x512 tiles) does not fit: a window texture around the player for near lines plus
   a reduced copy of the whole map for far ones, fog by distance in the combiner (issue #7).
 
