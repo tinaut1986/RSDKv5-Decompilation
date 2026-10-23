@@ -16,6 +16,7 @@
 #include "RSDK/Dev/CTR/GameInfo.h"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Dev/CTR/UiFont.hpp"
+#include "RSDK/Dev/CTR/PortVersion.h"
 #include <time.h>
 
 using namespace RSDK;
@@ -543,7 +544,7 @@ static void DrawOptionsTab()
     if (sLastOpt >= 0)
         Text(kOptHelp[sLastOpt], 12, HEADER_H + 8 + 2 * 38 + 6, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
     Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, Rgb(90, 115, 145), C2D_AlignCenter);
-    Text("BUILD " __DATE__, W / 2.0f, H - 17, 0.4f, Rgb(90, 115, 145), C2D_AlignCenter);
+    Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, Rgb(90, 115, 145), C2D_AlignCenter);
 }
 
 // ---------------------------------------------------------------- UPDATES tab, the update prompt

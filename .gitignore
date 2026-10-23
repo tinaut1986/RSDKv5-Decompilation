@@ -267,3 +267,4 @@ android/local.properties
 *.romfs
 .3ds_ftp_ip
 *.map
+RSDKv5/RSDK/Dev/CTR/PortVersion.h
