@@ -32,11 +32,14 @@ uint32 RSDK::storageDefrags[DATASET_MAX], RSDK::storageFails[DATASET_MAX]; // de
 bool32 RSDK::InitStorage()
 {
 #if RETRO_PLATFORM == RETRO_3DS
-    dataStorage[DATASET_STG].storageLimit = 0x1032900; // 16.19751 Mib
-    dataStorage[DATASET_MUS].storageLimit = 0x42ff00;  // 4.187256 Mib
-    dataStorage[DATASET_SFX].storageLimit = 0x1400000; // 20 Mib
-    dataStorage[DATASET_STR].storageLimit = 1 * 0xf000;  // 0.058594 Mib
-    dataStorage[DATASET_TMP].storageLimit = 1 * 0x600000;  // 6 Mib
+    // Sized on the most each pool used in a sweep of the game's scenes in Azahar (2026-10-23, see docs/PLAN.md): with
+    // the old sizes STG filled up in a Special Stage and MUS in Lava Reef, and a refused allocation is a NULL the
+    // engine does not check (a music file read to address 0 crashed). SFX never went past 11.5 MB of its 20.
+    dataStorage[DATASET_STG].storageLimit = 20 * 1024 * 1024; // most seen: 16.2 MB (full)
+    dataStorage[DATASET_MUS].storageLimit = 6 * 1024 * 1024;  // 4.1 MB (the stream's buffer and music ring live here)
+    dataStorage[DATASET_SFX].storageLimit = 13 * 1024 * 1024; // 11.4 MB
+    dataStorage[DATASET_STR].storageLimit = 128 * 1024;       // 59 KB of 60
+    dataStorage[DATASET_TMP].storageLimit = 7 * 1024 * 1024;  // 5.6 MB
 #else
     dataStorage[DATASET_STG].storageLimit = 24 * 1024 * 1024; // 24MB
     dataStorage[DATASET_MUS].storageLimit = 8 * 1024 * 1024;  //  8MB
