@@ -55,6 +55,10 @@ struct Stats {
 };
 void GetStats(Stats *out);
 const char *FtpStatus(); // "192.168.1.141:5000" or why the server is off
+// The DEBUG tab's FTP switch (saved, on by default): starts or stops the server; on again retries a failed start.
+extern bool swFtp;
+bool FtpRunning();
+void SetFtp(bool on);
 void Mark();             // writes a mark into log.txt and the perf CSV
 // The switches survive between sessions, in the port's file with the player's options (Port::Save,
 // port-settings.ini), written on every change and read at start. DRAW LISTS is not saved: off it leaves a blank

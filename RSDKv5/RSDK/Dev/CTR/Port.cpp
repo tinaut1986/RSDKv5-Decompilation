@@ -122,7 +122,9 @@ bool Port::HideHud(uint16 classID)
 
 // ---------------------------------------------------------------- network (from ../zelda-tmc-3ds net_3ds.c)
 
-enum { SOC_BUFFER_SIZE = 1024 * 1024 };
+// The sockets service's buffer, never given back: 1 MB on the New 3DS, 256 KB on the Old 3DS / 2DS, as in
+// ../legend-of-doom-3ds (net_3ds.c), whose 2DS had no megabyte to spare either; here a megabyte failed on the 2DS after
+// the engine's pools and the updater's libraries ("NO NETWORK SERVICE"). Transfers are slower with less.
 static LightLock sNetLock = 1; // LightLock's unlocked value
 static int sNetRefs;
 static void *sSocBuffer;
@@ -133,9 +135,16 @@ bool Port::NetAcquire()
     LightLock_Lock(&sNetLock);
     bool ok = true;
     if (!sSocBuffer) {
-        sAcReady   = R_SUCCEEDED(acInit());
-        sSocBuffer = memalign(0x1000, SOC_BUFFER_SIZE);
-        if (!sAcReady || !sSocBuffer || R_FAILED(socInit((u32 *)sSocBuffer, SOC_BUFFER_SIZE))) {
+        const Result ac = acInit();
+        sAcReady        = R_SUCCEEDED(ac);
+        bool isNew3DS = true;
+        APT_CheckNew3DS(&isNew3DS);
+        const u32 size = isNew3DS ? 1024 * 1024 : 256 * 1024;
+        sSocBuffer     = memalign(0x1000, size);
+        const Result soc = sAcReady && sSocBuffer ? socInit((u32 *)sSocBuffer, size) : -1;
+        DEV_LOG("network: acInit %08lx, buffer %s (%lu KB), socInit %08lx", (unsigned long)ac, sSocBuffer ? "ok" : "NULL",
+                (unsigned long)(size >> 10), (unsigned long)soc);
+        if (!sAcReady || !sSocBuffer || R_FAILED(soc)) {
             free(sSocBuffer);
             sSocBuffer = NULL;
             if (sAcReady)
@@ -163,7 +172,9 @@ void Port::NetRelease()
 bool Port::WifiConnected()
 {
     u32 wifi = 0;
-    return sAcReady && R_SUCCEEDED(ACU_GetWifiStatus(&wifi)) && wifi != 0;
+    if (sAcReady && R_SUCCEEDED(ACU_GetWifiStatus(&wifi)))
+        return wifi != 0;
+    return osGetWifiStrength() > 0; // without AC, as ../legend-of-doom-3ds
 }
 
 // ---------------------------------------------------------------- frame counter, restart

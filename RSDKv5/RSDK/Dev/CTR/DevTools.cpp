@@ -1165,6 +1165,35 @@ static bool StartServer()
     return true;
 }
 
+// FTP OFF (DEBUG tab): the thread ends within a nap (it checks sRun between polls); the network stays up.
+static void StopServer()
+{
+    sRun = false;
+    if (sThread) {
+        if (threadJoin(sThread, 3000000000ULL) == 0)
+            threadFree(sThread);
+        sThread = NULL;
+    }
+    CloseSocket(&sListen);
+    free(sIo);
+    sIo = NULL;
+    Port::NetRelease();
+    snprintf(sStatus, sizeof(sStatus), "OFF");
+}
+
+bool DevTools::FtpRunning() { return sRun; }
+
+void DevTools::SetFtp(bool on)
+{
+    swFtp = on;
+    if (on && !sRun) {
+        if (!StartServer())
+            Log("ftp: not started: %s", sStatus);
+    }
+    else if (!on && sRun)
+        StopServer();
+}
+
 // ---------------------------------------------------------------- perf timing
 
 static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes", "pcopy", "pxfer", "pframe", "wait" };
@@ -1279,6 +1308,7 @@ unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 bool DevTools::freeze         = false;
 bool DevTools::swForce3D      = false;
+bool DevTools::swFtp          = true;
 
 void DevTools::RunKeys(uint32 *held, uint32 *down)
 {
@@ -1595,8 +1625,8 @@ void DevTools::SaveSettings() { Port::Save(); }
 
 void DevTools::SaveSwitches(void *file)
 {
-    fprintf((FILE *)file, "maxskip=%d\nflipcopy=%d\nsyncdraw=%d\nvblank=%d\ngpu3d=%d\nstereofar=%d\nforce3d=%d\n", swMaxSkip, (int)swFlipCopy,
-            (int)swSyncDraw, (int)swVblankWait, (int)swGpu3D, GpuRender::stereoFar, (int)swForce3D);
+    fprintf((FILE *)file, "maxskip=%d\nflipcopy=%d\nsyncdraw=%d\nvblank=%d\ngpu3d=%d\nstereofar=%d\nforce3d=%d\nftp=%d\n", swMaxSkip, (int)swFlipCopy,
+            (int)swSyncDraw, (int)swVblankWait, (int)swGpu3D, GpuRender::stereoFar, (int)swForce3D, (int)swFtp);
 }
 
 static void LoadSettings()
@@ -1625,6 +1655,8 @@ static void LoadSettings()
             DevTools::swForce3D = v != 0;
         else if (!strcmp(key, "stereofar"))
             GpuRender::stereoFar = v < 0 ? 0 : v > 16 ? 16 : v;
+        else if (!strcmp(key, "ftp"))
+            DevTools::swFtp = v != 0;
     }
     fclose(f);
 }
@@ -1632,7 +1664,10 @@ static void LoadSettings()
 void DevTools::Init()
 {
     LoadSettings();
-    StartServer();
+    if (swFtp)
+        StartServer();
+    else
+        snprintf(sStatus, sizeof(sStatus), "OFF");
     OpenCsv();
     BottomUi::Init(); // the graphical bottom screen; the text console menu stays as the fallback
     sSecondStart = sLastFrameTick = svcGetSystemTick();

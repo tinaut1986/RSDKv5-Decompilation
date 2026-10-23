@@ -117,12 +117,19 @@ static void ValCapture(char *o, unsigned c, bool *on)
     *on = DevTools::freeze;
 }
 static void TapCapture() { DevTools::TapCapture(); }
+static void ValFtp(char *o, unsigned c, bool *on)
+{
+    snprintf(o, c, "%s", DevTools::FtpRunning() ? "ON" : DevTools::swFtp ? "FAILED" : "OFF");
+    *on = DevTools::FtpRunning();
+}
+// OFF -> ON; ON -> OFF; a failed start (FAILED) -> tries again
+static void TapFtp() { DevTools::SetFtp(!DevTools::FtpRunning()); }
 
 static const Button kButtons[] = {
     { "RENDERER", TapRenderer, ValRenderer }, { "FRAME SKIP", TapFrameSkip, ValFrameSkip }, { "MAX SKIP", TapMaxSkip, ValMaxSkip },
     { "LOG MARK", TapMark, ValMark },         { "DRAW LISTS", TapDraw, ValDraw },            { "FLIP COPY", TapFlip, ValFlip },
     { "3D SCENES", TapGpu3D, ValGpu3D },      { "FORCE 3D", TapForce3D, ValForce3D },    { "DEPTH TINT", TapDepthTint, ValDepthTint },
-    { "CAPTURE", TapCapture, ValCapture },
+    { "CAPTURE", TapCapture, ValCapture },    { "FTP", TapFtp, ValFtp },
 };
 
 #endif // MANIA_DEV_TOOLS
