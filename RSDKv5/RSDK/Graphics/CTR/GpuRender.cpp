@@ -72,7 +72,9 @@ struct SoftJob {
 // screen holds / does not hold the mask colour (see the mask frame in Render).
 // BLEND_HOT: a rotozoom texture's hot colour (RotoTex): the mask's texels equal to the constant's top byte, painted
 // opaque in the constant's colour (0xRRGGBB in the low bytes, as the texture combiner takes it).
-enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL, BLEND_MASKED, BLEND_UNMASKED, BLEND_HOT };
+// BLEND_TINT: INK_TINT with a grey table (TintModel): the frame drawn so far is copied into sGrabTex and the quad redraws
+// it from there through the combiner, grey = k * (r + g + b) + c (Batch::constant: k in the low byte, c above it).
+enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL, BLEND_MASKED, BLEND_UNMASKED, BLEND_HOT, BLEND_TINT };
 
 struct Batch {
     uint8 tex, blend;
@@ -799,7 +801,8 @@ bool AddQuad(uint8 tex, uint8 blend, float x0, float y0, float x1, float y1, flo
     if (sQuadCount >= MAX_QUADS)
         return false;
     if (!sBatchCount || sBatches[sBatchCount - 1].tex != tex || sBatches[sBatchCount - 1].blend != blend || blend == BLEND_FILL ||
-        sBatches[sBatchCount - 1].depth != sDepth || sBatches[sBatchCount - 1].scissor != sScissor) {
+        sBatches[sBatchCount - 1].depth != sDepth || sBatches[sBatchCount - 1].scissor != sScissor
+        || (blend == BLEND_TINT && sBatches[sBatchCount - 1].constant != constant)) {
         if (sBatchCount >= MAX_BATCHES)
             return false;
         sBatches[sBatchCount++] = { tex, blend, sQuadCount, 0, constant, sDepth, sScissor };
@@ -847,6 +850,86 @@ bool AddQuadFree(uint8 tex, uint8 blend, const float *px, const float *py, const
     Vtx *v = &sVbo[sCur][(sQuadCount - 1) * 4];
     for (int i = 0; i < 4; ++i)
         v[i] = { Quarter(px[i]), Quarter(py[i]), (int16)tu[i], (int16)tv[i], r, g, b, a };
+    return true;
+}
+
+// ---------------------------------------------------------------- INK_TINT
+
+// The frame drawn so far, copied here by a BLEND_TINT batch (the render target's tiled RGB565 buffer, 240 x 400, into a
+// texture 256 x 512 with the same tile rows). Made at the first tint of a scene, freed with the scene's other textures.
+C3D_Tex sGrabTex;
+bool sGrabReady;
+
+bool EnsureGrab()
+{
+    if (sGrabReady)
+        return true;
+    // VRAM first (only the GPU touches it), then the linear heap
+    sGrabReady = C3D_TexInitVRAM(&sGrabTex, 256, 512, GPU_RGB565) || C3D_TexInit(&sGrabTex, 256, 512, GPU_RGB565);
+    if (sGrabReady) {
+        C3D_TexSetFilter(&sGrabTex, GPU_NEAREST, GPU_NEAREST);
+        C3D_TexSetWrap(&sGrabTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    }
+    return sGrabReady;
+}
+
+void FreeGrab()
+{
+    if (sGrabReady)
+        C3D_TexDelete(&sGrabTex);
+    sGrabReady = false;
+}
+
+// The tint table as the combiner can do it: every colour to a grey min(255, k * (r + g + b) + c) on 8-bit channels (the
+// Plus pause menu: (r + g + b) * 256 / 680; the engine's default: the 5-bit average + 6). k and c in 1/255 come back
+// packed as Batch::constant; false for other tables (FXRuby's inversion, the pre-Plus pause menu's HSL), which stay on
+// the CPU. Checked on samples every time: a game may rewrite its table.
+bool TintModel(const uint16 *table, uint32 *packed)
+{
+    auto widen = [](uint16 c, int *r, int *g, int *b) {
+        const int r5 = c >> 11, g6 = (c >> 5) & 0x3F, b5 = c & 0x1F;
+        *r = (r5 << 3) | (r5 >> 2), *g = (g6 << 2) | (g6 >> 4), *b = (b5 << 3) | (b5 >> 2);
+    };
+    int r, g, b, sr, sg, sb;
+    widen(table[0], &r, &g, &b);
+    const int c = r; // black: the offset alone
+    const uint16 mid = 0x4208; // a dark grey (8, 16, 8): far below the cap
+    widen(mid, &sr, &sg, &sb);
+    widen(table[mid], &r, &g, &b);
+    const int sum = sr + sg + sb;
+    const int k = ((r - c) * 255 + sum / 2) / sum;
+    if (c < 0 || c > 255 || k <= 0 || k > 255)
+        return false;
+    uint32 x = 12345;
+    for (int n = 0; n < 256; ++n) {
+        x = x * 1103515245u + 12345u;
+        const uint16 i = n < 2 ? (n ? 0xFFFF : 0x0000) : (uint16)(x >> 16);
+        widen(i, &sr, &sg, &sb);
+        widen(table[i], &r, &g, &b);
+        int want = (k * (sr + sg + sb) + 127) / 255 + c;
+        want     = want > 255 ? 255 : want;
+        // One 5-bit step and a half of slack: the tables round in 5-bit units, the combiner in 8-bit ones.
+        if (abs(r - want) > 12 || abs(g - want) > 12 || abs(b - want) > 12)
+            return false;
+    }
+    *packed = (uint32)k | ((uint32)c << 8);
+    return true;
+}
+
+// A tint quad of four free corners: texel coordinates are the grab texture's own for the screen point (the target is
+// the top screen turned: its memory row is the screen x, its column 240 minus the screen y). Never shifted for an eye: it
+// must read the place it covers.
+bool AddTintQuad(const float *px, const float *py, uint32 packed)
+{
+    const int8 depth = sDepth;
+    sDepth           = 0;
+    const bool ok    = AddQuad(TEX_SPRITE, BLEND_TINT, 0, 0, 0, 0, 0, 0, 0, 0, 256, 512, 255, 255, 255, 255, packed);
+    sDepth           = depth;
+    if (!ok)
+        return false;
+    Vtx *q = &sVbo[sCur][(sQuadCount - 1) * 4];
+    for (int j = 0; j < 4; ++j)
+        q[j].x = Quarter(px[j]), q[j].y = Quarter(py[j]), q[j].u = (int16)(240.0f - py[j] + 0.5f), q[j].v = (int16)(px[j] + 0.5f);
     return true;
 }
 
@@ -1184,8 +1267,16 @@ bool EmitRing(const Cmd &c, int32 x, int32 y, int32 inner, int32 outer, uint32 c
     if (outer <= 0 || inner >= outer)
         return true;
     uint8 blend;
-    bool skip;
-    if (!SpriteInk(ink, &alpha, &blend, &skip))
+    bool skip = false;
+    uint32 tint = 0;
+    if (ink == INK_TINT) {
+        if (!(const uint16 *)tintLookupTable)
+            return true;
+        if (!TintModel((const uint16 *)tintLookupTable, &tint) || !EnsureGrab())
+            return Refuse(GpuRender::REASON_INK, (unsigned)ink);
+        blend = BLEND_TINT;
+    }
+    else if (!SpriteInk(ink, &alpha, &blend, &skip))
         return false;
     if (skip)
         return true;
@@ -1217,7 +1308,7 @@ bool EmitRing(const Cmd &c, int32 x, int32 y, int32 inner, int32 outer, uint32 c
             px[2] = cx + ri * kCircle.x[k], py[2] = cy + ri * kCircle.y[k];
             px[3] = cx + ri * kCircle.x[i], py[3] = cy + ri * kCircle.y[i];
         }
-        if (!AddSolidQuad(blend, px, py, r, g, b, (uint8)alpha))
+        if (!(blend == BLEND_TINT ? AddTintQuad(px, py, tint) : AddSolidQuad(blend, px, py, r, g, b, (uint8)alpha)))
             return Refuse(GpuRender::REASON_QUAD_LIMIT);
     }
     return true;
@@ -1534,8 +1625,16 @@ bool EmitRect(const Cmd &c)
             else if (alpha <= 0)
                 return true;
             break;
+        case INK_TINT:
+            if (!(const uint16 *)tintLookupTable)
+                return true;
+            blend = BLEND_TINT;
+            break;
         default: return Refuse(GpuRender::REASON_INK, (unsigned)ink);
     }
+    uint32 tint = 0;
+    if (blend == BLEND_TINT && (!TintModel((const uint16 *)tintLookupTable, &tint) || !EnsureGrab()))
+        return Refuse(GpuRender::REASON_INK, (unsigned)ink);
     if (!screenRelative) {
         x      = FROM_FIXED(x) - c.pos[0];
         y      = FROM_FIXED(y) - c.pos[1];
@@ -1556,6 +1655,11 @@ bool EmitRect(const Cmd &c)
     }
     if (width <= 0 || height <= 0)
         return true;
+    if (blend == BLEND_TINT) {
+        const float px[4] = { (float)x, (float)(x + width), (float)(x + width), (float)x };
+        const float py[4] = { (float)y, (float)y, (float)(y + height), (float)(y + height) };
+        return AddTintQuad(px, py, tint) || Refuse(GpuRender::REASON_QUAD_LIMIT);
+    }
 
     // The colour as the software renderer stores it (RGB565), widened back to 8 bits by bit replication.
     const uint16 c16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
@@ -3162,6 +3266,7 @@ bool GpuRender::Render(const Stream &stream)
         sRotoTexFailed = NULL;
         FreeFloor();
         FreeModels();
+        FreeGrab();
         ResetCaches();
     }
     TrackPalette(false, stream.basePalette);
@@ -3525,6 +3630,45 @@ bool GpuRender::Render(const Stream &stream)
             Mtx_Translate(&m, roundf((eye ? 0.5f : -0.5f) * bt.depth * sSlider), 0.0f, 0.0f, true);
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &m);
             curDepth = bt.depth;
+        }
+        if (bt.blend == BLEND_TINT) {
+            // INK_TINT: what this eye's target holds so far goes to the GPU (split), the transfer engine copies it into
+            // the grab texture (queued after that part), and the quads redraw it grey from there, opaque:
+            // k * r + k * g + k * b + c over four combiner stages (each clamps at 1, as the table caps at 255).
+            C3D_FrameSplit(0);
+            GX_TextureCopy((u32 *)target->frameBuf.colorBuf, GX_BUFFER_DIM(240 * 8 * 2 >> 4, 0), (u32 *)sGrabTex.data,
+                           GX_BUFFER_DIM(240 * 8 * 2 >> 4, (256 - 240) * 8 * 2 >> 4), 240 * 400 * 2, 8);
+            C3D_TexBind(0, &sGrabTex);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / 256.0f, -1.0f / 512.0f, 0.0f, 0.0f);
+            const u32 k = bt.constant & 0xFF, cc = (bt.constant >> 8) & 0xFF;
+            static const GPU_TEVOP_RGB kOp[3] = { GPU_TEVOP_RGB_SRC_R, GPU_TEVOP_RGB_SRC_G, GPU_TEVOP_RGB_SRC_B };
+            for (int st = 0; st < 3; ++st) {
+                C3D_TexEnv *env = C3D_GetTexEnv(st);
+                C3D_TexEnvInit(env);
+                C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_CONSTANT, st ? GPU_PREVIOUS : GPU_CONSTANT);
+                C3D_TexEnvOpRgb(env, kOp[st], GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR);
+                C3D_TexEnvFunc(env, C3D_RGB, st ? GPU_MULTIPLY_ADD : GPU_MODULATE);
+                C3D_TexEnvSrc(env, C3D_Alpha, st ? GPU_PREVIOUS : GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+                C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+                C3D_TexEnvColor(env, 0xFF000000u | k << 16 | k << 8 | k);
+            }
+            C3D_TexEnv *env = C3D_GetTexEnv(3);
+            C3D_TexEnvInit(env);
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, (GPU_TEVSRC)0);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_ADD);
+            C3D_TexEnvSrc(env, C3D_Alpha, GPU_PREVIOUS, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+            C3D_TexEnvColor(env, 0xFF000000u | cc << 16 | cc << 8 | cc);
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+            if (maskFrame) { // what it covers is no longer the mask colour
+                C3D_StencilTest(true, GPU_ALWAYS, 0, 0xFF, 0xFF);
+                C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_ZERO);
+            }
+            C3D_DrawElements(GPU_TRIANGLES, (int)(bt.count * 6), C3D_UNSIGNED_SHORT, sIdx + bt.first * 6);
+            ResetTexEnv();
+            curBlend = curTex = -1;
+            curTint  = -1000;
+            continue;
         }
         const bool floorTex = bt.tex >= TEX_FLOOR0 && bt.tex <= TEX_FLOOR4;
         if (curTex != bt.tex && floorTex) {

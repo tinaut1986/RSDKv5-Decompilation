@@ -85,7 +85,7 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - **Special Stage**: with `SITE SET gpu3d 1` (off at boot until merged) the 3D scenes are GPU instances and the floor
   (a rotozoom layer) is drawn as tile runs (see "Rotozoom layers as tile runs"): ~17 -> ~40 -> **48-60 fps** on the 2DS
   (60 looking down the track, 48-55 turning over the big green field). Every frame is a GPU frame.
-- Known CPU-frame reasons still possible: `INK TINT`, `LINE` (the Special Stage's wireframe item boxes),
+- Known CPU-frame reasons still possible: `INK TINT` (tables other than grey, since feat/gpu-ink-tint), `LINE` (the Special Stage's wireframe item boxes),
   `DEFORMED SPRITE`, `ANI TILE` during the draw lists, `DEV TEXT`, a clip smaller than the screen under a rotated sprite,
   a face or a 3D scene. Water zones (Hydrocity, Chemical Plant...) have not been visited in GPU mode yet: a sprite
   crossing the water line still refuses the frame (`WATER LINE`); layers crossing it go through the software layer path.
@@ -534,6 +534,26 @@ without FORCE 3D, sampled 15 s after the load, `tools/site.sh STATE`):
   load (STATE answers with the old scene while the main thread loads: wait for the `load:` line or the new scene
   number), play, `tools/shot.sh`.
 - Debug switches left on the console: `frameskip 0`, `force3d` as last set, `ufotime 1` (not saved); `ufonofall` off.
+
+## INK_TINT on the GPU (feat/gpu-ink-tint, 2026-10-23, #5)
+
+- The pause menu's grey (a full-screen `DrawRect` with `INK_TINT`) made every paused frame a CPU frame. The ink reads
+  the screen, so a `BLEND_TINT` batch splits the GPU frame there (`C3D_FrameSplit`), queues a `GX_TextureCopy` of the eye's
+  target (tiled RGB565, 240 x 400) into `sGrabTex` (256 x 512, same tile rows: 16-byte gap per tile row) and redraws its
+  quads from it, opaque, through four combiner stages: `k*r`, `+ k*g`, `+ k*b` (`GPU_TEVOP_RGB_SRC_R/G/B`,
+  `MULTIPLY_ADD`), `+ c`. Each stage clamps at 1, as the table caps at 255.
+- Texel coordinates are the target's own: memory row = screen x, column = 240 - screen y (`uvscale` 1/256, -1/512). Tint
+  quads are never shifted per eye (depth 0): they must read the place they cover.
+- `TintModel` fits the table as grey `min(255, k*(r+g+b) + c)` and checks 256 samples (1.5 5-bit steps of slack); the
+  Plus pause table is k = 256/680, c = 0; the engine's default is k = 1/3, c = 48. Other tables (FXRuby's inversion, the
+  pre-Plus pause menu's HSL) are refused (`INK TINT`, a CPU frame as before). `DrawRect` and `DrawCircle(Outline)` take
+  it; faces and lines do not.
+- `sGrabTex` (256 KB, VRAM, else the linear heap) is made at the first tint of a scene and freed with the scene.
+- Checked in Azahar (Green Hill paused, frozen): GPU and CPU pictures match except a few greys one 5-bit step lighter on
+  the GPU (combiner rounding); the GPU/CPU gap is the same as without the pause (parallax differences between shots).
+  Not measured on the 2DS yet; a split costs one more command list submission per eye.
+- Side effect: after a split, `cmdEyeKB` and the right-eye overflow guard count only the commands after it (an
+  underestimate on pause frames, which are light).
 
 ## Next steps (suggested order)
 
