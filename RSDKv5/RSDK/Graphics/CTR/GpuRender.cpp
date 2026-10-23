@@ -1702,6 +1702,9 @@ bool EmitLine(const Cmd &c)
     return runs.ok ? true : Refuse(GpuRender::REASON_QUAD_LIMIT);
 }
 
+void ConvertSoft(const SoftJob &j);
+void UploadSoftRows(unsigned texY, unsigned rows);
+
 bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int kind)
 {
     if (!sSoftData || !C3DPresent::Staging())
@@ -1743,9 +1746,13 @@ bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int k
     currentScreen     = keepScreen;
     memcpy(gfxLineBuffer, keepLines, sizeof(keepLines));
 
+    // Into its rows of the texture now: the next software layer clears the same rows of screen 1 (two in one frame
+    // over the same lines: the Special Stage 2's small floor vanished under the big one).
     const unsigned texY        = sSoftRows;
     sSoftJobs[sSoftJobCount++] = { (int16)x1, (int16)y1, (int16)x2, (int16)y2, (int16)texY };
     sSoftRows                  = (texY + (unsigned)h + 7) & ~7u; // jobs start on a block row
+    ConvertSoft(sSoftJobs[sSoftJobCount - 1]);
+    UploadSoftRows(texY, (unsigned)h);
     ++sStats.softLayers;
     if (!AddQuad(TEX_SOFT, BLEND_NORMAL, (float)x1, (float)y1, (float)x2, (float)y2, (float)x1, (float)texY, (float)x2, (float)(texY + h), SOFT_W, SOFT_H, 255, 255,
                  255, 255))
@@ -1754,7 +1761,7 @@ bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int k
 }
 
 // Copies a software layer's rows from screen 1 into the staging buffer as RGBA5551 (the key colour transparent), in
-// plain rows: the display-transfer engine tiles the whole buffer into the texture afterwards (UploadSoft).
+// plain rows: the display-transfer engine tiles them into the texture right after (UploadSoftRows).
 void ConvertSoft(const SoftJob &j)
 {
     const ScreenInfo &scr = screens[1];
@@ -1769,11 +1776,15 @@ void ConvertSoft(const SoftJob &j)
     }
 }
 
-void UploadSoft()
+// Tiles rows [texY, texY + rows) of the staging buffer into the texture (texY on a block row; rows rounded up to one).
+void UploadSoftRows(unsigned texY, unsigned rows)
 {
-    void *staging = C3DPresent::Staging();
-    GSPGPU_FlushDataCache(staging, SOFT_W * SOFT_H * 2);
-    C3D_SyncDisplayTransfer((u32 *)staging, GX_BUFFER_DIM(SOFT_W, SOFT_H), (u32 *)sSoftTex.data, GX_BUFFER_DIM(SOFT_W, SOFT_H),
+    rows = (rows + 7) & ~7u;
+    if (texY + rows > SOFT_H)
+        rows = SOFT_H - texY;
+    u16 *staging = (u16 *)C3DPresent::Staging() + texY * SOFT_W;
+    GSPGPU_FlushDataCache(staging, rows * SOFT_W * 2);
+    C3D_SyncDisplayTransfer((u32 *)staging, GX_BUFFER_DIM(SOFT_W, rows), (u32 *)((u16 *)sSoftTex.data + texY * SOFT_W), GX_BUFFER_DIM(SOFT_W, rows),
                             GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB5A1) |
                                 GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB5A1) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
 }
@@ -3276,10 +3287,6 @@ bool GpuRender::Render(const Stream &stream)
         else
             ConvertSprite(sPending[i]);
     }
-    for (unsigned i = 0; i < sSoftJobCount; ++i)
-        ConvertSoft(sSoftJobs[i]);
-    if (sSoftJobCount)
-        UploadSoft();
     if (sTileDirtyHi > sTileDirtyLo) {
         GSPGPU_FlushDataCache((u8 *)sTileData + sTileDirtyLo, sTileDirtyHi - sTileDirtyLo);
         ++sStats.atlasFlushes;
