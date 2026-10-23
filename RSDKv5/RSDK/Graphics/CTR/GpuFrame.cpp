@@ -284,6 +284,13 @@ void GpuFrame::Flush()
             }
             case CMD_SPRITE: DrawSpriteFlipped(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9]); break;
             case CMD_ROTO: DrawSpriteRotozoom(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], (int16)p[11], p[12], p[13], p[14]); break;
+            case CMD_DEFORMED: {
+                const int y1 = c.clip[1], y2 = c.clip[3];
+                if (y2 > y1)
+                    memcpy(&scanlines[y1], sArena + c.arena, (size_t)(y2 - y1) * sizeof(ScanlineInfo));
+                DrawDeformedSprite((uint16)p[0], p[1], p[2]);
+                break;
+            }
             case CMD_LAYER: {
                 TileLayer *layer = (TileLayer *)(uintptr_t)p[0];
                 // The scanline table the layer's draw reads was filled by ProcessParallax just before the call;
@@ -314,7 +321,7 @@ void GpuFrame::Flush()
 
 static void DumpCommands()
 {
-    static const char *const kName[] = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE_OUTLINE", "FACE", "BLENDED_FACE", "SPRITE", "ROTO", "LAYER", "LINEBUF", "FACES", "BLENDED_FACES", "SCENE3D", "PALETTE" };
+    static const char *const kName[] = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE_OUTLINE", "FACE", "BLENDED_FACE", "SPRITE", "ROTO", "LAYER", "LINEBUF", "FACES", "BLENDED_FACES", "SCENE3D", "PALETTE", "DEFORMED" };
     FILE *f = fopen(dumpPath, "w");
     if (!f)
         return;
@@ -516,6 +523,20 @@ uint8 *GpuFrame::RecScene3D(uint32 bytes)
 {
     Cmd *c = BeginCmd(CMD_SCENE3D, bytes);
     return c ? sArena + c->arena : NULL;
+}
+
+// The scanlines are the game's (UFO_Plasma fills them just before): a copy of the clip's rows, as for a layer.
+bool GpuFrame::RecDeformed(uint16 sheetID, int32 ink, int32 alpha)
+{
+    const int y1 = currentScreen->clipBound_Y1, y2 = currentScreen->clipBound_Y2;
+    const unsigned lines = y2 > y1 ? (unsigned)(y2 - y1) : 0;
+    Cmd *c = BeginCmd(CMD_DEFORMED, lines * (unsigned)sizeof(ScanlineInfo));
+    if (!c)
+        return false;
+    c->p[0] = sheetID, c->p[1] = ink, c->p[2] = alpha;
+    if (lines)
+        memcpy(sArena + c->arena, &scanlines[y1], lines * sizeof(ScanlineInfo));
+    return true;
 }
 
 bool GpuFrame::RecLayer(TileLayer *layer, int kind)

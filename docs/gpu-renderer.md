@@ -556,11 +556,75 @@ without FORCE 3D, sampled 15 s after the load, `tools/site.sh STATE`):
 - Side effect: after a split, `cmdEyeKB` and the right-eye overflow guard count only the commands after it (an
   underestimate on pause frames, which are light).
 
+## DrawDeformedSprite on the GPU (feat/gpu-deformed-sprite, 2026-10-23, #11)
+
+- UFO_Plasma (Special Stages 7 and 1+; also OOZ's smog) draws its sky with `DrawDeformedSprite(..., INK_MASKED)`:
+  every row of the clip samples a 128x128 sheet along the game's scanlines, wrapping, across the whole screen, only
+  where the screen holds the mask colour (index 0xDB, green in every bank). It was a hazard: every frame to the CPU.
+- `CMD_DEFORMED` records the sheet, ink, alpha and the clip rows' scanlines (as a layer); the software replay puts them
+  back. The GPU draws it like a rotozoom layer from a texture: RotoTex takes a sheet as its source too (`RotoSrc`, a
+  copy per palette bank its lines use, no hot colours), one quad a line, in the command's ink (`EmitDeformed`).
+- Masked inks drew quad by quad (a later quad would see the stencil an earlier one changed). Batches of one quad a line
+  (`Batch::disjoint`, every RotoTex batch) go in one draw: the plasma's 240 lines one by one took ~10 ms of submit
+  and 95 % of the command buffer.
+- The mask's second pass judged the floor windows' lines by texture times vertex colour, and their vertex alpha is now
+  the fade (1 - f): no fogged floor line counted as the mask colour and the plasma showed nowhere on the floor. The
+  compare takes the texel alone for the floor batches (`SetCompareTexEnv(mask, texOnly)`).
+- 2DS: Special Stage 7 ~18 -> ~60 fps, 1+ ~19 -> ~60 (all frames on the GPU, the picture as the CPU's). With FORCE 3D
+  7 runs ~31 fps: the GPU is the limit (~21 ms for two eyes of a mask frame).
+
+## Special Stage 4: animated tiles and one faded copy (perf/ss4-palette, 2026-10-23, #12)
+
+- Not the palette (two dumps a frame apart: no entry changed): UFO_Water rewrites tiles 712-775 every frame
+  (`DrawAniTiles`), used only by the small rotozoom layer (the water ceiling, 16x16 tiles). The tileset's epoch
+  (`sTileEpoch`) is global, so the floor windows, which never use those tiles, were rebuilt every frame and never drawn
+  (`floor changing`), and the water's texture never held (`roto texture changing`): tile runs, ~13 fps.
+- The floor windows keep the base tiles their map uses (`FloorWin::tileUsed`) and count only those
+  (`sTileChanged`, the tiles whose pixels changed this frame): `tileGen` replaces the epoch in their hash.
+- A RotoTex up to 256x256 is rebuilt at once, every frame if need be (bigger ones still wait for a change to hold).
+- In a Special Stage whose banks are fades (the floor's check, `FloorFadeReady`), a rotozoom layer keeps a bank 0 copy
+  only and its lines fade like the floor windows' (`Batch::fade`: the floor's combiner): one copy rebuilt a frame
+  instead of six. Stage 2's small floor goes the same way (its fog now the floor's, black at 60 %).
+- 2DS: Special Stage 4 ~13 -> ~58 fps, the picture as the CPU's. Special Stage 2 run unchanged (57.9 / 50.0 with 3D).
+
+## 3D scenes' depth bands span their own depth (fix/3d-depth-bands, 2026-10-23, #13)
+
+- Each 3D scene has its own band of the depth range (later scenes nearer: the software draws a scene over the earlier
+  ones, and the game orders them back to front). Inside the band z / w was linear in min(Z, 65536): every face of a
+  model farther than Z 65536 (the player is at ~41000) got the same depth and the last triangle drawn won: columns,
+  plants, palm trees and ramps showed their back faces (seen by the owner in 5, 5+, 6, 7+).
+- Now the band spans the scene's own depth: its instances' Z (`world[11]`) +- their models' reach (`GModel::radius`, the
+  farthest vertex in any frame, times the matrix's Z row length). Same shader: the uniform's base and slope map
+  [zmin, zmax] onto the band. Bands are 1 / the frame's scene count (not MAX_DRAW3D): the shader's 24-bit floats left
+  only a few hundred steps in a band of 1/256.
+- Checked on the 2DS on frozen frames of 5, 6 and 7+: the GPU's models as the software's (`SET gpu3d 0`). The
+  Special Stage 2 run with FORCE 3D unchanged (49.8 fps). Not yet seen by the owner; ramps' arrows (coplanar faces)
+  not caught on a frame yet.
+
+## Tour after the fixes; a hang to look at (2026-10-23, late)
+
+- All 14 Special Stage entries at ~60 fps on the 2DS without 3D (sampled 15 s after each load, the player standing):
+  this morning 4 / 4+ ran at ~13 fps and 7 / 1+ at ~18-20.
+- Special Stage 7 with FORCE 3D: ~31 fps, `gpu draw` ~21 ms. The `gpuskip` kinds and `depthmode 16` (no mask passes)
+  did not move that number on a frozen frame, so it may be stale or not in the batches: to measure again (`SITE C3D`,
+  `SITE TIMES`, frames GPU/CPU in `SITE STATE`).
+- **The 2DS hung** (ping answers, the game's FTP does not) right after, on a frozen Special Stage 7 with FORCE 3D:
+  `SET gpuskip 16/4/8/2/1/0`, then `SET depthmode 16` (answered), then `SET depthmode 0`, `FREEZE 0`, `INPUT 0` (no
+  answer). The same sequence in Azahar did not hang. Suspect a libctru panic (the GPU command buffer, as in session 3)
+  or the mask frame with 3D on the console. After the owner's power cycle: `debug/log-prev.txt`'s last lines,
+  `/luma/dumps/arm11/` (PC/LR with addr2line), then repeat the sequence step by step.
+- **Follow-up (evening, no power cycle):** the 2DS answered FTP again by itself hours later, still in Special Stage 7,
+  in CPU mode at ~20 fps (`why CPU MODE`). `debug/log.txt` has no gap longer than a minute up to its last line (the
+  switch to CPU mode), and no new crash dump: the game never stopped. What hung was the remote control, not the game
+  (the FTP thread starved, or a command waiting on the frozen frame), and something in that sequence turned the
+  renderer to CPU mode. Copies in `debug/hang-2026-10-23/` (gitignored). To try: the same sequence with `SITE STATE`
+  between steps, watching which one stops the answers.
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
 
-0. Special Stages: #11 DEFORMED SPRITE on the GPU (7 and 1+), #12 Special Stage 4's animated floor palette, #13 the 3D
+0. Special Stages: the GPU time of a mask frame with 3D (Special Stage 7: ~21 ms for two eyes), #13 the 3D
    scenes' depth order, #10 the floor through the track; the title with the floor levels and the shader binary
    (not checked yet). What is left of a 3D frame (~20 ms on the 2DS: logic ~3.5, recording ~2.5, geometry ~5, the two
    eyes' submit ~5).

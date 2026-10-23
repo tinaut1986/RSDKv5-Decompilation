@@ -3888,7 +3888,6 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
 
 void RSDK::DrawDeformedSprite(uint16 sheetID, int32 inkEffect, int32 alpha)
 {
-    GPUFRAME_HAZARD("DEFORMED SPRITE");
     DEV_STAGE(STAGE_ROTO);
     switch (inkEffect) {
         default: break;
@@ -3912,6 +3911,7 @@ void RSDK::DrawDeformedSprite(uint16 sheetID, int32 inkEffect, int32 alpha)
                 return;
             break;
     }
+    GPUFRAME_REC(RecDeformed(sheetID, inkEffect, alpha));
 
     validDraw              = true;
     GFXSurface *surface    = &gfxSurface[sheetID];
