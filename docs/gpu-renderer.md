@@ -580,6 +580,19 @@ without FORCE 3D, sampled 15 s after the load, `tools/site.sh STATE`):
   Special Stage 2 run with FORCE 3D unchanged (49.8 fps). Not yet seen by the owner; ramps' arrows (coplanar faces)
   not caught on a frame yet.
 
+## Tour after the fixes; a hang to look at (2026-10-23, late)
+
+- All 14 Special Stage entries at ~60 fps on the 2DS without 3D (sampled 15 s after each load, the player standing):
+  this morning 4 / 4+ ran at ~13 fps and 7 / 1+ at ~18-20.
+- Special Stage 7 with FORCE 3D: ~31 fps, `gpu draw` ~21 ms. The `gpuskip` kinds and `depthmode 16` (no mask passes)
+  did not move that number on a frozen frame, so it may be stale or not in the batches: to measure again (`SITE C3D`,
+  `SITE TIMES`, frames GPU/CPU in `SITE STATE`).
+- **The 2DS hung** (ping answers, the game's FTP does not) right after, on a frozen Special Stage 7 with FORCE 3D:
+  `SET gpuskip 16/4/8/2/1/0`, then `SET depthmode 16` (answered), then `SET depthmode 0`, `FREEZE 0`, `INPUT 0` (no
+  answer). The same sequence in Azahar did not hang. Suspect a libctru panic (the GPU command buffer, as in session 3)
+  or the mask frame with 3D on the console. After the owner's power cycle: `debug/log-prev.txt`'s last lines,
+  `/luma/dumps/arm11/` (PC/LR with addr2line), then repeat the sequence step by step.
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
