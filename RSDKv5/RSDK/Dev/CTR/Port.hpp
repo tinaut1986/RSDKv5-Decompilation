@@ -40,6 +40,12 @@ void RequestRelaunch();
 // 0 when no restart is coming, else the seconds left; *progress 0..1 along the wait.
 unsigned RelaunchSecondsLeft(float *progress);
 
+// The network (sockets), shared by the updater and the dev tools' FTP server: the first user starts it (a 1 MB
+// buffer); it then stays up until the process ends. False when it cannot start.
+bool NetAcquire();
+void NetRelease();
+bool WifiConnected();
+
 // Once per main-loop iteration: the frame counter, the bottom screen (production builds) and the restart. True when
 // the engine must quit (the app starts again by itself).
 bool FrameEnd();

@@ -1,11 +1,14 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/Port.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
+#include "RSDK/Dev/CTR/Updater.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS
 
 #include <3ds.h>
+#include <malloc.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -117,6 +120,52 @@ bool Port::HideHud(uint16 classID)
     return hudID >= 0 && classID == hudID;
 }
 
+// ---------------------------------------------------------------- network (from ../zelda-tmc-3ds net_3ds.c)
+
+enum { SOC_BUFFER_SIZE = 1024 * 1024 };
+static LightLock sNetLock = 1; // LightLock's unlocked value
+static int sNetRefs;
+static void *sSocBuffer;
+static bool sAcReady;
+
+bool Port::NetAcquire()
+{
+    LightLock_Lock(&sNetLock);
+    bool ok = true;
+    if (!sSocBuffer) {
+        sAcReady   = R_SUCCEEDED(acInit());
+        sSocBuffer = memalign(0x1000, SOC_BUFFER_SIZE);
+        if (!sAcReady || !sSocBuffer || R_FAILED(socInit((u32 *)sSocBuffer, SOC_BUFFER_SIZE))) {
+            free(sSocBuffer);
+            sSocBuffer = NULL;
+            if (sAcReady)
+                acExit();
+            sAcReady = false;
+            ok       = false;
+        }
+    }
+    if (ok)
+        ++sNetRefs;
+    LightLock_Unlock(&sNetLock);
+    return ok;
+}
+
+void Port::NetRelease()
+{
+    // The service stays up once started (its buffer with it): in ../zelda-tmc-3ds socExit froze the game when the FTP
+    // server stopped with a client still connected. The kernel closes the sessions when the process ends.
+    LightLock_Lock(&sNetLock);
+    if (sNetRefs > 0)
+        --sNetRefs;
+    LightLock_Unlock(&sNetLock);
+}
+
+bool Port::WifiConnected()
+{
+    u32 wifi = 0;
+    return sAcReady && R_SUCCEEDED(ACU_GetWifiStatus(&wifi)) && wifi != 0;
+}
+
 // ---------------------------------------------------------------- frame counter, restart
 
 static u64 sSecondStart;
@@ -155,6 +204,8 @@ bool Port::FrameEnd()
 #if !MANIA_DEV_TOOLS
     BottomUi::Update(); // the dev tools call it from their own frame end
 #endif
+    if (Updater_ShouldClose()) // a 3DSX update: back to the Homebrew Launcher, which starts the new file
+        return true;
     if (sRelaunchAt && osGetTime() >= sRelaunchAt) {
         // aptExit() starts this title again once the process has exited (as HOME -> close).
         aptSetChainloaderToSelf();

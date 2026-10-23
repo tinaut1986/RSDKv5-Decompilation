@@ -17,6 +17,7 @@
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Dev/CTR/UiFont.hpp"
 #include "RSDK/Dev/CTR/PortVersion.h"
+#include "RSDK/Dev/CTR/Updater.hpp"
 #include <time.h>
 
 using namespace RSDK;
@@ -548,16 +549,354 @@ static void DrawOptionsTab()
 }
 
 // ---------------------------------------------------------------- UPDATES tab, the update prompt
+// As in ../zelda-tmc-3ds (update_ui_3ds.inc): CHANNEL, AUTO UPDATE and the RELEASE found (tapped: its notes), the
+// updater's status, one action button (check, download, a confirmation, cancel); the prompt raised by the check at
+// boot (Updater_AutoPrompt) covers every tab until it is answered.
 
-static void DrawUpdatesTab() {}
-static int UpdatesHit(int px, int py, bool down) { return -1; }
-static void UpdatesTap(int i) {}
-static bool UpdatesBusy() { return false; }
-static bool UpdatesChanged() { return false; }
-static bool UpdatePromptShown() { return false; }
-static int PromptHit(int px, int py) { return -1; }
-static void PromptTap(int i) {}
-static void DrawUpdatePrompt() {}
+enum { UHIT_CHANNEL, UHIT_AUTO, UHIT_RELEASE, UHIT_ACTION, UHIT_PREV, UHIT_CLOSE, UHIT_NEXT };
+enum { PHIT_LATER, PHIT_INSTALL, PHIT_NEWS, PHIT_PREV, PHIT_CLOSE, PHIT_NEXT };
+
+static bool sUpdConfirm, sUpdNotes, sPromptNotes;
+static unsigned sNotePage, sDrawnRevision = ~0u;
+static const char *sUpdHint; // what the last tap did, when it did nothing visible
+
+enum { NOTE_COLS = 42, NOTE_MAX = 256, NOTE_ROWS = 13 };
+static char sNotes[NOTE_MAX][NOTE_COLS + 1];
+static unsigned sNoteCount, sNoteRevision = ~0u;
+
+static void UpperCopy(char *dst, unsigned cap, const char *src)
+{
+    unsigned n = 0;
+    for (; src && *src && n + 1 < cap; ++src)
+        dst[n++] = (char)toupper((unsigned char)*src);
+    dst[n] = 0;
+}
+
+// The release's notes as lines of NOTE_COLS characters (Update_FormatNotes), loaded when the updater's data changes.
+static void LoadNotes(const UpdateStatus &st)
+{
+    if (sNoteRevision == st.revision)
+        return;
+    static char body[12289];
+    Updater_GetNotes(body, sizeof(body));
+    sNoteCount    = Update_FormatNotes(body, sNotes, NOTE_MAX);
+    sNoteRevision = st.revision;
+    for (unsigned i = 0; i < sNoteCount; ++i)
+        UpperCopy(sNotes[i], sizeof(sNotes[i]), sNotes[i]);
+}
+
+static unsigned NotePages() { return sNoteCount ? (sNoteCount + NOTE_ROWS - 1) / NOTE_ROWS : 1; }
+
+static void Button(float x, float y, float w, float h, const char *label, bool pressed, u32 edge, u32 textCol, float z)
+{
+    C2D_DrawRectSolid(x, y, z, w, h, pressed ? Rgb(210, 235, 255) : edge);
+    C2D_DrawRectSolid(x + 1, y + 1, z + 0.01f, w - 2, h - 2, pressed ? Rgb(90, 150, 220) : Rgb(24, 32, 50));
+    Text(label, x + w / 2, y + h / 2 - 7, 0.5f, textCol, C2D_AlignCenter, z + 0.02f);
+}
+
+static bool Inside(int px, int py, float x, float y, float w, float h) { return px >= x && px < x + w && py >= y && py < y + h; }
+
+// The notes, paged, in the box (x, y, w) and its PREV / CLOSE / NEXT row at `by` (hit ids prev, prev + 1, prev + 2).
+static void DrawNotes(const UpdateStatus &st, float x, float y, float w, float by, int prev, float z)
+{
+    LoadNotes(st);
+    const unsigned pages = NotePages();
+    if (sNotePage >= pages)
+        sNotePage = pages - 1;
+    char head[80], ver[48];
+    UpperCopy(ver, sizeof(ver), st.version);
+    snprintf(head, sizeof(head), "WHAT'S NEW %s   %u/%u", ver, sNotePage + 1, pages);
+    Text(head, x + w / 2, y, 0.45f, Rgb(255, 215, 0), C2D_AlignCenter, z);
+    C2D_DrawRectSolid(x, y + 16, z, w, by - y - 20, Rgb(40, 70, 120));
+    C2D_DrawRectSolid(x + 1, y + 17, z + 0.01f, w - 2, by - y - 22, Rgb(10, 14, 24));
+    for (unsigned i = sNotePage * NOTE_ROWS; i < sNoteCount && i < (sNotePage + 1) * NOTE_ROWS; ++i)
+        Text(sNotes[i], x + 5, y + 19 + (i - sNotePage * NOTE_ROWS) * 11, 0.38f, Rgb(220, 224, 235), 0, z + 0.02f);
+    const float bw = (w - 8) / 3;
+    Button(x, by, bw, 24, "PREV", sPressed == prev, Rgb(50, 80, 130), sNotePage ? Rgb(230, 232, 240) : Rgb(90, 100, 115), z);
+    Button(x + bw + 4, by, bw, 24, "CLOSE", sPressed == prev + 1, Rgb(50, 80, 130), Rgb(230, 232, 240), z);
+    Button(x + 2 * (bw + 4), by, bw, 24, "NEXT", sPressed == prev + 2, Rgb(50, 80, 130),
+           sNotePage + 1 < pages ? Rgb(230, 232, 240) : Rgb(90, 100, 115), z);
+}
+
+static int NotesHit(int px, int py, float x, float w, float by, int prev)
+{
+    const float bw = (w - 8) / 3;
+    for (int i = 0; i < 3; ++i)
+        if (Inside(px, py, x + i * (bw + 4), by, bw, 24))
+            return prev + i;
+    return -1;
+}
+
+static void NotesTap(int which) // 0 prev, 1 close, 2 next
+{
+    if (which == 0 && sNotePage)
+        --sNotePage;
+    else if (which == 2 && sNotePage + 1 < NotePages())
+        ++sNotePage;
+}
+
+// The page's geometry
+enum { UCELL_Y = HEADER_H + 6, UCELL_H = 32, USTATUS_Y = UCELL_Y + UCELL_H + 6, USTATUS_H = 64, UACTION_Y = H - 32 };
+static void UCellRect(int i, float *x, float *w)
+{
+    *w = (W - 16 - 8) / 3.0f;
+    *x = 8 + i * (*w + 4);
+}
+
+static const char *UpdateAction(const UpdateStatus &st)
+{
+    if (sUpdConfirm)
+        return "INSTALL UPDATE";
+    if (st.state == UPDATE_INSTALLING || st.state == UPDATE_VERIFYING)
+        return "PLEASE WAIT";
+    if (Updater_Busy())
+        return "CANCEL";
+    if (st.state == UPDATE_AVAILABLE)
+        return "DOWNLOAD UPDATE";
+    if (st.state == UPDATE_DONE)
+        return "UPDATE INSTALLED";
+    return "CHECK FOR UPDATE";
+}
+
+static void DrawUpdatesTab()
+{
+    UpdateStatus st;
+    Updater_GetStatus(&st);
+    sDrawnRevision = st.revision;
+    if (sUpdNotes) {
+        DrawNotes(st, 8, HEADER_H + 4, W - 16, UACTION_Y, UHIT_PREV, 0.3f);
+        return;
+    }
+    char val[48];
+    const u32 good = Rgb(110, 220, 130), dim = Rgb(140, 148, 170), warn = Rgb(240, 200, 80), bad = Rgb(240, 100, 100);
+    static const char *const kName[3] = { "CHANNEL", "AUTO UPDATE", "RELEASE" };
+    for (int i = 0; i < 3; ++i) {
+        float x, w;
+        UCellRect(i, &x, &w);
+        const bool pressed = i == sPressed;
+        C2D_DrawRectSolid(x, UCELL_Y, 0.3f, w, UCELL_H, pressed ? Rgb(210, 235, 255) : Rgb(50, 80, 130));
+        C2D_DrawRectSolid(x + 1, UCELL_Y + 1, 0.31f, w - 2, UCELL_H - 2, pressed ? Rgb(90, 150, 220) : Rgb(24, 32, 50));
+        u32 col = Rgb(230, 232, 240);
+        if (i == 0)
+            snprintf(val, sizeof(val), "%s", Port::betas ? "+ BETAS" : "STABLE");
+        else if (i == 1)
+            snprintf(val, sizeof(val), "%s", Port::autoUpdate ? "ON" : "OFF"), col = Port::autoUpdate ? good : dim;
+        else if (st.version[0])
+            UpperCopy(val, sizeof(val), st.version);
+        else
+            snprintf(val, sizeof(val), "NONE"), col = dim;
+        Text(kName[i], x + 6, UCELL_Y + 3, 0.4f, Rgb(170, 178, 200), 0, 0.33f);
+        Text(val, x + 6, UCELL_Y + 15, 0.45f, col, 0, 0.33f);
+    }
+
+    // Status: what the updater says (or the question before an install), with what is installed.
+    C2D_DrawRectSolid(8, USTATUS_Y, 0.3f, W - 16, USTATUS_H, Rgb(58, 66, 104));
+    C2D_DrawRectSolid(9, USTATUS_Y + 1, 0.31f, W - 18, USTATUS_H - 2, Rgb(24, 28, 48));
+    Text("STATUS", 14, USTATUS_Y + 4, 0.4f, dim, 0, 0.32f);
+    Text("INSTALLED V" PORT_VERSION_LABEL, W - 14, USTATUS_Y + 4, 0.38f, dim, C2D_AlignRight, 0.32f);
+    char msg[96];
+    UpperCopy(msg, sizeof(msg), sUpdConfirm ? "Download and install this version?" : st.message[0] ? st.message : "Check looks for a new version");
+    const u32 col = st.state == UPDATE_ERROR ? bad : (st.state == UPDATE_AVAILABLE || sUpdConfirm) ? warn
+                    : (st.state == UPDATE_DONE || st.state == UPDATE_CURRENT) ? good : Rgb(230, 232, 240);
+    Text(msg, 14, USTATUS_Y + 20, 0.5f, col, C2D_WordWrap, 0.32f, W - 28);
+    const bool working = st.state == UPDATE_DOWNLOADING || st.state == UPDATE_VERIFYING || st.state == UPDATE_INSTALLING;
+    if (working) {
+        const float bx = 14, by = USTATUS_Y + USTATUS_H - 14, bw = W - 28;
+        C2D_DrawRectSolid(bx, by, 0.33f, bw, 8, Rgb(44, 54, 70));
+        C2D_DrawRectSolid(bx, by, 0.34f, bw * (st.progress > 100 ? 100 : st.progress) / 100.0f, 8, Rgb(60, 160, 100));
+    }
+    const char *hint = sUpdConfirm ? "UNSAVED PROGRESS IS LOST" : sUpdHint ? sUpdHint : st.version[0] ? "TAP RELEASE FOR WHAT'S NEW" : "";
+    Text(hint, W / 2.0f, USTATUS_Y + USTATUS_H + 8, 0.4f, sUpdConfirm ? warn : Rgb(90, 115, 145), C2D_AlignCenter, 0.32f);
+
+    Button(8, UACTION_Y, W - 16, 26, UpdateAction(st), sPressed == UHIT_ACTION, sUpdConfirm ? warn : Rgb(50, 80, 130), Rgb(230, 232, 240), 0.3f);
+}
+
+static int UpdatesHit(int px, int py, bool down)
+{
+    (void)down;
+    if (sUpdNotes)
+        return NotesHit(px, py, 8, W - 16, UACTION_Y, UHIT_PREV);
+    for (int i = 0; i < 3; ++i) {
+        float x, w;
+        UCellRect(i, &x, &w);
+        if (Inside(px, py, x, UCELL_Y, w, UCELL_H))
+            return i;
+    }
+    return Inside(px, py, 8, UACTION_Y, W - 16, 26) ? UHIT_ACTION : -1;
+}
+
+static void UpdatesTap(int i)
+{
+    UpdateStatus st;
+    Updater_GetStatus(&st);
+    sUpdHint = NULL;
+    if (sUpdNotes) {
+        if (i == UHIT_CLOSE)
+            sUpdNotes = false;
+        else
+            NotesTap(i - UHIT_PREV);
+        return;
+    }
+    if (st.state == UPDATE_INSTALLING || st.state == UPDATE_DONE)
+        return;
+    const bool busy = Updater_Busy();
+    if (i == UHIT_ACTION) {
+        const bool confirm = sUpdConfirm;
+        sUpdConfirm = false;
+        if (busy)
+            Updater_Cancel();
+        else if (confirm && st.state == UPDATE_AVAILABLE)
+            Updater_Download();
+        else if (st.state == UPDATE_AVAILABLE)
+            sUpdConfirm = true;
+        else
+            Updater_Check();
+        return;
+    }
+    sUpdConfirm = false;
+    if (busy) {
+        sUpdHint = "WAIT FOR THE UPDATER TO FINISH";
+        return;
+    }
+    switch (i) {
+        case UHIT_CHANNEL:
+            Port::betas = !Port::betas;
+            Updater_SetChannel(Port::betas);
+            break;
+        case UHIT_AUTO:
+            Port::autoUpdate = !Port::autoUpdate;
+            sUpdHint         = Port::autoUpdate ? "LOOKS FOR A NEW VERSION AT EVERY START" : "ONLY WHEN YOU CHECK HERE";
+            break;
+        case UHIT_RELEASE:
+            if (st.version[0])
+                sUpdNotes = true, sNotePage = 0;
+            break;
+        default: break;
+    }
+}
+
+static bool UpdatesBusy()
+{
+    float p;
+    return Updater_Busy() || Port::RelaunchSecondsLeft(&p) != 0;
+}
+
+static bool UpdatesChanged()
+{
+    UpdateStatus st;
+    Updater_GetStatus(&st);
+    return st.revision != sDrawnRevision;
+}
+
+static bool UpdatePromptShown() { return Updater_AutoPrompt() != UPDATE_PROMPT_NONE; }
+
+// The prompt's box
+enum { PBOX_X = 16, PBOX_Y = HEADER_H + 10, PBOX_W = W - 32, PBOX_H = H - HEADER_H - 20 };
+static const float kPromptBy = PBOX_Y + PBOX_H - 32;
+
+static void DrawUpdatePrompt()
+{
+    const UpdatePrompt prompt = Updater_AutoPrompt();
+    if (prompt == UPDATE_PROMPT_NONE)
+        return;
+    UpdateStatus st;
+    Updater_GetStatus(&st);
+    sDrawnRevision = st.revision;
+    const float z = 0.85f;
+    C2D_DrawRectSolid(0, 0, 0.8f, W, H, C2D_Color32(0, 0, 0, 170));
+    C2D_DrawRectSolid(PBOX_X - 2, PBOX_Y - 2, 0.82f, PBOX_W + 4, PBOX_H + 4, Rgb(90, 120, 170));
+    C2D_DrawRectSolid(PBOX_X, PBOX_Y, 0.84f, PBOX_W, PBOX_H, Rgb(24, 32, 46));
+    const float cx = W / 2.0f, x = PBOX_X + 8, w = PBOX_W - 16, by = kPromptBy;
+    const u32 text = Rgb(230, 232, 240), dim = Rgb(140, 148, 170), warn = Rgb(240, 200, 80);
+    char line[96], ver[48];
+    UpperCopy(ver, sizeof(ver), st.version);
+    if (prompt == UPDATE_PROMPT_ASK && sPromptNotes) {
+        DrawNotes(st, x, PBOX_Y + 6, w, by, PHIT_PREV, z + 0.02f);
+        return;
+    }
+    if (prompt == UPDATE_PROMPT_ASK) {
+        Text("UPDATE AVAILABLE", cx, PBOX_Y + 8, 0.6f, Rgb(255, 215, 0), C2D_AlignCenter, 0.95f);
+        snprintf(line, sizeof(line), "NEW VERSION: %s", ver);
+        Text(line, cx, PBOX_Y + 34, 0.5f, text, C2D_AlignCenter, 0.95f);
+        Text("INSTALL IT NOW?", cx, PBOX_Y + 52, 0.5f, text, C2D_AlignCenter, 0.95f);
+        Text("UNSAVED PROGRESS IS LOST", cx, PBOX_Y + 70, 0.42f, warn, C2D_AlignCenter, 0.95f);
+        Text("(UPDATES TAB: AUTO UPDATE)", cx, PBOX_Y + 86, 0.4f, dim, C2D_AlignCenter, 0.95f);
+        Button(cx - 75, PBOX_Y + 108, 150, 24, "WHAT'S NEW", sPressed == PHIT_NEWS, Rgb(50, 80, 130), Rgb(100, 220, 255), 0.9f);
+        const float bw = (w - 8) / 2;
+        Button(x, by, bw, 24, "LATER", sPressed == PHIT_LATER, Rgb(50, 80, 130), text, 0.9f);
+        Button(x + bw + 8, by, bw, 24, "INSTALL", sPressed == PHIT_INSTALL, warn, text, 0.9f);
+        return;
+    }
+    if (prompt == UPDATE_PROMPT_ERROR) {
+        Text("UPDATE FAILED", cx, PBOX_Y + 8, 0.6f, Rgb(240, 100, 100), C2D_AlignCenter, 0.95f);
+        UpperCopy(line, sizeof(line), st.message);
+        Text(line, cx, PBOX_Y + 44, 0.5f, text, C2D_AlignCenter, 0.95f);
+        Text("THE GAME KEEPS RUNNING AS IT WAS.", cx, PBOX_Y + 66, 0.42f, dim, C2D_AlignCenter, 0.95f);
+        Button(cx - 60, by, 120, 24, "OK", sPressed == PHIT_LATER, Rgb(50, 80, 130), text, 0.9f);
+        return;
+    }
+    // WORKING / RESTART: one bar for the download and the install, then the 10 s before the game starts again.
+    float fill;
+    if (prompt == UPDATE_PROMPT_RESTART) {
+        const unsigned secs = Port::RelaunchSecondsLeft(&fill);
+        snprintf(line, sizeof(line), "%u S", secs);
+        Text("RESTARTING THE GAME", cx, PBOX_Y + 40, 0.5f, text, C2D_AlignCenter, 0.95f);
+    }
+    else {
+        fill = (st.progress > 100 ? 100 : st.progress) / 100.0f;
+        snprintf(line, sizeof(line), "%u%%", st.progress > 100 ? 100 : st.progress);
+        char msg[96];
+        UpperCopy(msg, sizeof(msg), st.message);
+        Text(msg, cx, PBOX_Y + 40, 0.5f, text, C2D_AlignCenter, 0.95f);
+    }
+    Text("UPDATING", cx, PBOX_Y + 8, 0.6f, Rgb(255, 215, 0), C2D_AlignCenter, 0.95f);
+    const float px = x + 6, py = PBOX_Y + 66, pw = w - 12, ph = 18;
+    C2D_DrawRectSolid(px, py, 0.86f, pw, ph, Rgb(44, 54, 70));
+    C2D_DrawRectSolid(px, py, 0.87f, pw * fill, ph, prompt == UPDATE_PROMPT_RESTART ? Rgb(235, 140, 50) : Rgb(60, 160, 100));
+    Text(line, cx, py + 2, 0.5f, Rgb(255, 255, 255), C2D_AlignCenter, 0.95f);
+    Text("DO NOT TURN THE CONSOLE OFF.", cx, PBOX_Y + 96, 0.42f, warn, C2D_AlignCenter, 0.95f);
+    const bool canCancel = prompt == UPDATE_PROMPT_WORKING && st.state == UPDATE_DOWNLOADING;
+    Button(cx - 70, by, 140, 24, canCancel ? "CANCEL" : "PLEASE WAIT", canCancel && sPressed == PHIT_LATER, Rgb(50, 80, 130),
+           canCancel ? text : dim, 0.9f);
+}
+
+static int PromptHit(int px, int py)
+{
+    const UpdatePrompt prompt = Updater_AutoPrompt();
+    const float cx = W / 2.0f, x = PBOX_X + 8, w = PBOX_W - 16, by = kPromptBy;
+    if (prompt == UPDATE_PROMPT_ASK && sPromptNotes)
+        return NotesHit(px, py, x, w, by, PHIT_PREV);
+    if (prompt == UPDATE_PROMPT_ASK) {
+        const float bw = (w - 8) / 2;
+        if (Inside(px, py, cx - 75, PBOX_Y + 108, 150, 24))
+            return PHIT_NEWS;
+        if (Inside(px, py, x, by, bw, 24))
+            return PHIT_LATER;
+        if (Inside(px, py, x + bw + 8, by, bw, 24))
+            return PHIT_INSTALL;
+        return -1;
+    }
+    if (prompt == UPDATE_PROMPT_ERROR)
+        return Inside(px, py, cx - 60, by, 120, 24) ? PHIT_LATER : -1;
+    return Inside(px, py, cx - 70, by, 140, 24) ? PHIT_LATER : -1;
+}
+
+static void PromptTap(int i)
+{
+    if (sPromptNotes) {
+        if (i == PHIT_CLOSE)
+            sPromptNotes = false;
+        else
+            NotesTap(i - PHIT_PREV);
+        return;
+    }
+    if (i == PHIT_NEWS) {
+        sPromptNotes = true;
+        sNotePage    = 0;
+        return;
+    }
+    Updater_AutoAnswer(i == PHIT_INSTALL);
+}
 
 // ---------------------------------------------------------------- DEBUG tab
 

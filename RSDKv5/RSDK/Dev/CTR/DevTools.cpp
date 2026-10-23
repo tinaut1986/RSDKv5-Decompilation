@@ -55,7 +55,6 @@ static int sListen = -1;
 static uint32_t sIp;
 static char *sIo;
 static char sStatus[48] = "STOPPED";
-static void *sSocBuffer;
 
 // What the bottom screen says about an install in progress.
 static const char *volatile sNotice;
@@ -1123,19 +1122,13 @@ static void FtpMain(void *)
 
 static bool StartServer()
 {
-    if (R_FAILED(acInit())) {
+    // The network is shared with the updater (Port::NetAcquire); the server keeps its share until the process ends.
+    if (!Port::NetAcquire()) {
         snprintf(sStatus, sizeof(sStatus), "NO NETWORK SERVICE");
         return false;
     }
-    u32 wifi = 0;
-    ACU_GetWifiStatus(&wifi);
-    sSocBuffer = memalign(0x1000, 1024 * 1024);
-    if (!wifi) {
+    if (!Port::WifiConnected()) {
         snprintf(sStatus, sizeof(sStatus), "NO WI-FI");
-        return false;
-    }
-    if (!sSocBuffer || R_FAILED(socInit((u32 *)sSocBuffer, 1024 * 1024))) {
-        snprintf(sStatus, sizeof(sStatus), "NO NETWORK SERVICE");
         return false;
     }
     sIo     = (char *)malloc(FTP_IO_SIZE);

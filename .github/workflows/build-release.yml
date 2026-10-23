@@ -1,0 +1,137 @@
+name: Build 3DS Release
+
+# A tag vX.Y.Z builds the CIA and publishes it as a GitHub release, which the
+# in-game updater reads (RSDKv5/RSDK/Dev/CTR/Updater.cpp, UpdateManifest.cpp).
+# A tag on main is a stable release; anywhere else (a release/* branch) a beta
+# (pre-release), built with the dev tools as the betas of the owner's other ports.
+# Same scheme as ../zelda-tmc-3ds, ../mzm and ../sm-3ds.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-3ds:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitarm:20260610
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install libraries
+        run: |
+          dkp-pacman -Sy --needed --noconfirm 3ds-libtheora 3ds-libogg 3ds-curl 3ds-mbedtls 3ds-jansson 3ds-zlib
+          command -v python3 > /dev/null || (apt-get update -qq && apt-get install -y -qq python3 > /dev/null)
+
+      - name: Determine release tag and channel
+        id: vars
+        run: |
+          git config --global --add safe.directory '*'
+          case "$GITHUB_REF" in
+            refs/tags/*) TAG="${GITHUB_REF#refs/tags/}" ;;
+            *) TAG="v$(sh tools/version.sh | tr '+' '.')" ;;
+          esac
+          VERSION="${TAG#v}"
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main || true
+          if git merge-base --is-ancestor HEAD refs/remotes/origin/main 2>/dev/null; then
+            PRERELEASE=false; CHANNEL=Release
+          else
+            PRERELEASE=true; CHANNEL=Beta
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+            echo "channel=$CHANNEL"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build CIA
+        run: |
+          export DEVKITPRO=/opt/devkitpro
+          export DEVKITARM=/opt/devkitpro/devkitARM
+          chmod +x 3ds/bannertool 3ds/makerom
+          # Game data is never in the repository.
+          if git ls-files | grep -Ei '\.rsdk$'; then echo "game data tracked by git"; exit 1; fi
+          if [ "${{ steps.vars.outputs.channel }}" = "Release" ]; then TOOLS=0; CH=release; else TOOLS=1; CH=beta; fi
+          echo "channel ${{ steps.vars.outputs.channel }}: DEV_TOOLS=$TOOLS MANIA3DS_CHANNEL=$CH"
+          MANIA3DS_VERSION="${{ steps.vars.outputs.version }}" MANIA3DS_CHANNEL=$CH DEV_TOOLS=$TOOLS ./build_3ds.sh --cia
+          cp 3ds/out/SonicMania.cia "sonic-mania-3ds-v${{ steps.vars.outputs.version }}.cia"
+
+      - name: Release notes and QR code
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          V="${{ steps.vars.outputs.version }}"
+          REPO="${{ github.repository }}"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+          # The previous release of ours: the decompilation's own tags (v1.0.0, v1.1.0) are not.
+          PREV=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude v1.0.0 --exclude v1.1.0 "HEAD^" 2>/dev/null || true)
+          RANGE="${PREV:+${PREV}..}HEAD"
+          if [ ! -f "docs/release-notes/${TAG}.md" ]; then
+            echo "::warning::docs/release-notes/${TAG}.md is missing: the updater will show the commit list for ${TAG}"
+          fi
+          {
+            if [ "${{ steps.vars.outputs.prerelease }}" = "true" ]; then
+              echo "> **Beta build.** This comes off a \`release/*\` branch that has not"
+              echo "> been merged into \`main\` yet, so it is not a stable version."
+              echo
+            fi
+            echo "![QR code for the ${TAG} CIA](${BASE}/QR-${TAG}.png)"
+            echo
+            # The updater on the console shows this block (UpdateManifest.cpp, Update_FormatNotes). Keep the markers.
+            NOTES="docs/release-notes/${TAG}.md"
+            if [ -f "$NOTES" ]; then
+              echo "<!-- mania-notes -->"
+              echo "## What's new"
+              echo
+              cat "$NOTES"
+              echo
+              echo "<!-- /mania-notes -->"
+              echo
+            fi
+            echo "## Downloads"
+            echo
+            echo "- [sonic-mania-3ds-v${V}.cia](${BASE}/sonic-mania-3ds-v${V}.cia) (install with FBI)"
+            echo
+            echo "Based on [SaturnSH2x2's 3DS port](https://github.com/SaturnSH2x2/RSDKv5-Decompilation) of the"
+            echo "[RSDKv5 decompilation](https://github.com/RSDKModding/RSDKv5-Decompilation)."
+            echo "The game data is not included: put \`Data.rsdk\` from your own copy of Sonic Mania in"
+            echo "\`sdmc:/3ds/Sonic Mania 3DS/\`, see the README."
+            echo
+            echo "## Changelog"
+            echo
+            git log ${RANGE} --no-merges --pretty='- %s (%h)'
+          } > release_notes.md
+          apt-get update -qq && apt-get install -y -qq qrencode > /dev/null
+          qrencode -s 10 -o "QR-${TAG}.png" "${BASE}/sonic-mania-3ds-v${V}.cia"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonic-mania-3ds-build
+          path: sonic-mania-3ds-v*.cia
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: ${{ steps.vars.outputs.channel }} ${{ steps.vars.outputs.tag }}
+          draft: false
+          prerelease: ${{ steps.vars.outputs.prerelease == 'true' }}
+          # /releases/latest must be the stable one, not a beta.
+          make_latest: ${{ steps.vars.outputs.prerelease == 'true' && 'false' || 'true' }}
+          body_path: release_notes.md
+          files: |
+            sonic-mania-3ds-v${{ steps.vars.outputs.version }}.cia
+            QR-${{ steps.vars.outputs.tag }}.png
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
