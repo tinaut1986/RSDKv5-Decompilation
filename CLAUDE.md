@@ -23,7 +23,7 @@ with palette handling, bottom-screen UI and Old 3DS pacing.
 | Path | What |
 |---|---|
 | `RSDKv5/` | The engine (renderer, audio, input, storage). Where the port work happens. |
-| `RSDKv5/RSDK/Graphics/Backend/` | `RenderBackend` interface + `SoftwareBackend` (from the `gfx-rewrite` branch). The GPU backend plugs in here. |
+| `RSDKv5/RSDK/Dev/CTR/` | Dev tools (FTP remote control, bottom-screen UI); the loading box is in every build. |
 | `RSDKv5/RSDK/Graphics/CTR/` | 3DS render device (presentation, frame pacing). |
 | `dependencies/Sonic-Mania-Decompilation` | Game logic (submodule). `Game` is a symlink to its `SonicMania/` folder. |
 | `3ds/` | RSF, banner, icon, `makerom`/`bannertool`, `build_cia.sh`. |
