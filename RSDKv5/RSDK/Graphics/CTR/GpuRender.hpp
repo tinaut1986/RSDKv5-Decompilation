@@ -46,6 +46,8 @@ struct Stats {
     float emitMs[GpuFrame::CMD_TYPES_MAX]; // the last frame's geometry building per command type (ms; the last attempt)
     float preMs;                 // before the commands: palette tracking, animated tiles, set-up (ms)
     unsigned batches;           // batches of the last frame
+    unsigned cmdEyeKB, cmd3dKB; // the left eye's GPU command buffer use, and that of its 3D scenes (KB, a 3D frame)
+    unsigned instances3d, scenes3d; // 3D model instances and scenes drawn (an eye)
     unsigned eyesDropped;   // right eyes not drawn because the command buffer would not hold them (total)
     unsigned cmdBufPct;     // most of the GPU command buffer a frame has used (%), since boot
     unsigned tileEvictions; // times the full tile atlas gave back the cells not used in the frame (total)

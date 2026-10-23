@@ -3332,6 +3332,12 @@ bool GpuRender::Render(const Stream &stream)
     const u32 maskConst = maskFrame ? MaskConstant() : 0;
     // Depth matters to the 3D scenes, the stencil to the mask frame. Clear: depth to its far end for the depth mode in
     // use (24 low bits), stencil 0 (8 high bits).
+    u32 cmd3dWords = 0, cmdEye0Start = 0; // SITE TIMES: the left eye's command words, and those of its 3D scenes
+    unsigned instances3d = 0, scenes3d = 0;
+    {
+        u32 *cb, csz;
+        GPUCMD_GetBuffer(&cb, &csz, &cmdEye0Start);
+    }
     C3D_RenderTarget *const eyeTarget[2] = { target, sStereo ? (C3D_RenderTarget *)C3DPresent::TargetRight() : NULL };
     C3DPresent::SetStereo(sStereo);
     for (int eye = 0; eye < (sStereo ? 2 : 1); ++eye) {
@@ -3341,6 +3347,9 @@ bool GpuRender::Render(const Stream &stream)
         // Never overflow the command buffer (a panic, a frozen console): the right eye only when it fits again.
         u32 *cbuf, csize, coffset;
         GPUCMD_GetBuffer(&cbuf, &csize, &coffset);
+        sStats.cmdEyeKB = (coffset - cmdEye0Start) * 4 / 1024;
+        sStats.cmd3dKB  = cmd3dWords * 4 / 1024;
+        sStats.instances3d = instances3d, sStats.scenes3d = scenes3d;
         if (coffset * 2 > csize - csize / 16) {
             ++sStats.eyesDropped;
             break;
@@ -3393,7 +3402,16 @@ bool GpuRender::Render(const Stream &stream)
             curScissor = bt.scissor;
         }
         if (bt.tex == TEX_3D) {
+            u32 *cb0, csz0, coff0;
+            GPUCMD_GetBuffer(&cb0, &csz0, &coff0);
             Draw3DSceneGpu(bt.first);
+            u32 *cb1, csz1, coff1;
+            GPUCMD_GetBuffer(&cb1, &csz1, &coff1);
+            if (!eye) {
+                cmd3dWords += coff1 - coff0;
+                instances3d += (unsigned)sDraw3D[bt.first].h->count;
+                ++scenes3d;
+            }
             bind2D(); // the 2D state again, textures and blending set anew
             curBlend = curTex = -1;
             curDepth = 0;
