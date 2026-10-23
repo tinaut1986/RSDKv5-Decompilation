@@ -1,6 +1,9 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
+#if RETRO_PLATFORM == RETRO_3DS
+#include "RSDK/Dev/CTR/Updater.hpp"
+#endif
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
 using namespace RSDK;
@@ -95,6 +98,7 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         }
 
 #if RETRO_PLATFORM == RETRO_3DS && !RETRO_USE_MOD_LOADER
+        Port::Load(); // the player's options (renderer, frames, tabs) before anything uses them
         // The screens first (as the mod loader's path does), so the boot can show what it is loading.
         const bool renderOk = RenderDevice::Init();
         DEV_LOG("RenderDevice::Init (early) done, ok=%d", (int)renderOk);
@@ -131,6 +135,13 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
     RenderDevice::InitFPSCap();
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
     DevTools::Init();
+#endif
+#if RETRO_PLATFORM == RETRO_3DS
+    // UPDATES > AUTO UPDATE: the check runs in the background once the engine holds its memory (the heap is nearly
+    // full: the network's 1 MB and curl must not come first); a newer build raises the prompt on the bottom screen.
+    // argv[0] is the 3DSX's path when started from the Homebrew Launcher.
+    Updater_Init(argc > 0 ? argv[0] : NULL, Port::autoUpdate);
+    DEV_LOG("updater started, auto check %d", (int)Port::autoUpdate);
 #endif
 
 #if RETRO_PLATFORM == RETRO_3DS
@@ -355,6 +366,10 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
             if (DevTools::FrameEnd())
                 RenderDevice::isRunning = false;
 #endif
+#if RETRO_PLATFORM == RETRO_3DS
+            if (Port::FrameEnd())
+                RenderDevice::isRunning = false;
+#endif
         }
     }
 
@@ -363,6 +378,9 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
     // Shutdown
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
     DevTools::Shutdown(); // the FTP thread ends before the services under it go
+#endif
+#if RETRO_PLATFORM == RETRO_3DS
+    Updater_Shutdown();
 #endif
 
     ReleaseInputDevices();

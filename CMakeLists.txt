@@ -29,6 +29,9 @@ set(RETRO_FILES
     RSDKv5/RSDK/Dev/Debug.cpp
     RSDKv5/RSDK/Dev/CTR/DevTools.cpp
     RSDKv5/RSDK/Dev/CTR/BottomUi.cpp
+    RSDKv5/RSDK/Dev/CTR/Port.cpp
+    RSDKv5/RSDK/Dev/CTR/Updater.cpp
+    RSDKv5/RSDK/Dev/CTR/UpdateManifest.cpp
     RSDKv5/RSDK/Graphics/CTR/C3DPresent.cpp
     RSDKv5/RSDK/Graphics/CTR/GpuFrame.cpp
     RSDKv5/RSDK/Graphics/CTR/GpuRender.cpp

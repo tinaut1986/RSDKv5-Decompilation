@@ -1,9 +1,9 @@
 #ifndef BOTTOM_UI_CTR_HPP
 #define BOTTOM_UI_CTR_HPP
 
-// Graphical bottom screen, drawn with citro2d. Dev tools: live frame timings, a stacked update/draw/flip bar and
-// big touch buttons for the switches; it replaces the text-console menu, which stays only as the fallback when
-// citro3d cannot start. Every 3DS build: the loading box (below).
+// Graphical bottom screen, drawn with citro2d, in every 3DS build: tabs GAME (the run), OPTIONS, UPDATES and, with the
+// dev tools, DEBUG (live frame timings and big touch buttons for the switches; the text-console menu stays only as
+// the fallback when citro3d cannot start); the loading box; the update prompt at boot.
 
 #include "RSDK/Dev/CTR/DevTools.hpp"
 
@@ -27,18 +27,12 @@ void LoadItem(int i, int n);
 void LoadDetail(const char *file);
 void LoadEnd();
 
-#if MANIA_DEV_TOOLS
 // Once per frame: touch, and a redraw when something changed or a quarter of a second has passed.
 void Update();
 // The FPS counter of OPTIONS > SHOW FPS on the top screen: drawn with citro2d into the top target at the end of a
 // GPU frame, or into the software picture (RGB565) before it is presented.
 void DrawTopOverlayGpu(void *target); // C3D_RenderTarget*
 void DrawTopOverlaySoft(unsigned short *fb, int pitch);
-#else
-inline void Update() {}
-inline void DrawTopOverlayGpu(void *) {}
-inline void DrawTopOverlaySoft(unsigned short *, int) {}
-#endif
 
 } // namespace BottomUi
 } // namespace RSDK

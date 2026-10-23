@@ -63,7 +63,9 @@ goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`).
     After every tag rename the release branch to the next patch.
   - Never commit directly on `main` or `release/*`. Commit only when the owner asks.
 - `master` is the fork's GitHub default branch (SaturnSH2x2's history); we do not use it.
-- Releases/CI/version script are not set up yet: see PLAN (B0.3). `main`, `release/v0.1.0` and the open feature branches are on `origin` (pushed 2026-10-22).
+- Releases: `tools/version.sh` gives the version from git; a tag `vX.Y.Z` runs `.github/workflows/build-release.yml`, which
+  builds the CIA and publishes it (beta = pre-release, built with the dev tools, off a `release/*` branch; stable on
+  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, `release/v0.1.0` and the open feature branches are on `origin` (pushed 2026-10-22).
 - Commit only when the owner asks; the owner asked for commits at the end of each long task.
 - **Issues** are enabled on `origin` (2026-10-22): pending work, bugs and the owner's requests go there (English, label
   `bug`/`enhancement`, sections Seen / Likely cause / To try / To check, as in sm-3ds); docs keep the technical record.
@@ -106,13 +108,14 @@ tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE 
 ```
 
 Files on the SD (`sdmc:/3ds/Sonic Mania 3DS/`): `Data.rsdk`, `debug/log.txt` (boot steps), `debug/perf-NNNN.csv` (one row a
-second), `dev-settings.ini` (the bottom-screen switches). Luma crash dumps are in `/luma/dumps/arm11/`; resolve the PC/LR with
+second), `port-settings.ini` (the bottom-screen options and, in dev builds, the switches; `dev-settings.ini` is the old
+name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/luma/dumps/arm11/`; resolve the PC/LR with
 `arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
 `crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).
 
 - The owner's consoles: an **Old 2DS** (Old 3DS CPU, 192.168.1.141) and a **New 3DS** (192.168.1.133, 3D screen: check
   stereo there). IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
-- **FRAME SKIP is on by default** (`swFrameSkip = true` in the code; `dev-settings.ini` overrides it): with it on, the
+- **FRAME SKIP is on by default** (`Port::frameSkip = true` in the code; `port-settings.ini` overrides it): with it on, the
   `fps` of `SITE STATE` counts logic passes, not drawn frames. Turn it off (`SET frameskip 0`) before any measurement,
   or use a recorded run (`RUNPLAY`), whose result counts drawn frames.
 - Ask before installing in a session unless the owner has said otherwise for that session. A relaunch loses unsaved progress.
