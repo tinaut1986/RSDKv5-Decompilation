@@ -210,6 +210,29 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Installs: the New 3DS (192.168.1.133) runs the dev build too; `./build_3ds.sh --install 192.168.1.133` works there
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS).
 
+## Measuring with recorded runs; the floor windows again (2026-10-23, late)
+
+- **FRAME SKIP is on by default** and makes `SITE STATE`'s fps count logic passes: the "59 fps" figures of the
+  sections below were measured with it on and are wrong. Real figures come from `RUNPLAY` (drawn frames a second).
+- Recorded runs (`RUNREC N` / `RUNPLAY N F`): the keys of each logic pass (buttons and circle pad) from a scene's
+  reload, the RNG seeded, and the objects' statics copied at the start of the recording and put back at the start of
+  the playback (a reload resets only what StageLoad sets), except words that point into the engine's data storage
+  (restoring those drifted the 2DS's replay and crashed the next scene load in DefragmentAndGarbageCollectStorage).
+  A 30 s run of the owner's, recorded in Azahar, replays on the 2DS to the same picture. The first playback after
+  the game starts ended on a black screen once; Special Stage loads took ~30 s in the late session (11 s earlier): to
+  look at.
+- The owner's Special Stage 2 run on the 2DS with FORCE 3D: 18.4 fps as tile runs (before the rotozoom textures),
+  29.7-30.0 fps now; with the floor windows 31.3-31.4.
+- Floor windows rewritten: two 512x512 levels (full and half resolution, steps up to 1 and 2), each kept in bank 0
+  and in bank 7; a line is two quads (bank 0 times 1 - f, then bank 7 times f added) instead of a pass per fog group.
+  The copies are synchronous again: queued copies (GX_TextureCopy from a ring) corrupted textures on the 2DS when a
+  frame was refused or the scene changed before the queue ran them (garbage on the floor until a restart), and
+  `C3D_TexBind(1, NULL)` (to use a second texture unit) crashes in citro3d 1.7.1.
+- Same frozen frame, windows off / on: pcopy 13.5 / 9.7 ms, GPU drawing 12.0 / 12.8 ms, frame 28 / 25.5 ms,
+  quads 6062 / 3487. The GPU (two eyes) is the limit now, and the command buffer peaks at 93 %: 213 right eyes
+  dropped in a few runs (judder in 3D).
+- Lines (`EmitLine`) are one parallelogram a pixel thick instead of a quad per run of pixels.
+
 ## Rotozoom textures per palette bank; Special Stage 2 at 59 fps (perf/special-floor, 2026-10-23)
 
 - What Special Stage 2 spent on the 2DS was its small 3D floor (a 16x16-tile grid, 256x256 px, `UFO_Setup_Scanline_3DFloor`
