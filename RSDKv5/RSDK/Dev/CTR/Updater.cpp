@@ -105,7 +105,7 @@ static size_t receive(void *ptr, size_t a, size_t b, void *userdata) {
   if (cancelled() || t->size > limit || n > limit - t->size) return 0;
   if (t->file) {
     if (!t->data || !t->capacity || t->io_error) return 0;
-    const char *source = ptr;
+    const char *source = (const char *)ptr;
     size_t left = n;
     while (left) {
       size_t take = t->capacity - t->pending;

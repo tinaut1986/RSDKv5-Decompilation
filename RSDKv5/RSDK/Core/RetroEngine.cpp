@@ -102,9 +102,6 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         // The screens first (as the mod loader's path does), so the boot can show what it is loading.
         const bool renderOk = RenderDevice::Init();
         DEV_LOG("RenderDevice::Init (early) done, ok=%d", (int)renderOk);
-        // UPDATES > AUTO UPDATE: the check runs in the background while the game loads; a newer build raises the
-        // prompt on the bottom screen. argv[0] is the 3DSX's path when started from the Homebrew Launcher.
-        Updater_Init(argc > 0 ? argv[0] : NULL, Port::autoUpdate);
         BottomUi::LoadBegin("Starting Sonic Mania");
 #endif
         InitEngine();
@@ -138,6 +135,13 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
     RenderDevice::InitFPSCap();
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
     DevTools::Init();
+#endif
+#if RETRO_PLATFORM == RETRO_3DS
+    // UPDATES > AUTO UPDATE: the check runs in the background once the engine holds its memory (the heap is nearly
+    // full: the network's 1 MB and curl must not come first); a newer build raises the prompt on the bottom screen.
+    // argv[0] is the 3DSX's path when started from the Homebrew Launcher.
+    Updater_Init(argc > 0 ? argv[0] : NULL, Port::autoUpdate);
+    DEV_LOG("updater started, auto check %d", (int)Port::autoUpdate);
 #endif
 
 #if RETRO_PLATFORM == RETRO_3DS
