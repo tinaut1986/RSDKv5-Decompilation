@@ -46,12 +46,15 @@ export DEFINES="-DRETRO_USE_MOD_LOADER=0 -DMANIA_DEV_TOOLS=${DEV_TOOLS:-1} -I./G
 # make does not rebuild objects when only a -D changes, and some of them (SCREEN_XMAX) change the layout of
 # structures the engine and the game logic share: a stamp of the defines wipes the objects when they differ.
 STAMP="bin/.defines"
-if [ "$(cat "$STAMP" 2>/dev/null)" != "$DEFINES" ]; then
+STAMPED="$DEFINES rev2" # the engine revision passed to make below counts too
+if [ "$(cat "$STAMP" 2>/dev/null)" != "$STAMPED" ]; then
   rm -rf bin
   mkdir -p bin
-  printf '%s' "$DEFINES" > "$STAMP"
+  printf '%s' "$STAMPED" > "$STAMP"
 fi
-make PLATFORM=3DS PKGCONFIG="env PKG_CONFIG_LIBDIR=$LIBDIR pkg-config --static" -j"$(nproc)"
+# RETRO_REVISION=2: the engine of Sonic Mania Plus (the game's own), not v5U (Sonic Origins), whose Legacy engine for
+# Sonic 1, 2 and CD Mania never runs but kept ~12 MB of static arrays in the 2DS's memory. The file keeps its name.
+make PLATFORM=3DS RETRO_REVISION=2 RSDK_NAME=RSDKv5U PKGCONFIG="env PKG_CONFIG_LIBDIR=$LIBDIR pkg-config --static" -j"$(nproc)"
 
 if [ "${1:-}" = "--install" ]; then
   IP="${2:-$(cat .3ds_ftp_ip 2>/dev/null || true)}"
