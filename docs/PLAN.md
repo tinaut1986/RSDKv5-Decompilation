@@ -52,8 +52,7 @@
 | `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
 | `release/v0.1.0` | Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). Merged topic branches deleted. |
 | `feat/gpu-deformed-sprite` -> `perf/ss4-palette` -> `fix/3d-depth-bands` | **Stacked on the release's last merge, pushed, not merged**: #11 the plasma sky on the GPU (Special Stages 7 / 1+ ~18 -> ~60 fps), #12 animated tiles counted only where used (4 / 4+ ~13 -> ~58), #13 each 3D scene's depth band over its own Z range. Checked by Claude on the 2DS (frozen frames match the software; a tour of the 14 entries at ~60 fps without 3D), **not yet by the owner**, and the 2DS hung on a frozen Special Stage 7 with FORCE 3D while debug switches were toggled (gpu-renderer.md "Tour after the fixes; a hang"). Merge `fix/3d-depth-bands` (it holds the other two) once the owner has seen them and the hang is understood. |
-| `feat/loading-screen` | bottom-screen loading indicator; **not confirmed by the owner, not merged**; conflicts in spirit with `BottomUi` (text console). |
-| `feat/render-backend` | `gfx-rewrite` base, unused (superseded by record/replay). Reference or delete. |
+| `feat/prod-loading-box` | The loading box of the dev bottom screen in production builds too (`DEV_TOOLS=0`), with a plain title screen between loads. Checked in Azahar, **not yet by the owner on the console**. Replaces the old `feat/loading-screen` (deleted 2026-10-23 with `feat/render-backend`, whose `gfx-rewrite` base stays on `origin/gfx-rewrite`). |
 
 ## Tasks
 

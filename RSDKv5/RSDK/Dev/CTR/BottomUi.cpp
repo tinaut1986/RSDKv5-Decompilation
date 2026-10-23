@@ -1,7 +1,7 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 
-#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+#if RETRO_PLATFORM == RETRO_3DS
 
 #include <3ds.h>
 #include <citro2d.h>
@@ -26,10 +26,40 @@ static bool sReady;
 static C3D_RenderTarget *sTarget;
 static C2D_TextBuf sTextBuf;
 static bool sDirty = true;
+
+static inline u32 Rgb(int r, int g, int b) { return C2D_Color32(r, g, b, 255); }
+
+// Draws `s` at x and returns the x after it (for a line in several colours).
+static float TextRun(const char *s, float x, float y, float scale, u32 color)
+{
+    C2D_Text t;
+    C2D_TextParse(&t, sTextBuf, s);
+    C2D_TextOptimize(&t);
+    C2D_DrawText(&t, C2D_WithColor, x, y, 0.5f, scale, scale, color);
+    float w = 0, h = 0;
+    C2D_TextGetDimensions(&t, scale, scale, &w, &h);
+    return x + w;
+}
+
+// `wrapW`: the line width for C2D_WordWrap (without it citro2d wraps after every word).
+static void Text(const char *s, float x, float y, float scale, u32 color, u32 flags = 0, float z = 0.5f, float wrapW = 0)
+{
+    C2D_Text t;
+    C2D_TextParse(&t, sTextBuf, s);
+    C2D_TextOptimize(&t);
+    if (flags & C2D_WordWrap)
+        C2D_DrawText(&t, C2D_WithColor | flags, x, y, z, scale, scale, color, wrapW);
+    else
+        C2D_DrawText(&t, C2D_WithColor | flags, x, y, z, scale, scale, color);
+}
+
+#if MANIA_DEV_TOOLS
+
+// ---------------------------------------------------------------- dev tools: tabs, buttons, FPS counter
+
 static u64 sLastDraw;
 static int sPressed = -1;
 
-static inline u32 Rgb(int r, int g, int b) { return C2D_Color32(r, g, b, 255); }
 
 struct Button {
     const char *label;
@@ -124,30 +154,6 @@ static void ButtonRect(int i, float *x, float *y)
 {
     *x = BTN_GAP + (i % BTN_COLS) * (BTN_W + BTN_GAP);
     *y = BTN_TOP + (i / BTN_COLS) * (BTN_H + BTN_GAP);
-}
-
-// Draws `s` at x and returns the x after it (for a line in several colours).
-static float TextRun(const char *s, float x, float y, float scale, u32 color)
-{
-    C2D_Text t;
-    C2D_TextParse(&t, sTextBuf, s);
-    C2D_TextOptimize(&t);
-    C2D_DrawText(&t, C2D_WithColor, x, y, 0.5f, scale, scale, color);
-    float w = 0, h = 0;
-    C2D_TextGetDimensions(&t, scale, scale, &w, &h);
-    return x + w;
-}
-
-// `wrapW`: the line width for C2D_WordWrap (without it citro2d wraps after every word).
-static void Text(const char *s, float x, float y, float scale, u32 color, u32 flags = 0, float z = 0.5f, float wrapW = 0)
-{
-    C2D_Text t;
-    C2D_TextParse(&t, sTextBuf, s);
-    C2D_TextOptimize(&t);
-    if (flags & C2D_WordWrap)
-        C2D_DrawText(&t, C2D_WithColor | flags, x, y, z, scale, scale, color, wrapW);
-    else
-        C2D_DrawText(&t, C2D_WithColor | flags, x, y, z, scale, scale, color);
 }
 
 // The scrolling information, drawn from y = `top` (the view's top minus the scroll); z stays below the header and
@@ -660,7 +666,9 @@ void BottomUi::DrawTopOverlaySoft(unsigned short *fb, int pitch)
     }
 }
 
-// ---------------------------------------------------------------- loading box
+#endif // MANIA_DEV_TOOLS
+
+// ---------------------------------------------------------------- loading box (every build)
 
 static struct {
     bool active;
@@ -758,8 +766,29 @@ void BottomUi::LoadDetail(const char *file)
     MaybeDrawLoading(false);
 }
 
+#if !MANIA_DEV_TOOLS
+// Between loads a production build has nothing to show below: the loading box's background and the title.
+static void DrawIdle()
+{
+    if (!sReady)
+        return;
+    C2D_TextBufClear(sTextBuf);
+    C3D_FrameBegin(0);
+    C2D_Prepare();
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+    C2D_TargetClear(sTarget, Rgb(14, 16, 28));
+    C2D_SceneBegin(sTarget);
+    Text("SONIC MANIA 3DS", W / 2.0f, H - 18, 0.42f, Rgb(90, 115, 145), C2D_AlignCenter);
+    C3D_FrameEnd(0);
+}
+#endif
+
 void BottomUi::LoadEnd()
 {
+#if MANIA_DEV_TOOLS
     if (sLoad.active) {
         DEV_LOG("load: %s in %lu ms", sLoad.title, (unsigned long)((svcGetSystemTick() - sLoad.start) / (SYSCLOCK_ARM11 / 1000)));
         // The engine's storage pools after the load: used / limit KB, entries, defragmentations and refused
@@ -775,6 +804,11 @@ void BottomUi::LoadEnd()
     }
     sLoad.active = false;
     sDirty       = true; // the tabs again
+#else
+    if (sLoad.active)
+        DrawIdle();
+    sLoad.active = false;
+#endif
 }
 
 // While the graphical screen is up, stdout and stderr go nowhere: the engine's prints went to the libctru text
@@ -799,7 +833,9 @@ void BottomUi::Init()
     C3D_RenderTargetSetOutput(sTarget, GFX_BOTTOM, GFX_LEFT,
                               GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
                                   GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+#if MANIA_DEV_TOOLS
     ptmuInit(); // battery level for the tab bar
+#endif
     sTextBuf = C2D_TextBufNew(3072);
     if (!sTextBuf)
         return;
@@ -813,6 +849,7 @@ void BottomUi::Init()
 
 bool BottomUi::Ready() { return sReady; }
 
+#if MANIA_DEV_TOOLS
 void BottomUi::Update()
 {
     if (!sReady || !DevTools::swBottomUi)
@@ -903,5 +940,7 @@ void BottomUi::Update()
         sDirty    = false;
     }
 }
+
+#endif // MANIA_DEV_TOOLS
 
 #endif
