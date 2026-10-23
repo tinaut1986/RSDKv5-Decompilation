@@ -95,6 +95,7 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         }
 
 #if RETRO_PLATFORM == RETRO_3DS && !RETRO_USE_MOD_LOADER
+        Port::Load(); // the player's options (renderer, frames, tabs) before anything uses them
         // The screens first (as the mod loader's path does), so the boot can show what it is loading.
         const bool renderOk = RenderDevice::Init();
         DEV_LOG("RenderDevice::Init (early) done, ok=%d", (int)renderOk);
@@ -353,6 +354,10 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
             }
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
             if (DevTools::FrameEnd())
+                RenderDevice::isRunning = false;
+#endif
+#if RETRO_PLATFORM == RETRO_3DS
+            if (Port::FrameEnd())
                 RenderDevice::isRunning = false;
 #endif
         }

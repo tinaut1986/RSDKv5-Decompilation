@@ -106,13 +106,14 @@ tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE 
 ```
 
 Files on the SD (`sdmc:/3ds/Sonic Mania 3DS/`): `Data.rsdk`, `debug/log.txt` (boot steps), `debug/perf-NNNN.csv` (one row a
-second), `dev-settings.ini` (the bottom-screen switches). Luma crash dumps are in `/luma/dumps/arm11/`; resolve the PC/LR with
+second), `port-settings.ini` (the bottom-screen options and, in dev builds, the switches; `dev-settings.ini` is the old
+name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/luma/dumps/arm11/`; resolve the PC/LR with
 `arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
 `crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).
 
 - The owner's consoles: an **Old 2DS** (Old 3DS CPU, 192.168.1.141) and a **New 3DS** (192.168.1.133, 3D screen: check
   stereo there). IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
-- **FRAME SKIP is on by default** (`swFrameSkip = true` in the code; `dev-settings.ini` overrides it): with it on, the
+- **FRAME SKIP is on by default** (`Port::frameSkip = true` in the code; `port-settings.ini` overrides it): with it on, the
   `fps` of `SITE STATE` counts logic passes, not drawn frames. Turn it off (`SET frameskip 0`) before any measurement,
   or use a recorded run (`RUNPLAY`), whose result counts drawn frames.
 - Ask before installing in a session unless the owner has said otherwise for that session. A relaunch loses unsaved progress.

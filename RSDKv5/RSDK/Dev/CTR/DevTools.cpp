@@ -765,7 +765,7 @@ static void HandleSession(int ctrl)
                 const int v = val ? atoi(val + 1) : 0;
                 bool ok     = true;
                 if (!strncmp(path, "frameskip", 9))
-                    DevTools::swFrameSkip = v != 0;
+                    Port::frameSkip = v != 0;
                 else if (!strncmp(path, "maxskip", 7))
                     DevTools::swMaxSkip = v < 1 ? 1 : v > 4 ? 4 : v;
                 else if (!strncmp(path, "draw", 4))
@@ -789,13 +789,13 @@ static void HandleSession(int ctrl)
                 else if (!strncmp(path, "vblank", 6))
                     DevTools::swVblankWait = v != 0;
                 else if (!strncmp(path, "tab", 3))
-                    DevTools::uiTab = v < 0 || v > 2 ? 0 : v;
+                    Port::tab = v < 0 || v > 3 ? 0 : v;
                 else if (!strncmp(path, "fps", 3))
-                    DevTools::optFps = v < 0 || v > 4 ? 0 : v;
+                    Port::fps = v < 0 || v > 4 ? 0 : v;
                 else if (!strncmp(path, "hud", 3))
-                    DevTools::optHud = v < 0 || v > 2 ? 1 : v;
+                    Port::hud = v < 0 || v > 2 ? 1 : v;
                 else if (!strncmp(path, "lock30", 6))
-                    DevTools::swLock30 = v != 0;
+                    Port::lock30 = v != 0;
                 else if (!strncmp(path, "force3d", 7))
                     DevTools::swForce3D = v != 0;
                 else if (!strncmp(path, "gpuskip", 7))
@@ -1272,24 +1272,19 @@ static void OpenCsv()
 // The bottom screen is the libctru text console (40x30). Each row below the header is a "cell":
 // tap it to flip or cycle its value, as in the DEBUG tab of the owner's other ports.
 
-bool DevTools::swFrameSkip = true;
 int DevTools::swMaxSkip    = 2;
 bool DevTools::swDraw      = true;
 bool DevTools::swFlipCopy  = true;
-bool DevTools::swGpuRender = false;
+bool DevTools::swGpuRender = true;
 bool DevTools::swGpu3D  = true; // on since the 2DS ran the Special Stage with it (off, the faces overflow the quads)
-bool DevTools::swRecord = false; // off until the recorder has been checked (SITE SET record 1)
+bool DevTools::swRecord = true;
 bool DevTools::swBottomUi = true;
 bool DevTools::swSyncDraw = false;   // waiting for the previous GPU frame in FrameBegin cost 10 ms (46 fps instead of 60)
 bool DevTools::swVblankWait = false; // the clock paces the loop now (RenderDevice::UpdateFPSCap)
-bool DevTools::swGpuPresent = false; // the renderer starts in CPU mode (SetGpuMode, the RENDERER button)
+bool DevTools::swGpuPresent = true; // the renderer starts in GPU mode (SetGpuMode, the RENDERER button)
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 bool DevTools::freeze         = false;
-bool DevTools::swLock30       = false;
-int DevTools::optFps          = 0;
-int DevTools::optHud          = 1;
-int DevTools::uiTab           = 0;
 bool DevTools::swForce3D      = false;
 
 void DevTools::RunKeys(uint32 *held, uint32 *down)
@@ -1353,27 +1348,7 @@ bool DevTools::HideEntityClass(uint16 classID)
 {
     if (sHideSet && HASH_MATCH_MD5(objectClassList[stageObjectIDs[classID]].hash, sHideHash))
         return true;
-    if (optHud == 0 || (optHud == 1 && uiTab != 0)) // tab 0: GAME, which shows what the HUD shows
-        return false;
-    // The HUD's stage class ID, looked up again when the stage's class list changes.
-    static uint32 hudHash[4];
-    static bool hashed;
-    static const void *seenList;
-    static int32 seenCount = -1;
-    static int hudID       = -1;
-    if (!hashed) {
-        GEN_HASH_MD5("HUD", hudHash);
-        hashed = true;
-    }
-    if (seenList != (const void *)stageObjectIDs || seenCount != sceneInfo.classCount || sceneInfo.state == ENGINESTATE_LOAD) {
-        seenList  = stageObjectIDs;
-        seenCount = sceneInfo.classCount;
-        hudID     = -1;
-        for (int32 i = 0; i < sceneInfo.classCount; ++i)
-            if (HASH_MATCH_MD5(objectClassList[stageObjectIDs[i]].hash, hudHash))
-                hudID = i;
-    }
-    return hudID >= 0 && classID == hudID;
+    return Port::HideHud(classID);
 }
 
 static unsigned sMarks;
@@ -1385,8 +1360,8 @@ struct Cell {
     void (*value)(char *out, unsigned cap);
 };
 
-static void ValFrameSkip(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swFrameSkip ? "ON" : "OFF"); }
-static void TapFrameSkip() { DevTools::swFrameSkip = !DevTools::swFrameSkip; }
+static void ValFrameSkip(char *o, unsigned c) { snprintf(o, c, "%s", Port::frameSkip ? "ON" : "OFF"); }
+static void TapFrameSkip() { Port::frameSkip = !Port::frameSkip; }
 static void ValMaxSkip(char *o, unsigned c) { snprintf(o, c, "%d", DevTools::swMaxSkip); }
 static void TapMaxSkip() { DevTools::swMaxSkip = DevTools::swMaxSkip % 4 + 1; }
 static void ValDraw(char *o, unsigned c) { snprintf(o, c, "%s", DevTools::swDraw ? "ON" : "OFF (logic only)"); }
@@ -1618,32 +1593,30 @@ int DevTools::InstallNotice(char *title, unsigned cap, float *progress, unsigned
     return phase;
 }
 
-static const char *kSettingsPath = "sdmc:/3ds/Sonic Mania 3DS/dev-settings.ini";
+// The switches share the port's file (port-settings.ini, Port::Save) with the player's options; dev-settings.ini is
+// where they lived before (read when the port's file is not there yet).
+static const char *kSettingsPath = "sdmc:/3ds/Sonic Mania 3DS/port-settings.ini";
+static const char *kOldSettingsPath = "sdmc:/3ds/Sonic Mania 3DS/dev-settings.ini";
 
-void DevTools::SaveSettings()
+void DevTools::SaveSettings() { Port::Save(); }
+
+void DevTools::SaveSwitches(void *file)
 {
-    mkdir("sdmc:/3ds", 0777);
-    mkdir("sdmc:/3ds/Sonic Mania 3DS", 0777);
-    FILE *f = fopen(kSettingsPath, "w");
-    if (!f)
-        return;
-    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpumode=%d\nsyncdraw=%d\nvblank=%d\nlock30=%d\nfps=%d\nhud=%d\ntab=%d\ngpu3d=%d\nstereofar=%d\nforce3d=%d\n", (int)swFrameSkip,
-            swMaxSkip, (int)swFlipCopy, (int)GpuMode(), (int)swSyncDraw, (int)swVblankWait, (int)swLock30, optFps, optHud, uiTab, (int)swGpu3D,
-            GpuRender::stereoFar, (int)swForce3D);
-    fclose(f);
+    fprintf((FILE *)file, "maxskip=%d\nflipcopy=%d\nsyncdraw=%d\nvblank=%d\ngpu3d=%d\nstereofar=%d\nforce3d=%d\n", swMaxSkip, (int)swFlipCopy,
+            (int)swSyncDraw, (int)swVblankWait, (int)swGpu3D, GpuRender::stereoFar, (int)swForce3D);
 }
 
 static void LoadSettings()
 {
     FILE *f = fopen(kSettingsPath, "r");
     if (!f)
+        f = fopen(kOldSettingsPath, "r");
+    if (!f)
         return;
     char key[24];
     int v;
     while (fscanf(f, " %23[^=]=%d", key, &v) == 2) {
-        if (!strcmp(key, "frameskip"))
-            DevTools::swFrameSkip = v != 0;
-        else if (!strcmp(key, "maxskip"))
+        if (!strcmp(key, "maxskip"))
             DevTools::swMaxSkip = v < 1 ? 1 : v > 4 ? 4 : v;
         else if (!strcmp(key, "flipcopy"))
             DevTools::swFlipCopy = v != 0;
@@ -1653,20 +1626,12 @@ static void LoadSettings()
             DevTools::swSyncDraw = v != 0;
         else if (!strcmp(key, "vblank"))
             DevTools::swVblankWait = v != 0;
-        else if (!strcmp(key, "lock30"))
-            DevTools::swLock30 = v != 0;
-        else if (!strcmp(key, "fps"))
-            DevTools::optFps = v < 0 || v > 4 ? 0 : v;
-        else if (!strcmp(key, "hud"))
-            DevTools::optHud = v < 0 || v > 2 ? 1 : v;
         else if (!strcmp(key, "gpu3d"))
             DevTools::swGpu3D = v != 0;
         else if (!strcmp(key, "force3d"))
             DevTools::swForce3D = v != 0;
         else if (!strcmp(key, "stereofar"))
             GpuRender::stereoFar = v < 0 ? 0 : v > 16 ? 16 : v;
-        else if (!strcmp(key, "tab"))
-            DevTools::uiTab = v < 0 || v > 2 ? 0 : v;
     }
     fclose(f);
 }

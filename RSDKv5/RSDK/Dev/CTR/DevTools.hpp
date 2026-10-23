@@ -11,6 +11,8 @@
 #define MANIA_DEV_TOOLS 1
 #endif
 
+#include "RSDK/Dev/CTR/Port.hpp"
+
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
 
 namespace RSDK
@@ -54,9 +56,11 @@ struct Stats {
 void GetStats(Stats *out);
 const char *FtpStatus(); // "192.168.1.141:5000" or why the server is off
 void Mark();             // writes a mark into log.txt and the perf CSV
-// The switches survive between sessions: sdmc:/3ds/Sonic Mania 3DS/dev-settings.ini, written on every change
-// and read at start. DRAW LISTS is not saved: off it leaves a blank picture, which is a poor thing to wake up to.
+// The switches survive between sessions, in the port's file with the player's options (Port::Save,
+// port-settings.ini), written on every change and read at start. DRAW LISTS is not saved: off it leaves a blank
+// picture, which is a poor thing to wake up to. SaveSwitches writes them into that file (a FILE*).
 void SaveSettings();
+void SaveSwitches(void *file);
 // Draw order of the last frame, run-length coded ("L2 S37 L1 S5 R1"): L tile layer, S sprite, R rotozoom/deform,
 // F face, 3 3D scene, P shape. Fed by the stage scopes; SITE ORDER prints it.
 void OrderBegin();
@@ -84,7 +88,6 @@ void GetRenderStats(RenderStats *out);
 int InstallNotice(char *title, unsigned cap, float *progress, unsigned *secondsLeft);
 
 // Switches the bottom-screen menu flips at run time (in memory, on at every boot).
-extern bool swFrameSkip; // skip drawing + flip when the logic is more than a tick late
 extern int swMaxSkip;    // most passes skipped in a row
 extern bool swDraw;      // run the draw lists (off isolates the cost of the logic)
 extern bool swFlipCopy;  // copy the frame into the screen (off isolates the cost of the flip)
@@ -107,13 +110,9 @@ extern bool swSyncDraw;    // C3D_FrameBegin waits for the previous GPU frame (e
 extern bool swVblankWait;  // gspWaitForVBlank after the present (experiment switch)
 extern unsigned skipCount; // passes whose drawing was skipped since the last second
 
-// Player options of the bottom screen (OPTIONS tab), saved with the switches.
-extern bool swLock30;      // FRAMES LOCK 30: draw every other pass (logic stays at 60)
-extern int optFps;         // SHOW FPS on the top screen: 0 off, 1 top left, 2 top right, 3 bottom left, 4 bottom right
-extern int optHud;         // TOP HUD: 0 shown, 1 auto (hidden while the GAME tab is open), 2 hidden
-extern int uiTab;          // the bottom screen's open tab (BottomUi::Tab)
+// The player's options of the bottom screen (frame skip, lock 30, fps, hud, tab) are in Port.hpp.
 extern bool swForce3D;     // DEBUG FORCE 3D: draw both eyes as if the slider were up (cost on an Old 2DS); saved
-// True when entities of this (stage) class must not be drawn: the game's HUD under TOP HUD hidden / auto.
+// True when entities of this (stage) class must not be drawn: SITE HIDE, then Port::HideHud.
 bool HideEntityClass(uint16 classID);
 
 // Appends one line to sdmc:/3ds/Sonic Mania 3DS/debug/log.txt (flushed at once, so it survives a
@@ -143,7 +142,7 @@ struct StageScope {
 #endif
 
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
-#define DEV_SW_FRAMESKIP RSDK::DevTools::swFrameSkip
+#define DEV_SW_FRAMESKIP RSDK::Port::frameSkip
 #define DEV_SW_MAXSKIP   RSDK::DevTools::swMaxSkip
 #define DEV_SW_DRAW      RSDK::DevTools::swDraw
 #define DEV_SW_FLIPCOPY  RSDK::DevTools::swFlipCopy
@@ -153,10 +152,26 @@ struct StageScope {
 #define DEV_SW_GPU3D     RSDK::DevTools::swGpu3D
 #define DEV_SW_SYNCDRAW  RSDK::DevTools::swSyncDraw
 #define DEV_SW_VBLANK    RSDK::DevTools::swVblankWait
-#define DEV_SW_LOCK30    RSDK::DevTools::swLock30
+#define DEV_SW_LOCK30    RSDK::Port::lock30
 #define DEV_SW_FORCE3D   RSDK::DevTools::swForce3D
 #define DEV_HIDE_CLASS(id) RSDK::DevTools::HideEntityClass(id)
 #define DEV_COUNT_SKIP() (++RSDK::DevTools::skipCount)
+#elif RETRO_PLATFORM == RETRO_3DS
+// Production: the dev tools' defaults, the renderer and the frame options from the player's settings (Port).
+#define DEV_SW_FRAMESKIP RSDK::Port::frameSkip
+#define DEV_SW_MAXSKIP   2
+#define DEV_SW_DRAW      true
+#define DEV_SW_FLIPCOPY  true
+#define DEV_SW_GPUPRESENT RSDK::Port::gpu
+#define DEV_SW_RECORD    RSDK::Port::gpu
+#define DEV_SW_GPURENDER RSDK::Port::gpu
+#define DEV_SW_GPU3D     true
+#define DEV_SW_SYNCDRAW  false
+#define DEV_SW_VBLANK    false
+#define DEV_SW_LOCK30    RSDK::Port::lock30
+#define DEV_SW_FORCE3D   false
+#define DEV_HIDE_CLASS(id) RSDK::Port::HideHud(id)
+#define DEV_COUNT_SKIP() ((void)0)
 #else
 #define DEV_SW_FRAMESKIP true
 #define DEV_SW_MAXSKIP   2

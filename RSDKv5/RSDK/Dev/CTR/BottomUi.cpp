@@ -53,12 +53,22 @@ static void Text(const char *s, float x, float y, float scale, u32 color, u32 fl
         C2D_DrawText(&t, C2D_WithColor | flags, x, y, z, scale, scale, color);
 }
 
-#if MANIA_DEV_TOOLS
-
-// ---------------------------------------------------------------- dev tools: tabs, buttons, FPS counter
-
 static u64 sLastDraw;
 static int sPressed = -1;
+
+// Saves the options the bottom screen changed (and the dev tools' switches with them).
+static void SaveAll()
+{
+#if MANIA_DEV_TOOLS
+    DevTools::SaveSettings();
+#else
+    Port::Save();
+#endif
+}
+
+#if MANIA_DEV_TOOLS
+
+// ---------------------------------------------------------------- dev tools: the DEBUG tab's buttons
 
 
 struct Button {
@@ -67,8 +77,8 @@ struct Button {
     void (*value)(char *out, unsigned cap, bool *on);
 };
 
-static void ValFrameSkip(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::swFrameSkip ? "ON" : "OFF"); *on = DevTools::swFrameSkip; }
-static void TapFrameSkip() { DevTools::swFrameSkip = !DevTools::swFrameSkip; }
+static void ValFrameSkip(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", Port::frameSkip ? "ON" : "OFF"); *on = Port::frameSkip; }
+static void TapFrameSkip() { Port::frameSkip = !Port::frameSkip; }
 static void ValMaxSkip(char *o, unsigned c, bool *on) { snprintf(o, c, "%d", DevTools::swMaxSkip); *on = true; }
 static void TapMaxSkip() { DevTools::swMaxSkip = DevTools::swMaxSkip % 4 + 1; }
 static void ValDraw(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::swDraw ? "ON" : "OFF"); *on = DevTools::swDraw; }
@@ -113,16 +123,30 @@ static const Button kButtons[] = {
     { "CAPTURE", TapCapture, ValCapture },
 };
 
-// Tabs, in the bar at the top (icons as in the owner's other ports). Values are saved: append only.
-enum Tab { TAB_GAME, TAB_OPTIONS, TAB_DEBUG, TAB_COUNT };
+#endif // MANIA_DEV_TOOLS
 
-// DEBUG layout: the tab bar, the buttons fixed at the bottom (four to a row) and between them the information,
-// which scrolls: drag it, or touch the bar on the right to jump.
+// Tabs, in the bar at the top (icons as in the owner's other ports). Values are saved: append only. kTabs is the
+// order they show in; DEBUG only with the dev tools.
+enum Tab { TAB_GAME, TAB_OPTIONS, TAB_DEBUG, TAB_UPDATES };
+#if MANIA_DEV_TOOLS
+static const int kTabs[] = { TAB_GAME, TAB_OPTIONS, TAB_UPDATES, TAB_DEBUG };
+#else
+static const int kTabs[] = { TAB_GAME, TAB_OPTIONS, TAB_UPDATES };
+#endif
+enum { TAB_SHOWN = sizeof(kTabs) / sizeof(kTabs[0]) };
+
 enum {
     HEADER_H  = 26,
     TAB_W     = 30,
     TAB_H     = 21,
     TAB_PITCH = 34,
+};
+
+#if MANIA_DEV_TOOLS
+
+// DEBUG layout: the tab bar, the buttons fixed at the bottom (four to a row) and between them the information,
+// which scrolls: drag it, or touch the bar on the right to jump.
+enum {
     BTN_COUNT = sizeof(kButtons) / sizeof(kButtons[0]),
     BTN_COLS  = 4,
     BTN_GAP   = 4,
@@ -249,6 +273,8 @@ static float DrawInfo(float top)
     return y - top;
 }
 
+#endif // MANIA_DEV_TOOLS
+
 // ---------------------------------------------------------------- tab bar
 
 static void TabRect(int i, float *x, float *y)
@@ -284,6 +310,14 @@ static void DrawTabIcon(int tab, float cx, float cy, u32 col, float z)
                 C2D_DrawRectSolid(cx - 5 + ((i * 5) % 9), cy - 6 + i * 5, z, 3, 3, col);
             }
             break;
+        case TAB_UPDATES:
+            C2D_DrawRectSolid(cx - 1, cy - 7, z, 3, 7, col); // the arrow's shaft
+            for (int i = 0; i < 4; ++i)                      // its head
+                C2D_DrawRectSolid(cx - 4 + i, cy - 1 + i, z, 9 - 2 * i, 1, col);
+            C2D_DrawRectSolid(cx - 7, cy + 2, z, 2, 5, col); // the tray
+            C2D_DrawRectSolid(cx + 6, cy + 2, z, 2, 5, col);
+            C2D_DrawRectSolid(cx - 7, cy + 6, z, 15, 2, col);
+            break;
         default:
             C2D_DrawRectSolid(cx - 3, cy - 4, z, 6, 9, col);  // body
             C2D_DrawRectSolid(cx - 2, cy - 7, z, 4, 3, col);  // head
@@ -299,13 +333,13 @@ static void DrawTabBar()
 {
     C2D_DrawRectSolid(0, 0, 0.7f, W, HEADER_H, Rgb(14, 18, 24));
     C2D_DrawRectSolid(0, HEADER_H - 1, 0.71f, W, 1, Rgb(44, 52, 64));
-    for (int i = 0; i < TAB_COUNT; ++i) {
+    for (int i = 0; i < TAB_SHOWN; ++i) {
         float x, y;
         TabRect(i, &x, &y);
-        const bool on = i == DevTools::uiTab;
+        const bool on = kTabs[i] == Port::tab;
         C2D_DrawRectSolid(x, y, 0.72f, TAB_W, TAB_H, on ? Rgb(45, 150, 240) : Rgb(50, 56, 75));
         C2D_DrawRectSolid(x + 1, y + 1, 0.73f, TAB_W - 2, TAB_H - 2, on ? Rgb(18, 70, 130) : Rgb(26, 30, 42));
-        DrawTabIcon(i, x + TAB_W / 2.0f, y + TAB_H / 2.0f, on ? Rgb(255, 255, 255) : Rgb(140, 150, 175), 0.74f);
+        DrawTabIcon(kTabs[i], x + TAB_W / 2.0f, y + TAB_H / 2.0f, on ? Rgb(255, 255, 255) : Rgb(140, 150, 175), 0.74f);
     }
 
     // Battery, then the clock, at the right end
@@ -412,9 +446,7 @@ static void DrawGameTab()
     }
 
     // Footer: frame rate and renderer
-    DevTools::Stats st;
-    DevTools::GetStats(&st);
-    snprintf(line, sizeof(line), "%.0f FPS  %s", st.fps, DevTools::GpuMode() ? "GPU" : "CPU");
+    snprintf(line, sizeof(line), "%.0f FPS  %s", Port::Fps(), Port::GpuMode() ? "GPU" : "CPU");
     Text(line, W / 2.0f, H - 16, 0.42f, Rgb(90, 115, 145), C2D_AlignCenter);
 }
 
@@ -433,24 +465,24 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     const u32 good = Rgb(110, 220, 130), dim = Rgb(140, 148, 170), warn = Rgb(240, 200, 80);
     switch (i) {
         case OPT_FRAMES:
-            snprintf(o, cap, "%s", DevTools::swLock30 ? "LOCK 30" : DevTools::swFrameSkip ? "AUTO" : "NO SKIP");
-            *col = DevTools::swLock30 ? good : DevTools::swFrameSkip ? good : warn;
+            snprintf(o, cap, "%s", Port::lock30 ? "LOCK 30" : Port::frameSkip ? "AUTO" : "NO SKIP");
+            *col = Port::lock30 ? good : Port::frameSkip ? good : warn;
             break;
         case OPT_FPS: {
             static const char *const k[] = { "OFF", "TOP LEFT", "TOP RIGHT", "BOTTOM LEFT", "BOTTOM RIGHT" };
-            snprintf(o, cap, "%s", k[DevTools::optFps]);
-            *col = DevTools::optFps ? good : dim;
+            snprintf(o, cap, "%s", k[Port::fps]);
+            *col = Port::fps ? good : dim;
             break;
         }
         case OPT_HUD: {
             static const char *const k[] = { "SHOWN", "AUTO", "HIDDEN" };
-            snprintf(o, cap, "%s", k[DevTools::optHud]);
-            *col = DevTools::optHud == 2 ? warn : good;
+            snprintf(o, cap, "%s", k[Port::hud]);
+            *col = Port::hud == 2 ? warn : good;
             break;
         }
         default:
-            snprintf(o, cap, "%s", DevTools::GpuMode() ? "GPU" : "CPU");
-            *col = DevTools::GpuMode() ? good : dim;
+            snprintf(o, cap, "%s", Port::GpuMode() ? "GPU" : "CPU");
+            *col = Port::GpuMode() ? good : dim;
             break;
     }
 }
@@ -468,16 +500,16 @@ static void TapOption(int i)
 {
     switch (i) {
         case OPT_FRAMES: // AUTO -> LOCK 30 -> NO SKIP -> AUTO
-            if (DevTools::swLock30)
-                DevTools::swLock30 = false, DevTools::swFrameSkip = false;
-            else if (DevTools::swFrameSkip)
-                DevTools::swLock30 = true;
+            if (Port::lock30)
+                Port::lock30 = false, Port::frameSkip = false;
+            else if (Port::frameSkip)
+                Port::lock30 = true;
             else
-                DevTools::swFrameSkip = true;
+                Port::frameSkip = true;
             break;
-        case OPT_FPS: DevTools::optFps = (DevTools::optFps + 1) % 5; break;
-        case OPT_HUD: DevTools::optHud = (DevTools::optHud + 1) % 3; break;
-        default: DevTools::SetGpuMode(!DevTools::GpuMode()); break;
+        case OPT_FPS: Port::fps = (Port::fps + 1) % 5; break;
+        case OPT_HUD: Port::hud = (Port::hud + 1) % 3; break;
+        default: Port::SetGpuMode(!Port::GpuMode()); break;
     }
     sLastOpt = i;
 }
@@ -495,12 +527,12 @@ static void DrawOptionsTab()
         u32 col;
         OptValue(i, val, sizeof(val), &col);
         Text(kOptName[i], x + 7, y + 3, 0.42f, Rgb(230, 232, 240), 0, 0.33f);
-        if (i == OPT_FPS && DevTools::optFps) {
+        if (i == OPT_FPS && Port::fps) {
             // A little top screen with the counter's corner filled in, as sm-3ds shows it
             const float sx = x + 7, sy = y + 15, sw = 26, sh = 14;
             C2D_DrawRectSolid(sx, sy, 0.33f, sw, sh, Rgb(140, 148, 170));
             C2D_DrawRectSolid(sx + 1, sy + 1, 0.34f, sw - 2, sh - 2, Rgb(14, 16, 28));
-            const int corner = DevTools::optFps - 1;
+            const int corner = Port::fps - 1;
             C2D_DrawRectSolid((corner & 1) ? sx + sw - 10 : sx + 2, (corner & 2) ? sy + sh - 6 : sy + 2, 0.35f, 8, 4, col);
             Text(val, sx + sw + 6, y + 15, 0.5f, col, 0, 0.33f);
         }
@@ -514,7 +546,21 @@ static void DrawOptionsTab()
     Text("BUILD " __DATE__, W / 2.0f, H - 17, 0.4f, Rgb(90, 115, 145), C2D_AlignCenter);
 }
 
+// ---------------------------------------------------------------- UPDATES tab, the update prompt
+
+static void DrawUpdatesTab() {}
+static int UpdatesHit(int px, int py, bool down) { return -1; }
+static void UpdatesTap(int i) {}
+static bool UpdatesBusy() { return false; }
+static bool UpdatesChanged() { return false; }
+static bool UpdatePromptShown() { return false; }
+static int PromptHit(int px, int py) { return -1; }
+static void PromptTap(int i) {}
+static void DrawUpdatePrompt() {}
+
 // ---------------------------------------------------------------- DEBUG tab
+
+#if MANIA_DEV_TOOLS
 
 static void DrawDebugTab()
 {
@@ -551,6 +597,8 @@ static void DrawDebugTab()
     (void)line;
 }
 
+#endif // MANIA_DEV_TOOLS
+
 static void Draw()
 {
     char val[32];
@@ -563,12 +611,18 @@ static void Draw()
     C2D_TargetClear(sTarget, Rgb(14, 18, 24));
     C2D_SceneBegin(sTarget);
 
-    switch (DevTools::uiTab) {
-        case TAB_GAME: DrawGameTab(); break;
+    switch (Port::tab) {
         case TAB_OPTIONS: DrawOptionsTab(); break;
-        default: DrawDebugTab(); break;
+        case TAB_UPDATES: DrawUpdatesTab(); break;
+#if MANIA_DEV_TOOLS
+        case TAB_DEBUG: DrawDebugTab(); break;
+#endif
+        default: DrawGameTab(); break;
     }
     DrawTabBar();
+    DrawUpdatePrompt();
+
+#if MANIA_DEV_TOOLS
 
     // An install in progress is a modal message: the screen is dimmed and a box with the step, a bar and the
     // percentage (or the seconds left before the restart) in it takes the middle.
@@ -594,6 +648,7 @@ static void Draw()
             snprintf(val, sizeof(val), "...");
         Text(val, W / 2.0f, py + 3, 0.55f, Rgb(255, 255, 255), C2D_AlignCenter, 0.95f);
     }
+#endif
 
     C3D_FrameEnd(0);
 }
@@ -603,20 +658,25 @@ static void Draw()
 // The counter's lines and box (top-screen pixels), shared by the GPU and the software drawing.
 static int OverlayLines(char lines[3][16], u32 colors[3], int *bx, int *by, int *bw, int *bh)
 {
-    if (!DevTools::optFps)
+    if (!Port::fps)
         return 0;
+    const float fps = Port::Fps();
+    snprintf(lines[0], 16, "%.0f FPS", fps);
+    colors[0] = fps >= 59 ? 0x6EDC82 : fps >= 50 ? 0xF0C850 : 0xF06464;
+#if MANIA_DEV_TOOLS // logic and render times (ms)
     DevTools::Stats st;
     DevTools::GetStats(&st);
-    snprintf(lines[0], 16, "%.0f FPS", st.fps);
-    colors[0] = st.fps >= 59 ? 0x6EDC82 : st.fps >= 50 ? 0xF0C850 : 0xF06464;
     snprintf(lines[1], 16, "L%.1f", st.stageMs[0]);
     colors[1] = 0xE6E8F0;
     snprintf(lines[2], 16, "R%.1f", st.stageMs[1] + st.stageMs[2]);
     colors[2] = 0x8C94AA;
     const int n = 3;
+#else
+    const int n = 1;
+#endif
     *bw = 9 * UiFont::ADVANCE + 3;
     *bh = n * 10 + 2;
-    const int corner = DevTools::optFps - 1; // top left, top right, bottom left, bottom right
+    const int corner = Port::fps - 1; // top left, top right, bottom left, bottom right
     *bx = (corner & 1) ? 400 - 2 - *bw : 2;
     *by = (corner & 2) ? 240 - 2 - *bh : 2;
     return n;
@@ -666,9 +726,7 @@ void BottomUi::DrawTopOverlaySoft(unsigned short *fb, int pitch)
     }
 }
 
-#endif // MANIA_DEV_TOOLS
-
-// ---------------------------------------------------------------- loading box (every build)
+// ---------------------------------------------------------------- loading box
 
 static struct {
     bool active;
@@ -766,26 +824,6 @@ void BottomUi::LoadDetail(const char *file)
     MaybeDrawLoading(false);
 }
 
-#if !MANIA_DEV_TOOLS
-// Between loads a production build has nothing to show below: the loading box's background and the title.
-static void DrawIdle()
-{
-    if (!sReady)
-        return;
-    C2D_TextBufClear(sTextBuf);
-    C3D_FrameBegin(0);
-    C2D_Prepare();
-    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
-    C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
-    C3D_AlphaTest(false, GPU_ALWAYS, 0);
-    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
-    C2D_TargetClear(sTarget, Rgb(14, 16, 28));
-    C2D_SceneBegin(sTarget);
-    Text("SONIC MANIA 3DS", W / 2.0f, H - 18, 0.42f, Rgb(90, 115, 145), C2D_AlignCenter);
-    C3D_FrameEnd(0);
-}
-#endif
-
 void BottomUi::LoadEnd()
 {
 #if MANIA_DEV_TOOLS
@@ -802,13 +840,9 @@ void BottomUi::LoadEnd()
                                     (unsigned)dataStorage[d].entryCount, (unsigned)storageDefrags[d], (unsigned)storageFails[d]);
         DEV_LOG("storage: %s", line);
     }
+#endif
     sLoad.active = false;
     sDirty       = true; // the tabs again
-#else
-    if (sLoad.active)
-        DrawIdle();
-    sLoad.active = false;
-#endif
 }
 
 // While the graphical screen is up, stdout and stderr go nowhere: the engine's prints went to the libctru text
@@ -833,9 +867,7 @@ void BottomUi::Init()
     C3D_RenderTargetSetOutput(sTarget, GFX_BOTTOM, GFX_LEFT,
                               GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
                                   GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
-#if MANIA_DEV_TOOLS
     ptmuInit(); // battery level for the tab bar
-#endif
     sTextBuf = C2D_TextBufNew(3072);
     if (!sTextBuf)
         return;
@@ -849,32 +881,44 @@ void BottomUi::Init()
 
 bool BottomUi::Ready() { return sReady; }
 
-#if MANIA_DEV_TOOLS
 void BottomUi::Update()
 {
-    if (!sReady || !DevTools::swBottomUi)
+    if (!sReady)
         return;
+#if MANIA_DEV_TOOLS
+    if (!DevTools::swBottomUi)
+        return;
+    const bool debugTab = Port::tab == TAB_DEBUG;
+#else
+    const bool debugTab = false;
+#endif
     const u32 down = hidKeysDown(), held = hidKeysHeld();
-    const bool debugTab = DevTools::uiTab == TAB_DEBUG;
     int hit = -1;
     if (held & KEY_TOUCH) {
         touchPosition t;
         hidTouchRead(&t);
-        if ((down & KEY_TOUCH) && t.py < HEADER_H) {
+        if (UpdatePromptShown()) {
+            // The update prompt takes every touch while it is up.
+            hit = PromptHit(t.px, t.py);
+        }
+        else if ((down & KEY_TOUCH) && t.py < HEADER_H) {
             // The tab bar
-            for (int i = 0; i < TAB_COUNT; ++i) {
+            for (int i = 0; i < TAB_SHOWN; ++i) {
                 float x, y;
                 TabRect(i, &x, &y);
-                if (t.px >= x && t.px < x + TAB_W && t.py >= y && t.py < y + TAB_H && DevTools::uiTab != i) {
-                    DevTools::uiTab = i;
-                    sLastOpt        = -1;
-                    DevTools::SaveSettings();
+                if (t.px >= x && t.px < x + TAB_W && t.py >= y && t.py < y + TAB_H && Port::tab != kTabs[i]) {
+                    Port::tab = kTabs[i];
+                    sLastOpt  = -1;
+                    SaveAll();
                     sDirty = true;
                 }
             }
+#if MANIA_DEV_TOOLS
             sDragY   = -1;
             sDragBar = false;
+#endif
         }
+#if MANIA_DEV_TOOLS
         else if (debugTab) {
             if (down & KEY_TOUCH) {
                 // A touch that starts in the view scrolls it (on the bar: jumps to that place); on a button it presses.
@@ -902,7 +946,8 @@ void BottomUi::Update()
             }
             ClampScroll();
         }
-        else if (DevTools::uiTab == TAB_OPTIONS) {
+#endif
+        else if (Port::tab == TAB_OPTIONS) {
             for (int i = 0; i < OPT_COUNT; ++i) {
                 float x, y;
                 OptRect(i, &x, &y);
@@ -910,37 +955,49 @@ void BottomUi::Update()
                     hit = i;
             }
         }
+        else if (Port::tab == TAB_UPDATES)
+            hit = UpdatesHit(t.px, t.py, (down & KEY_TOUCH) != 0);
     }
+#if MANIA_DEV_TOOLS
     else if (sDragY >= 0 || sDragBar) {
         sDragY   = -1;
         sDragBar = false;
         sDirty   = true;
     }
+#endif
     if ((down & KEY_TOUCH) && hit >= 0) {
-        if (debugTab)
+        if (UpdatePromptShown())
+            PromptTap(hit);
+#if MANIA_DEV_TOOLS
+        else if (debugTab)
             kButtons[hit].tap();
+#endif
+        else if (Port::tab == TAB_UPDATES)
+            UpdatesTap(hit);
         else
             TapOption(hit);
-        DevTools::SaveSettings();
+        SaveAll();
         sDirty = true;
     }
     if (hit != sPressed) {
         sPressed = hit;
         sDirty   = true;
     }
+    (void)debugTab;
     const u64 now = svcGetSystemTick();
-    // Quicker while an install is going on, so the bar moves.
+    // Quicker while something moves (an install, a download, the restart countdown), so the bar moves.
+    bool busy = UpdatesBusy();
+#if MANIA_DEV_TOOLS
     float p;
     unsigned secs;
     char t[8];
-    const bool installing = DevTools::InstallNotice(t, sizeof(t), &p, &secs) != 0;
-    if (sDirty || now - sLastDraw > (installing ? SYSCLOCK_ARM11 / 10 : SYSCLOCK_ARM11 / 4)) {
+    busy = busy || DevTools::InstallNotice(t, sizeof(t), &p, &secs) != 0;
+#endif
+    if (sDirty || UpdatesChanged() || now - sLastDraw > (busy ? SYSCLOCK_ARM11 / 10 : SYSCLOCK_ARM11 / 4)) {
         Draw();
         sLastDraw = now;
         sDirty    = false;
     }
 }
-
-#endif // MANIA_DEV_TOOLS
 
 #endif
