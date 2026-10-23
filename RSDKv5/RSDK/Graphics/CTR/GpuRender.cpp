@@ -82,6 +82,7 @@ struct Batch {
     uint8 scissor;         // index in sScissors (0: none)
     uint8 fog;             // TEX_ROTO*: the bank copy
     uint8 uvk;             // TEX_ROTO*: texel coordinates in 1/16 texel << uvk (lines with a long span)
+    uint8 disjoint;        // its quads never overlap (one a screen line): a masked ink draws them in one go
 };
 
 // Scissor rectangles (screen pixels x0, y0, x1, y1) of this frame: a rotated sprite or a 3D scene under a clip smaller
@@ -159,8 +160,14 @@ struct RotoBank {
     unsigned seenFrames;
     uint16 builtPal[PALETTE_BANK_SIZE]; // the bank the copy was built with
 };
+// What a RotoTex is drawn from: a rotozoom layer's tiles, or a sprite sheet (DrawDeformedSprite: UFO_Plasma).
+struct RotoSrc {
+    const TileLayer *layer;
+    const GFXSurface *sheet;
+    const void *Key() const { return layer ? (const void *)layer : (const void *)sheet; }
+};
 struct RotoTex {
-    const TileLayer *layer; // NULL: a free slot
+    const void *key; // the layer or the sheet; NULL: a free slot
     unsigned w, h;
     RotoBank bank[8];
     C3D_Tex mask;
@@ -171,7 +178,7 @@ struct RotoTex {
     bool usedOk;
     uint32 lastUsed; // sRotoFrame when last drawn
 };
-enum { ROTO_TEX_SLOTS = 2, ROTO_BANK_BUDGET = 1024 * 1024 };
+enum { ROTO_TEX_SLOTS = 3, ROTO_BANK_BUDGET = 1024 * 1024 };
 // VRAM a Special Stage texture leaves free for the 3D models (on the 2DS the floor windows took it first and every
 // frame with a 3D scene went to the CPU): what the scene's models not in VRAM yet will take (ModelVramNeed), and a
 // margin. (A fixed 800 KB left no room for a third floor level: stage 2's models take ~600 KB.)
@@ -187,7 +194,7 @@ u32 VramReserve()
     return (need > sModelVram ? need - sModelVram : 0) + VRAM_MARGIN;
 }
 RotoTex sRotoTex[ROTO_TEX_SLOTS];
-const TileLayer *sRotoTexFailed; // a layer whose texture could not be allocated (not tried again until the next scene)
+const void *sRotoTexFailed; // a layer or sheet whose texture could not be allocated (not tried again until the next scene)
 uint32 sTileEpoch;               // bumped when animated tiles change the tileset
 const char *sRotoTexWhy = "-";   // why the last rotozoom layer was not drawn from its texture (SITE REFUSED)
 uint32 sRotoFrame;               // GPU frames, to free textures no longer drawn
@@ -1899,12 +1906,28 @@ int8 RotoLineDepth(float feet, int32 dx, int32 dy)
     return (int8)(f * STEREO_FAR + (f < 0 ? -0.5f : 0.5f));
 }
 
-// Draws the whole layer into its texture: per 16x16 tile, four 8x8 Morton blocks, through the staging buffer.
-bool BuildRotoTex(C3D_Tex &t, unsigned w, unsigned h, const TileLayer *layer, const u16 *tex)
+// Draws the whole layer (or sheet) into its texture: per 16x16 tile, four 8x8 Morton blocks, through the staging buffer.
+bool BuildRotoTex(C3D_Tex &t, unsigned w, unsigned h, const RotoSrc &src, const u16 *tex)
 {
     const unsigned rowBytes = w * 8 * 2; // one row of 8x8 blocks
-    const unsigned wShift = layer->widthShift;
     static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
+    if (src.sheet)
+        return UploadVram(t.data, w * h * 2, [&](u32 off, u32 n, u8 *staging) {
+            u16 *dst           = (u16 *)staging;
+            const unsigned br0 = off / rowBytes, rows = n / rowBytes;
+            for (unsigned br = br0; br < br0 + rows; ++br)
+                for (unsigned bx = 0; bx < (w >> 3); ++bx) {
+                    u16 *blk = &dst[((br - br0) * (w >> 3) + bx) << 6];
+                    for (unsigned y = 0; y < 8; ++y) {
+                        const uint8 *sp = &src.sheet->pixels[((br * 8 + y) << src.sheet->lineSize) + bx * 8];
+                        u16 *b          = blk + my[y];
+                        b[0] = tex[sp[0]], b[1] = tex[sp[1]], b[4] = tex[sp[2]], b[5] = tex[sp[3]];
+                        b[16] = tex[sp[4]], b[17] = tex[sp[5]], b[20] = tex[sp[6]], b[21] = tex[sp[7]];
+                    }
+                }
+        });
+    const TileLayer *layer  = src.layer;
+    const unsigned wShift   = layer->widthShift;
     return UploadVram(t.data, w * h * 2, [&](u32 off, u32 n, u8 *staging) {
         u16 *dst            = (u16 *)staging;
         const unsigned br0  = off / rowBytes, rows = n / rowBytes;
@@ -1927,9 +1950,11 @@ bool BuildRotoTex(C3D_Tex &t, unsigned w, unsigned h, const TileLayer *layer, co
     });
 }
 
-// What the texture depends on: the colours its pixels use (hot ones aside), the layout, the tileset's epoch.
-uint32 RotoContentHash(const RotoTex &r, const TileLayer *layer, const uint16 *pal)
+// What the texture depends on: the colours its pixels use (hot ones aside), the layout, the tileset's epoch (a sheet:
+// its pixels' address).
+uint32 RotoContentHash(const RotoTex &r, const RotoSrc &src, const uint16 *pal)
 {
+    const TileLayer *layer = src.layer;
     uint32 used[8];
     memcpy(used, r.used, sizeof(used));
     for (unsigned k = 0; k < r.hotCount; ++k)
@@ -1938,6 +1963,8 @@ uint32 RotoContentHash(const RotoTex &r, const TileLayer *layer, const uint16 *p
     for (unsigned i = 0; i < PALETTE_BANK_SIZE; ++i)
         if (used[i >> 5] & (1u << (i & 31)))
             hash = (hash ^ pal[i]) * 16777619u;
+    if (src.sheet)
+        return (hash ^ (uint32)(uintptr_t)src.sheet->pixels) * 16777619u;
     const uint32 *lw     = (const uint32 *)layer->layout;
     const unsigned words = ((1u << layer->widthShift) << layer->heightShift) / 2;
     for (unsigned i = 0; i < words; ++i)
@@ -1946,8 +1973,11 @@ uint32 RotoContentHash(const RotoTex &r, const TileLayer *layer, const uint16 *p
 }
 
 // The hot-colour mask: per texel (k + 1) * 32 where the pixel uses hot colour k, else 0; Morton blocks of bytes.
-bool BuildRotoMask(RotoTex &r, const TileLayer *layer)
+bool BuildRotoMask(RotoTex &r, const RotoSrc &src)
 {
+    if (src.sheet)
+        return false; // no hot colours for sheets (EmitRotoTex)
+    const TileLayer *layer = src.layer;
     uint8 slot[PALETTE_BANK_SIZE];
     memset(slot, 0, sizeof(slot));
     for (unsigned k = 0; k < r.hotCount; ++k)
@@ -1978,16 +2008,18 @@ bool BuildRotoMask(RotoTex &r, const TileLayer *layer)
 
 // The layer's lines [y1, y2) as one quad each from its texture. *handled false: not possible this frame (too big, no
 // VRAM, lines in different banks, content still changing, coordinates out of range): the caller draws tile runs.
-bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, int y1, int y2, float feet, bool *handled)
+// `src` a layer, or a sheet drawn with `blend0` and the vertex colour `rgba0` (a layer: BLEND_NORMAL, opaque white).
+bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo *first, int x1, int x2, int y1, int y2, float feet, bool *handled,
+                 uint8 blend0 = BLEND_NORMAL, uint32 rgba0 = 0xFFFFFFFFu)
 {
     *handled = false;
     if (GpuRender::depthMode & 512) // debug: the tile runs as before
         return true;
-    const unsigned w = (unsigned)TILE_SIZE << layer->widthShift, h = (unsigned)TILE_SIZE << layer->heightShift;
+    const void *key = src.Key();
     if (w > 1024 || h > 1024) // the floor windows' business (sFloorWhy)
         return true;
-    sRotoTexWhy = layer == sRotoTexFailed ? "no vram" : "banks";
-    if (layer == sRotoTexFailed)
+    sRotoTexWhy = key == sRotoTexFailed ? "no vram" : "banks";
+    if (key == sRotoTexFailed)
         return true;
     // The palette banks its lines use: a copy of the texture each (the Special Stage's fog banks per line). Within
     // ROTO_BANK_BUDGET of VRAM, the title's one-bank island aside.
@@ -2004,7 +2036,7 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
     // free one, else one not drawn for a second (its VRAM goes back).
     RotoTex *r = NULL;
     for (unsigned i = 0; i < ROTO_TEX_SLOTS && !r; ++i)
-        if (sRotoTex[i].layer == layer) {
+        if (sRotoTex[i].key == key) {
             r = &sRotoTex[i];
             if (r->w != w || r->h != h) {
                 FreeRotoTex(*r);
@@ -2013,7 +2045,7 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
         }
     if (!r) {
         for (unsigned i = 0; i < ROTO_TEX_SLOTS && !r; ++i)
-            if (!sRotoTex[i].layer)
+            if (!sRotoTex[i].key)
                 r = &sRotoTex[i];
         for (unsigned i = 0; i < ROTO_TEX_SLOTS && !r; ++i)
             if (sRotoFrame - sRotoTex[i].lastUsed > 60) {
@@ -2022,7 +2054,7 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
             }
         if (!r)
             return true;
-        r->layer = layer, r->w = w, r->h = h;
+        r->key = key, r->w = w, r->h = h;
         memset(r->used, 0xFF, sizeof(r->used));
     }
 
@@ -2036,7 +2068,7 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
             if ((sUfoScene && vramSpaceFree() < w * h * 2 + VramReserve()) || !C3D_TexInitVRAM(&rb.tex, (u16)w, (u16)h, GPU_RGBA5551)) {
                 sRotoTexWhy = "no vram";
                 if (!b || bankCount == 1)
-                    sRotoTexFailed = layer;
+                    sRotoTexFailed = key;
                 return true;
             }
             C3D_TexSetFilter(&rb.tex, GPU_NEAREST, GPU_NEAREST);
@@ -2044,7 +2076,7 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
             rb.alloc = true, rb.valid = false, rb.seenFrames = 0;
         }
         const uint16 *pal = sPalShadow[sBankMap[b]];
-        uint32 hash       = RotoContentHash(*r, layer, pal);
+        uint32 hash       = RotoContentHash(*r, src, pal);
         if (rb.valid && rb.built != hash) {
             // Only a few used colours changed, nothing else: they become hot (the copies stay, the mask paints them).
             uint8 changed[ROTO_HOT_MAX];
@@ -2063,15 +2095,15 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
                 else
                     changed[n++] = (uint8)i;
             }
-            if (few && n) {
+            if (few && n && blend0 == BLEND_NORMAL) { // (a sheet in an ink: a hot pass would paint over it opaque)
                 const unsigned keep = r->hotCount;
                 memcpy(r->hot + r->hotCount, changed, n);
                 r->hotCount += n;
-                if (RotoContentHash(*r, layer, rb.builtPal) == RotoContentHash(*r, layer, pal)) {
+                if (RotoContentHash(*r, src, rb.builtPal) == RotoContentHash(*r, src, pal)) {
                     // Every copy's hash leaves the new hot colours out from now on.
                     for (unsigned c = 0; c < 8; ++c)
                         if (r->bank[c].valid)
-                            r->bank[c].built = RotoContentHash(*r, layer, r->bank[c].builtPal);
+                            r->bank[c].built = RotoContentHash(*r, src, r->bank[c].builtPal);
                     r->maskValid = false;
                     hash         = rb.built;
                 }
@@ -2085,11 +2117,25 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
             sRotoTexWhy   = "changing";
             if (rb.seenFrames < 2)
                 return true;
-            if (!BuildRotoTex(rb.tex, w, h, layer, sTexPal[sBankMap[b]]))
+            if (!BuildRotoTex(rb.tex, w, h, src, sTexPal[sBankMap[b]]))
                 return true;
             memcpy(rb.builtPal, pal, sizeof(rb.builtPal));
+            if (!r->usedOk && src.sheet) {
+                memset(r->used, 0, sizeof(r->used));
+                for (unsigned y = 0; y < h; ++y) {
+                    const uint8 *sp = &src.sheet->pixels[y << src.sheet->lineSize];
+                    for (unsigned x = 0; x < w; ++x)
+                        r->used[sp[x] >> 5] |= 1u << (sp[x] & 31);
+                }
+                r->used[0] &= ~1u;
+                r->usedOk = true;
+                for (unsigned c = 0; c < 8; ++c)
+                    if (r->bank[c].valid)
+                        r->bank[c].built = RotoContentHash(*r, src, r->bank[c].builtPal);
+            }
             if (!r->usedOk) {
                 // The colours it uses, from its distinct tiles (until now every colour counted).
+                const TileLayer *layer = src.layer;
                 static uint8 seenTile[TILE_COUNT * 4];
                 memset(seenTile, 0, sizeof(seenTile));
                 memset(r->used, 0, sizeof(r->used));
@@ -2107,9 +2153,9 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
                 r->usedOk = true;
                 for (unsigned c = 0; c < 8; ++c) // their hashes counted every colour
                     if (r->bank[c].valid)
-                        r->bank[c].built = RotoContentHash(*r, layer, r->bank[c].builtPal);
+                        r->bank[c].built = RotoContentHash(*r, src, r->bank[c].builtPal);
             }
-            rb.built = rb.seen = RotoContentHash(*r, layer, pal);
+            rb.built = rb.seen = RotoContentHash(*r, src, pal);
             rb.valid           = true;
             r->maskValid       = false;
             ++sStats.rotoTexBuilds;
@@ -2121,14 +2167,14 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
                 r->hotCount = 0; // no room: the hot colours stay as built (they stop changing on screen)
                 for (unsigned c = 0; c < 8; ++c)
                     if (r->bank[c].valid)
-                        r->bank[c].built = RotoContentHash(*r, layer, r->bank[c].builtPal);
+                        r->bank[c].built = RotoContentHash(*r, src, r->bank[c].builtPal);
                 return true;
             }
             C3D_TexSetFilter(&r->mask, GPU_NEAREST, GPU_NEAREST);
             C3D_TexSetWrap(&r->mask, GPU_REPEAT, GPU_REPEAT);
             r->maskAlloc = true;
         }
-        if (!BuildRotoMask(*r, layer))
+        if (!BuildRotoMask(*r, src))
             return true;
         r->maskValid = true;
     }
@@ -2161,7 +2207,7 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
         const int8 depth      = feet > 0 ? RotoLineDepth(feet, s.deform.x, s.deform.y) : sDepth;
         // Pass 0 the line's bank's copy; pass k the mask's hot colour k - 1 in that bank now (as the atlases quantise
         // it).
-        uint8 ptex = (uint8)(TEX_ROTO0 + slot), pblend = BLEND_NORMAL;
+        uint8 ptex = (uint8)(TEX_ROTO0 + slot), pblend = blend0;
         uint32 constant = 0;
         if (pass) {
             const u16 t       = ToTexel(sPalShadow[sBankMap[b]][r->hot[pass - 1]]);
@@ -2191,17 +2237,18 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
                 sQuadCount = q;
                 return Refuse(GpuRender::REASON_QUAD_LIMIT);
             }
-            sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor, sub, (uint8)k };
+            sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor, sub, (uint8)k, 1 };
             last                    = &sBatches[sBatchCount - 1];
         }
         const uint32 uv0 = (uint16)(int16)((u0 + rnd) >> sh) | ((uint32)(uint16)(int16)((v0 + rnd) >> sh) << 16);
         const uint32 uv1 = (uint16)(int16)((u1 + rnd) >> sh) | ((uint32)(uint16)(int16)((v1 + rnd) >> sh) << 16);
         const uint32 X0 = (uint32)(x1 << 2), X1 = (uint32)(x2 << 2);
         const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
-        w32[0] = X0 | Y0, w32[1] = uv0, w32[2] = 0xFFFFFFFFu;
-        w32[3] = X1 | Y0, w32[4] = uv1, w32[5] = 0xFFFFFFFFu;
-        w32[6] = X1 | Y1, w32[7] = uv1, w32[8] = 0xFFFFFFFFu;
-        w32[9] = X0 | Y1, w32[10] = uv0, w32[11] = 0xFFFFFFFFu;
+        const uint32 rgba = pass ? 0xFFFFFFFFu : rgba0;
+        w32[0] = X0 | Y0, w32[1] = uv0, w32[2] = rgba;
+        w32[3] = X1 | Y0, w32[4] = uv1, w32[5] = rgba;
+        w32[6] = X1 | Y1, w32[7] = uv1, w32[8] = rgba;
+        w32[9] = X0 | Y1, w32[10] = uv0, w32[11] = rgba;
         w32 += 12, ++q;
         ++last->count;
     }
@@ -2714,6 +2761,41 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
     return true;
 }
 
+// DrawDeformedSprite (UFO_Plasma's sky, OOZ's smog): every row of the clip samples the sheet along its scanline,
+// wrapping, across the whole screen width (the software ignores the clip's x). One quad a line from the sheet in a
+// texture of its own (RotoTex), in the command's ink.
+bool EmitDeformed(const Cmd &c, const ScanlineInfo *sl)
+{
+    const unsigned sheetID = (unsigned)c.p[0];
+    const int32 ink = c.p[1], alpha = c.p[2];
+    if (sheetID >= SURFACE_COUNT || !gfxSurface[sheetID].pixels)
+        return true;
+    const GFXSurface &g = gfxSurface[sheetID];
+    const unsigned w = (unsigned)g.width, h = (unsigned)g.height;
+    if (w < 8 || h < 8 || (w & (w - 1)) || (h & (h - 1)) || w != (1u << g.lineSize))
+        return Refuse(GpuRender::REASON_UNSUPPORTED, c.type);
+    uint8 blend = BLEND_NORMAL;
+    int32 a     = 0xFF;
+    switch (ink) {
+        case INK_NONE: break;
+        case INK_BLEND: a = 0x80; break;
+        case INK_ALPHA: a = alpha > 0xFF ? 0xFF : alpha; break;
+        case INK_ADD: blend = BLEND_ADD, a = alpha; break;
+        case INK_SUB: blend = BLEND_SUB, a = alpha; break;
+        case INK_MASKED: blend = BLEND_MASKED; break;
+        case INK_UNMASKED: blend = BLEND_UNMASKED; break;
+        default: return Refuse(GpuRender::REASON_INK, (unsigned)ink);
+    }
+    const int y1 = c.clip[1] < 0 ? 0 : c.clip[1], y2 = c.clip[3] > SCREEN_YSIZE ? SCREEN_YSIZE : c.clip[3];
+    if (y1 >= y2)
+        return true;
+    const RotoSrc src = { NULL, &g };
+    bool handled;
+    if (!EmitRotoTex(src, w, h, sl + (y1 - c.clip[1]), 0, screens[0].pitch, y1, y2, 0.0f, &handled, blend, 0x00FFFFFFu | ((uint32)a << 24)))
+        return false;
+    return handled ? true : Refuse(GpuRender::REASON_UNSUPPORTED, c.type);
+}
+
 bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 {
     const int x1 = c.clip[0] < 0 ? 0 : c.clip[0], x2 = c.clip[2] > screens[0].pitch ? screens[0].pitch : c.clip[2];
@@ -2726,7 +2808,8 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     const float feet          = RotoFeet(first, y1, y2);
     {
         bool handled;
-        if (!EmitRotoTex(layer, first, x1, x2, y1, y2, feet, &handled))
+        const RotoSrc src = { layer, NULL };
+        if (!EmitRotoTex(src, (unsigned)TILE_SIZE << layer->widthShift, (unsigned)TILE_SIZE << layer->heightShift, first, x1, x2, y1, y2, feet, &handled))
             return false;
         if (handled)
             return true;
@@ -2947,12 +3030,14 @@ u32 MaskConstant()
     return 0xFF000000u | (b << 16) | (g << 8) | r;
 }
 
-void SetCompareTexEnv(u32 mask)
+// `texOnly`: the texture alone (the floor windows' lines carry their fade in the vertex alpha, not a transparency;
+// UFO_Plasma's mask colour is the same in every fog bank, so the unfaded texel is what the software compares).
+void SetCompareTexEnv(u32 mask, bool texOnly = false)
 {
     C3D_TexEnv *e0 = C3D_GetTexEnv(0); // the fragment colour, as the colour pass computes it
     C3D_TexEnvInit(e0);
     C3D_TexEnvSrc(e0, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0);
-    C3D_TexEnvFunc(e0, C3D_Both, GPU_MODULATE);
+    C3D_TexEnvFunc(e0, C3D_Both, texOnly ? GPU_REPLACE : GPU_MODULATE);
     // Stage 1 passes the fragment on and the combiner buffer keeps its alpha for stage 4. Whether the buffer's bit 0
     // stands for stage 0 or stage 1 (the documents differ), both hold the fragment.
     C3D_TexEnvInit(C3D_GetTexEnv(1));
@@ -3017,7 +3102,7 @@ const char *GpuRender::LastRefusal() { return sRefusal[0] ? sRefusal : "-"; }
 
 const char *GpuRender::ReasonName()
 {
-    static const char *const kCmd[]   = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE OUTLINE", "FACE", "BLENDED FACE", "SPRITE", "ROTO SPRITE", "LAYER", "LINEBUF", "FACES", "BLENDED FACES", "3D SCENE", "PALETTE" };
+    static const char *const kCmd[]   = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE OUTLINE", "FACE", "BLENDED FACE", "SPRITE", "ROTO SPRITE", "LAYER", "LINEBUF", "FACES", "BLENDED FACES", "3D SCENE", "PALETTE", "DEFORMED SPRITE" };
     static const char *const kLayer[] = { "HSCROLL LAYER", "VSCROLL LAYER", "ROTOZOOM LAYER", "BASIC LAYER" };
     static const char *const kInk[]   = { "INK NONE", "INK BLEND", "INK ALPHA", "INK ADD", "INK SUB", "INK TINT", "INK MASKED", "INK UNMASKED" };
     const unsigned cmd = sStats.unsupportedCmd;
@@ -3280,6 +3365,7 @@ bool GpuRender::Render(const Stream &stream)
             case CMD_CIRCLE: ok = EmitRing(c, c.p[0], c.p[1], 0, c.p[2], (uint32)c.p[3], c.p[4], c.p[5], c.p[6] != 0); break;
             case CMD_CIRCLE_OUTLINE: ok = EmitRing(c, c.p[0], c.p[1], c.p[2], c.p[3], (uint32)c.p[4], c.p[5], c.p[6], c.p[7] != 0); break;
             case CMD_FILL: ok = EmitFill(c); break;
+            case CMD_DEFORMED: ok = EmitDeformed(c, (const ScanlineInfo *)(stream.arena + c.arena)); break;
             case CMD_LAYER: {
                 TileLayer *layer = (TileLayer *)(uintptr_t)c.p[0];
                 const ScanlineInfo *sl = (const ScanlineInfo *)(stream.arena + c.arena);
@@ -3650,7 +3736,7 @@ bool GpuRender::Render(const Stream &stream)
         // The second pass: stencil 1 where the drawn colour is the mask colour (blended colours are not judged). After
         // a masked draw only where it drew (2 -> 1); a 2 left behind means "drawn over, not the mask colour".
         auto secondPass = [&](unsigned first, unsigned count) {
-            SetCompareTexEnv(maskConst);
+            SetCompareTexEnv(maskConst, bt.tex >= TEX_FLOOR0 && bt.tex <= TEX_FLOOR4);
             if (GpuRender::depthMode & 8) {
                 // debug: paint the result unblended; with bit 7 the final alpha as grey
                 C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
@@ -3680,9 +3766,10 @@ bool GpuRender::Render(const Stream &stream)
             C3D_AlphaTest(true, GPU_GREATER, 0);
             C3D_DepthTest(true, GPU_ALWAYS, GPU_WRITE_COLOR);
         };
-        if (maskFrame && bt.blend == BLEND_MASKED) {
+        if (maskFrame && bt.blend == BLEND_MASKED && !bt.disjoint) {
             // Quad by quad: inside one draw call a later quad would see the stencil an earlier one changed (1 -> 2)
-            // before the second pass settled it, and draw nothing.
+            // before the second pass settled it, and draw nothing. (Disjoint quads, one a line, go in one draw: 240
+            // lines of UFO_Plasma one by one took ~10 ms of submit and 95 % of the command buffer.)
             for (unsigned q = 0; q < bt.count; ++q) {
                 if (tinted && curTint != bt.depth) // the second pass reset the combiner
                     applyTint();
@@ -3695,7 +3782,7 @@ bool GpuRender::Render(const Stream &stream)
             continue;
         }
         C3D_DrawElements(GPU_TRIANGLES, (int)(bt.count * 6), C3D_UNSIGNED_SHORT, sIdx + bt.first * 6);
-        if (maskFrame && (bt.blend == BLEND_NORMAL || bt.blend == BLEND_UNMASKED))
+        if (maskFrame && (bt.blend == BLEND_NORMAL || bt.blend == BLEND_UNMASKED || bt.blend == BLEND_MASKED))
             secondPass(bt.first, bt.count);
     }
     if (in3D)

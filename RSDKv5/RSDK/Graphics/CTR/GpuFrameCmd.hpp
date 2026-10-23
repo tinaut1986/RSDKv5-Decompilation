@@ -31,6 +31,7 @@ enum CmdType : uint8 {
     CMD_BLENDED_FACES,
     CMD_SCENE3D, // a 3D scene's model instances (GpuScene3D::Head + Inst in the arena)
     CMD_PALETTE, // fullPalette changed while recording (a boss flashing, Super Sonic): the new one in the arena
+    CMD_DEFORMED, // DrawDeformedSprite: p[0] sheet, p[1] ink, p[2] alpha; the scanlines of its clip rows in the arena
     CMD_TYPES_MAX
 };
 

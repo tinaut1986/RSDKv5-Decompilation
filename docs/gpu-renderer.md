@@ -535,11 +535,29 @@ without FORCE 3D, sampled 15 s after the load, `tools/site.sh STATE`):
   number), play, `tools/shot.sh`.
 - Debug switches left on the console: `frameskip 0`, `force3d` as last set, `ufotime 1` (not saved); `ufonofall` off.
 
+## DrawDeformedSprite on the GPU (feat/gpu-deformed-sprite, 2026-10-23, #11)
+
+- UFO_Plasma (Special Stages 7 and 1+; also OOZ's smog) draws its sky with `DrawDeformedSprite(..., INK_MASKED)`:
+  every row of the clip samples a 128x128 sheet along the game's scanlines, wrapping, across the whole screen, only
+  where the screen holds the mask colour (index 0xDB, green in every bank). It was a hazard: every frame to the CPU.
+- `CMD_DEFORMED` records the sheet, ink, alpha and the clip rows' scanlines (as a layer); the software replay puts them
+  back. The GPU draws it like a rotozoom layer from a texture: RotoTex takes a sheet as its source too (`RotoSrc`, a
+  copy per palette bank its lines use, no hot colours), one quad a line, in the command's ink (`EmitDeformed`).
+- Masked inks drew quad by quad (a later quad would see the stencil an earlier one changed). Batches of one quad a line
+  (`Batch::disjoint`, every RotoTex batch) go in one draw: the plasma's 240 lines one by one took ~10 ms of submit
+  and 95 % of the command buffer.
+- The mask's second pass judged the floor windows' lines by texture times vertex colour, and their vertex alpha is now
+  the fade (1 - f): no fogged floor line counted as the mask colour and the plasma showed nowhere on the floor. The
+  compare takes the texel alone for the floor batches (`SetCompareTexEnv(mask, texOnly)`).
+- 2DS: Special Stage 7 ~18 -> ~60 fps, 1+ ~19 -> ~60 (all frames on the GPU, the picture as the CPU's). With FORCE 3D
+  7 runs ~31 fps: the GPU is the limit (~21 ms for two eyes of a mask frame).
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
 
-0. Special Stages: #11 DEFORMED SPRITE on the GPU (7 and 1+), #12 Special Stage 4's animated floor palette, #13 the 3D
+0. Special Stages: #12 Special Stage 4's animated floor palette, the GPU time of a mask frame with 3D (Special Stage 7:
+   ~21 ms for two eyes), #13 the 3D
    scenes' depth order, #10 the floor through the track; the title with the floor levels and the shader binary
    (not checked yet). What is left of a 3D frame (~20 ms on the 2DS: logic ~3.5, recording ~2.5, geometry ~5, the two
    eyes' submit ~5).
