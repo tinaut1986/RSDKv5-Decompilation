@@ -551,7 +551,8 @@ without FORCE 3D, sampled 15 s after the load, `tools/site.sh STATE`):
 - `sGrabTex` (256 KB, VRAM, else the linear heap) is made at the first tint of a scene and freed with the scene.
 - Checked in Azahar (Green Hill paused, frozen): GPU and CPU pictures match except a few greys one 5-bit step lighter on
   the GPU (combiner rounding); the GPU/CPU gap is the same as without the pause (parallax differences between shots).
-  Not measured on the 2DS yet; a split costs one more command list submission per eye.
+- 2DS, Green Hill 1 paused: CPU 43.5 fps (frame 23.9 ms, draw 16.1) -> GPU **59.8 fps** (draw 0.6, flip 2.9, GPU drawing
+  3.4 ms); FORCE 3D 59.8 fps (GPU drawing 7.0 ms), both eyes grey (`tools/shot.sh right`).
 - Side effect: after a split, `cmdEyeKB` and the right-eye overflow guard count only the commands after it (an
   underestimate on pause frames, which are light).
 
