@@ -57,7 +57,11 @@ static void TapMark()
 static void ValGpu3D(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::swGpu3D ? "GPU" : "FACES"); *on = DevTools::swGpu3D; }
 static void TapGpu3D() { DevTools::swGpu3D = !DevTools::swGpu3D; }
 static void ValForce3D(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::swForce3D ? "2 EYES" : "OFF"); *on = DevTools::swForce3D; }
-static void TapForce3D() { DevTools::swForce3D = !DevTools::swForce3D; }
+static void TapForce3D()
+{
+    DevTools::swForce3D = !DevTools::swForce3D;
+    DevTools::SaveSettings();
+}
 static void ValDepthTint(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", GpuRender::depthTint ? "ON" : "OFF"); *on = GpuRender::depthTint; }
 static void TapDepthTint() { GpuRender::depthTint = !GpuRender::depthTint; }
 

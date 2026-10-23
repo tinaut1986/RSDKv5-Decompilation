@@ -739,6 +739,8 @@ static void HandleSession(int ctrl)
                     DevTools::swLock30 = v != 0;
                 else if (!strncmp(path, "force3d", 7))
                     DevTools::swForce3D = v != 0;
+                else if (!strncmp(path, "gpuskip", 7))
+                    GpuRender::gpuSkip = (unsigned)v;
                 else if (!strncmp(path, "floorwin", 8))
                     GpuRender::floorWindows = v != 0;
                 else if (!strncmp(path, "ufotime", 7))
@@ -754,7 +756,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|floorwin <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|floorwin|gpuskip <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
@@ -925,7 +927,8 @@ static void HandleSession(int ctrl)
                 Reply(s, "200 %s", sRunResult);
             }
             else if (!strcmp(sub, "RUNPLAY")) {
-                // The recorded run (debug/run.bin) from its scene's load; RUN shows the result (drawn fps).
+                // The recorded run (debug/run.bin) from its scene's load; RUN shows the result (drawn fps). RUNPLAY N: only
+                // its first N passes (3600: a minute of play).
                 FILE *f = fopen(kRunPath, "rb");
                 int32 hdr[3] = { -1, -1, 0 };
                 if (f) {
@@ -933,6 +936,9 @@ static void HandleSession(int ctrl)
                         sRunCount = (unsigned)fread(sRunKeys, 2, (size_t)hdr[2], f);
                     fclose(f);
                 }
+                const unsigned limit = path ? (unsigned)atoi(path) : 0;
+                if (limit && limit < sRunCount)
+                    sRunCount = limit;
                 if (hdr[0] < 0 || !sRunCount)
                     Reply(s, "550 no recorded run (RUNREC, then RUNSTOP)");
                 else {
@@ -952,6 +958,16 @@ static void HandleSession(int ctrl)
                 Reply(s, "200 frame %.1f upd %.1f draw %.1f flip %.1f pcopy %.1f pframe %.1f wait %.1f | gpu draw %.1f submit %.1f | quads %u batches %u cmdbuf %u%% eyes dropped %u",
                       sLastFrameMs, sLastStageMs[DevTools::STAGE_UPDATE], sLastStageMs[DevTools::STAGE_DRAW], sLastStageMs[DevTools::STAGE_FLIP], sLastStageMs[DevTools::STAGE_PCOPY],
                       sLastStageMs[DevTools::STAGE_PFRAME], sLastStageMs[DevTools::STAGE_WAIT], g.gpuDrawMs, g.gpuProcMs, g.quads, g.batches, g.cmdBufPct, g.eyesDropped);
+            }
+            else if (!strcmp(sub, "EMIT")) {
+                // pcopy split: before the commands, then the geometry building per command type (ms, last frame).
+                const GpuRender::Stats &g = GpuRender::GetStats();
+                using namespace GpuFrame;
+                Reply(s, "200 pre %.2f | layer %.2f roto-spr %.2f sprite %.2f 3d %.2f faces %.2f face %.2f line %.2f rect %.2f fill %.2f circle %.2f other %.2f",
+                      g.preMs, g.emitMs[CMD_LAYER], g.emitMs[CMD_ROTO], g.emitMs[CMD_SPRITE], g.emitMs[CMD_SCENE3D],
+                      g.emitMs[CMD_FACES] + g.emitMs[CMD_BLENDED_FACES], g.emitMs[CMD_FACE] + g.emitMs[CMD_BLENDED_FACE], g.emitMs[CMD_LINE],
+                      g.emitMs[CMD_RECT], g.emitMs[CMD_FILL], g.emitMs[CMD_CIRCLE] + g.emitMs[CMD_CIRCLE_OUTLINE],
+                      g.emitMs[CMD_LINEBUF] + g.emitMs[CMD_PALETTE]);
             }
             else if (!strcmp(sub, "RUN")) {
                 static const char *kMode[] = { "off", "armed to record", "recording", "armed to play", "playing" };
@@ -1199,6 +1215,9 @@ void DevTools::RunKeys(uint32 *held, uint32 *down)
             return;
         }
         sRunMode    = mode == RUN_ARM_REC ? RUN_REC : RUN_PLAY;
+        // The same random numbers in the recording and the playback (the game's ReplayRecorder seeds it the same
+        // way); without it a replay drifted off the route.
+        SetRandSeed(1624633040);
         sRunFrames0 = sTotGpu + sTotCpu;
         sRunTick0   = svcGetSystemTick();
         Log("run: %s from category %d list %d", mode == RUN_ARM_REC ? "recording" : "playing", sRunCategory, sRunListPos);
@@ -1503,9 +1522,9 @@ void DevTools::SaveSettings()
     FILE *f = fopen(kSettingsPath, "w");
     if (!f)
         return;
-    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpumode=%d\nsyncdraw=%d\nvblank=%d\nlock30=%d\nfps=%d\nhud=%d\ntab=%d\ngpu3d=%d\nstereofar=%d\n", (int)swFrameSkip,
+    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpumode=%d\nsyncdraw=%d\nvblank=%d\nlock30=%d\nfps=%d\nhud=%d\ntab=%d\ngpu3d=%d\nstereofar=%d\nforce3d=%d\n", (int)swFrameSkip,
             swMaxSkip, (int)swFlipCopy, (int)GpuMode(), (int)swSyncDraw, (int)swVblankWait, (int)swLock30, optFps, optHud, uiTab, (int)swGpu3D,
-            GpuRender::stereoFar);
+            GpuRender::stereoFar, (int)swForce3D);
     fclose(f);
 }
 
@@ -1537,6 +1556,8 @@ static void LoadSettings()
             DevTools::optHud = v < 0 || v > 2 ? 1 : v;
         else if (!strcmp(key, "gpu3d"))
             DevTools::swGpu3D = v != 0;
+        else if (!strcmp(key, "force3d"))
+            DevTools::swForce3D = v != 0;
         else if (!strcmp(key, "stereofar"))
             GpuRender::stereoFar = v < 0 ? 0 : v > 16 ? 16 : v;
         else if (!strcmp(key, "tab"))

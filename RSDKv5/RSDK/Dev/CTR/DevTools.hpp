@@ -108,7 +108,7 @@ extern bool swLock30;      // FRAMES LOCK 30: draw every other pass (logic stays
 extern int optFps;         // SHOW FPS on the top screen: 0 off, 1 top left, 2 top right, 3 bottom left, 4 bottom right
 extern int optHud;         // TOP HUD: 0 shown, 1 auto (hidden while the GAME tab is open), 2 hidden
 extern int uiTab;          // the bottom screen's open tab (BottomUi::Tab)
-extern bool swForce3D;     // DEBUG FORCE 3D: draw both eyes as if the slider were up (cost on an Old 2DS); not saved
+extern bool swForce3D;     // DEBUG FORCE 3D: draw both eyes as if the slider were up (cost on an Old 2DS); saved
 // True when entities of this (stage) class must not be drawn: the game's HUD under TOP HUD hidden / auto.
 bool HideEntityClass(uint16 classID);
 
