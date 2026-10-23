@@ -38,7 +38,7 @@ bool32 RSDK::InitStorage()
     dataStorage[DATASET_STG].storageLimit = 20 * 1024 * 1024; // most seen: 16.2 MB (full)
     dataStorage[DATASET_MUS].storageLimit = 6 * 1024 * 1024;  // 4.1 MB (the stream's buffer and music ring live here)
     dataStorage[DATASET_SFX].storageLimit = 13 * 1024 * 1024; // 11.4 MB
-    dataStorage[DATASET_STR].storageLimit = 128 * 1024;       // 59 KB of 60
+    dataStorage[DATASET_STR].storageLimit = 256 * 1024;       // 59 KB of the old 60; 126 KB of 128 in Press Garden (2DS)
     dataStorage[DATASET_TMP].storageLimit = 7 * 1024 * 1024;  // 5.6 MB
 #else
     dataStorage[DATASET_STG].storageLimit = 24 * 1024 * 1024; // 24MB
