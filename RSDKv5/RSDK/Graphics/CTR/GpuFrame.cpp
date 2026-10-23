@@ -46,11 +46,15 @@ bool sPalBase, sPalDirty;
 
 bool Alloc()
 {
-    static bool failed;
+    // A failure is tried again 5 s later (300 frames), not given up for good: the updater's check at boot holds
+    // curl's memory for a moment, and the whole session was drawn by the CPU when the first try came then.
+    static unsigned retryIn;
     if (sCmds)
         return true;
-    if (failed)
+    if (retryIn) {
+        --retryIn;
         return false;
+    }
     static const unsigned kSizes[][2] = { { 8192, 384 * 1024 }, { 4096, 256 * 1024 }, { 2048, 96 * 1024 } };
     for (const auto &sz : kSizes) {
         sCmds  = (Cmd *)malloc(sz[0] * sizeof(Cmd));
@@ -65,10 +69,11 @@ bool Alloc()
         sCmds  = NULL;
         sArena = NULL;
     }
-    failed = true;
+    retryIn = 300;
     DEV_LOG("gpuframe: no memory for the command buffers");
     return false;
 }
+
 
 // A new command with the screen state it needs; NULL when the buffers are full (the caller then falls back
 // to drawing immediately for the rest of the frame).
@@ -153,6 +158,12 @@ void GpuFrame::PaletteWillChange()
     }
     if (active)
         sPalDirty = true;
+}
+
+void GpuFrame::Reserve()
+{
+    if (DEV_SW_RECORD)
+        Alloc();
 }
 
 void GpuFrame::Begin()
