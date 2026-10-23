@@ -25,11 +25,19 @@ using namespace RSDK;
 
 #define UpdateLog(...) DEV_LOG(__VA_ARGS__)
 
+// The heap's top and break, for the free memory a failed transfer logs.
+extern "C" {
+extern char *fake_heap_end;
+void *_sbrk_r(struct _reent *, ptrdiff_t);
+}
+
 #define APP_DIR_FS "/3ds/Sonic Mania 3DS"
 #define UPDATE_DIR "sdmc:" APP_DIR_FS "/update"
 #define UPDATE_PART UPDATE_DIR "/download.part"
 static const u64 TITLE_ID = 0x0004000005A23000ULL; // 3ds/SonicMania.rsf UniqueId 0x5A230
-#define UPDATE_IO_SIZE (128u * 1024u)
+// 32 KB, not the other ports' 128: the engine leaves the heap nearly full and curl failed for memory on the 2DS
+// (curl=27). curl's own receive buffer is half of it.
+#define UPDATE_IO_SIZE (32u * 1024u)
 #define MANIFEST_LIMIT (2u * 1024u * 1024u)
 static LightLock lock;
 static UpdateStatus status;
@@ -148,7 +156,7 @@ static bool fetch(const char *url, Transfer *t) {
   curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 128L);
   curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 15L);
   curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
-  curl_easy_setopt(c, CURLOPT_BUFFERSIZE, (long)UPDATE_IO_SIZE);
+  curl_easy_setopt(c, CURLOPT_BUFFERSIZE, (long)(UPDATE_IO_SIZE / 2));
   curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, receive);
   curl_easy_setopt(c, CURLOPT_WRITEDATA, t);
   curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
@@ -163,7 +171,9 @@ static bool fetch(const char *url, Transfer *t) {
   }
   curl_easy_cleanup(c);
   if (code != CURLE_OK || http != 200) {
-    UpdateLog("Updater transfer failed: curl=%d http=%ld", code, http);
+    struct mallinfo mi = mallinfo();
+    UpdateLog("Updater transfer failed: curl=%d http=%ld (heap free %lu KB in use, %lu KB never taken)", code, http,
+              (unsigned long)(mi.fordblks >> 10), (unsigned long)((fake_heap_end - (char *)_sbrk_r(_REENT, 0)) >> 10));
     return false;
   }
   return true;
