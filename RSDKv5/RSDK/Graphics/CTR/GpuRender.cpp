@@ -57,7 +57,9 @@ inline int16 Quarter(float p) { return (int16)(p >= 0 ? p * 4.0f + 0.5f : p * 4.
 
 // TEX_3D: a 3D scene (Batch::first = index in sDraw3D). TEX_TILE_FINE: the tile atlas with texel coordinates in 1/32
 // texel (rotozoom layers: affine runs need sub-texel coordinates).
-enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE };
+// TEX_ROTO0..: a rotozoom layer drawn whole into a texture of its own (RotoTex), texel coordinates in 1/16 texel.
+// TEX_ROTOMASK0..: that layer's hot-colour mask (RotoTex::mask), drawn with BLEND_HOT.
+enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE, TEX_ROTO0, TEX_ROTO1, TEX_ROTOMASK0, TEX_ROTOMASK1 };
 
 // Software layers: a layer kind the GPU cannot draw (rotozoom, vscroll, a layer split by the water line) is drawn by
 // the engine's own function into screens[1] (unused on the 3DS), keyed with a colour no palette produces in practice,
@@ -68,7 +70,9 @@ struct SoftJob {
 };
 // BLEND_MASKED / BLEND_UNMASKED: INK_MASKED / INK_UNMASKED, normal alpha blending drawn where the stencil says the
 // screen holds / does not hold the mask colour (see the mask frame in Render).
-enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL, BLEND_MASKED, BLEND_UNMASKED };
+// BLEND_HOT: a rotozoom texture's hot colour (RotoTex): the mask's texels equal to the constant's top byte, painted
+// opaque in the constant's colour (0xRRGGBB in the low bytes, as the texture combiner takes it).
+enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL, BLEND_MASKED, BLEND_UNMASKED, BLEND_HOT };
 
 struct Batch {
     uint8 tex, blend;
@@ -135,6 +139,44 @@ int8 ParallaxDepth(int32 f)
 // The Special Stage's 3D scenes: the player's model is at Z ~ 41000 (SITE CMDS); things there sit on the screen plane.
 const float STEREO_ZC = 41000.0f;
 bool sRotoSoft; // this attempt draws rotozoom layers in software (the tile runs ran out of quads)
+
+// Rotozoom layers up to 1024x1024 pixels (the title's island and clouds) are drawn whole, once, into a texture of
+// their own in VRAM (repeating, as the layer wraps), and each screen line becomes one quad sampling it along the line:
+// ~200 quads instead of ~3500 one-pixel tile runs. Rebuilt when the layer's palette bank, layout or tiles change,
+// once they have held for two frames (a fade would rebuild it every frame: the tile runs draw it meanwhile).
+// Colours that keep changing while the rest holds (the title's water, indices 140-143 rotated every 6 frames) become
+// hot: the texture keeps whatever they were, an A8 mask holds hot colour k + 1 (x 32) where its pixels use them, and
+// each frame every hot colour is painted over from the mask in its current colour (a pass of the same line quads).
+enum { ROTO_HOT_MAX = 4 };
+struct RotoTex {
+    C3D_Tex tex, mask;
+    bool alloc, maskAlloc, maskValid;
+    uint8 hot[ROTO_HOT_MAX]; // hot palette indices
+    unsigned hotCount;
+    uint16 builtPal[PALETTE_BANK_SIZE]; // the bank the texture was built with
+    const TileLayer *layer;
+    unsigned w, h;
+    uint32 built, seen; // content hash the texture holds / was seen last frame
+    uint32 used[8];     // palette indices its pixels use (only those colours count as a change); all until built
+    unsigned seenFrames;
+    bool valid;
+    uint32 lastUsed; // sRotoFrame when last drawn
+};
+enum { ROTO_TEX_SLOTS = 2 };
+RotoTex sRotoTex[ROTO_TEX_SLOTS];
+const TileLayer *sRotoTexFailed; // a layer whose texture could not be allocated (not tried again until the next scene)
+uint32 sTileEpoch;               // bumped when animated tiles change the tileset
+const char *sRotoTexWhy = "-";
+uint32 sRotoFrame;               // GPU frames, to free textures no longer drawn
+
+void FreeRotoTex(RotoTex &r)
+{
+    if (r.alloc)
+        C3D_TexDelete(&r.tex);
+    if (r.maskAlloc)
+        C3D_TexDelete(&r.mask);
+    memset(&r, 0, sizeof(r));
+}   // why the last rotozoom layer was not drawn from its texture (SITE REFUSED)
 
 struct SprSlot {
     uint64 key; // 0 = free
@@ -299,6 +341,7 @@ void ResetSprites()
 
 void ResetCaches()
 {
+    ++sTileEpoch;
     memset(sTileCell, 0xFF, sizeof(sTileCell)); // -1
     memset(sTileStamp, 0, sizeof(sTileStamp));
     memset(sTileHash, 0, sizeof(sTileHash));
@@ -1827,6 +1870,303 @@ struct RotoAxis {
     }
 };
 
+// Stereo depth of a rotozoom layer's lines: each line's depth from its distance (the walk's step grows with it), the
+// lines at the player's feet (line 200, the Special Stage camera's) on the screen plane, the horizon the farthest. The
+// title screen's island and clouds: the island's nearest line (screen line 239, TitleBG_Scanline_Island's i = 87, a
+// step of 2 * 0xA00000 / (8 * 87)) on the screen plane, both layers measured against it. 0: no depths.
+float RotoFeet(const ScanlineInfo *first, int y1, int y2)
+{
+    if (sTitleScene)
+        return 2.0f * (float)(0xA00000 / (8 * 87));
+    if (!sDepths)
+        return 0;
+    const int fy = 200 < y1 ? y1 : 200 >= y2 ? y2 - 1 : 200;
+    return sqrtf((float)first[fy - y1].deform.x * first[fy - y1].deform.x + (float)first[fy - y1].deform.y * first[fy - y1].deform.y);
+}
+
+int8 RotoLineDepth(float feet, int32 dx, int32 dy)
+{
+    const float d = sqrtf((float)dx * dx + (float)dy * dy);
+    float f       = d > 0 ? 1.0f - feet / d : 1.0f;
+    f             = f < -0.5f ? -0.5f : f > 1.0f ? 1.0f : f;
+    return (int8)(f * STEREO_FAR + (f < 0 ? -0.5f : 0.5f));
+}
+
+// Draws the whole layer into its texture: per 16x16 tile, four 8x8 Morton blocks, through the staging buffer.
+bool BuildRotoTex(RotoTex &r, const TileLayer *layer, const u16 *tex)
+{
+    const unsigned w = r.w, rowBytes = w * 8 * 2; // one row of 8x8 blocks
+    const unsigned wShift = layer->widthShift;
+    static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
+    return UploadVram(r.tex.data, w * r.h * 2, [&](u32 off, u32 n, u8 *staging) {
+        u16 *dst            = (u16 *)staging;
+        const unsigned br0  = off / rowBytes, rows = n / rowBytes;
+        for (unsigned br = br0; br < br0 + rows; ++br) {
+            const unsigned ty = br >> 1, by = br & 1;
+            for (unsigned tx = 0; tx < (w >> 4); ++tx) {
+                const unsigned t = layer->layout[tx + (ty << wShift)] & 0xFFF;
+                const uint8 *src = &tilesetPixels[TILE_DATASIZE * t + by * 8 * 16];
+                for (unsigned bx = 0; bx < 2; ++bx) {
+                    u16 *blk        = &dst[((br - br0) * (w >> 3) + tx * 2 + bx) << 6];
+                    const uint8 *sp = src + bx * 8;
+                    for (unsigned y = 0; y < 8; ++y, sp += 16) {
+                        u16 *b = blk + my[y];
+                        b[0] = tex[sp[0]], b[1] = tex[sp[1]], b[4] = tex[sp[2]], b[5] = tex[sp[3]];
+                        b[16] = tex[sp[4]], b[17] = tex[sp[5]], b[20] = tex[sp[6]], b[21] = tex[sp[7]];
+                    }
+                }
+            }
+        }
+    });
+}
+
+// What the texture depends on: the colours its pixels use (hot ones aside), the layout, the tileset's epoch.
+uint32 RotoContentHash(const RotoTex &r, const TileLayer *layer, const uint16 *pal)
+{
+    uint32 used[8];
+    memcpy(used, r.used, sizeof(used));
+    for (unsigned k = 0; k < r.hotCount; ++k)
+        used[r.hot[k] >> 5] &= ~(1u << (r.hot[k] & 31));
+    uint32 hash = 2166136261u ^ sTileEpoch * 16777619u;
+    for (unsigned i = 0; i < PALETTE_BANK_SIZE; ++i)
+        if (used[i >> 5] & (1u << (i & 31)))
+            hash = (hash ^ pal[i]) * 16777619u;
+    const uint32 *lw     = (const uint32 *)layer->layout;
+    const unsigned words = ((1u << layer->widthShift) << layer->heightShift) / 2;
+    for (unsigned i = 0; i < words; ++i)
+        hash = (hash ^ lw[i]) * 16777619u;
+    return hash;
+}
+
+// The hot-colour mask: per texel (k + 1) * 32 where the pixel uses hot colour k, else 0; Morton blocks of bytes.
+bool BuildRotoMask(RotoTex &r, const TileLayer *layer)
+{
+    uint8 slot[PALETTE_BANK_SIZE];
+    memset(slot, 0, sizeof(slot));
+    for (unsigned k = 0; k < r.hotCount; ++k)
+        slot[r.hot[k]] = (uint8)((k + 1) * 32);
+    const unsigned w = r.w, rowBytes = w * 8; // one row of 8x8 blocks
+    const unsigned wShift = layer->widthShift;
+    static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
+    return UploadVram(r.mask.data, w * r.h, [&](u32 off, u32 n, u8 *dst) {
+        const unsigned br0 = off / rowBytes, rows = n / rowBytes;
+        for (unsigned br = br0; br < br0 + rows; ++br) {
+            const unsigned ty = br >> 1, by = br & 1;
+            for (unsigned tx = 0; tx < (w >> 4); ++tx) {
+                const unsigned t = layer->layout[tx + (ty << wShift)] & 0xFFF;
+                const uint8 *src = &tilesetPixels[TILE_DATASIZE * t + by * 8 * 16];
+                for (unsigned bx = 0; bx < 2; ++bx) {
+                    uint8 *blk      = &dst[((br - br0) * (w >> 3) + tx * 2 + bx) << 6];
+                    const uint8 *sp = src + bx * 8;
+                    for (unsigned y = 0; y < 8; ++y, sp += 16) {
+                        uint8 *b = blk + my[y];
+                        b[0] = slot[sp[0]], b[1] = slot[sp[1]], b[4] = slot[sp[2]], b[5] = slot[sp[3]];
+                        b[16] = slot[sp[4]], b[17] = slot[sp[5]], b[20] = slot[sp[6]], b[21] = slot[sp[7]];
+                    }
+                }
+            }
+        }
+    });
+}
+
+// The layer's lines [y1, y2) as one quad each from its texture. *handled false: not possible this frame (too big, no
+// VRAM, lines in different banks, content still changing, coordinates out of range): the caller draws tile runs.
+bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, int y1, int y2, float feet, bool *handled)
+{
+    *handled = false;
+    if (GpuRender::depthMode & 512) // debug: the tile runs as before
+        return true;
+    const unsigned w = (unsigned)TILE_SIZE << layer->widthShift, h = (unsigned)TILE_SIZE << layer->heightShift;
+    sRotoTexWhy = w > 1024 || h > 1024 ? "too big" : layer == sRotoTexFailed ? "no vram" : "banks";
+    if (w > 1024 || h > 1024 || layer == sRotoTexFailed)
+        return true;
+    const uint8 bank = sLineBuf[y1];
+    for (int y = y1 + 1; y < y2; ++y)
+        if (sLineBuf[y] != bank)
+            return true;
+    sRotoTexWhy = "slots";
+    const unsigned vb = sBankMap[bank];
+
+    // The layer's slot (a layer slot holds another scene's layer of another size after a scene change: anew), else a
+    // free one, else one not drawn for a second (its VRAM goes back).
+    RotoTex *r = NULL;
+    for (unsigned i = 0; i < ROTO_TEX_SLOTS && !r; ++i)
+        if (sRotoTex[i].alloc && sRotoTex[i].layer == layer) {
+            r = &sRotoTex[i];
+            if (r->w != w || r->h != h) {
+                FreeRotoTex(*r);
+                r = NULL;
+            }
+        }
+    if (!r) {
+        for (unsigned i = 0; i < ROTO_TEX_SLOTS && !r; ++i)
+            if (!sRotoTex[i].alloc)
+                r = &sRotoTex[i];
+        for (unsigned i = 0; i < ROTO_TEX_SLOTS && !r; ++i)
+            if (sRotoFrame - sRotoTex[i].lastUsed > 60) {
+                FreeRotoTex(sRotoTex[i]);
+                r = &sRotoTex[i];
+            }
+        if (!r)
+            return true;
+        if (!C3D_TexInitVRAM(&r->tex, (u16)w, (u16)h, GPU_RGBA5551)) {
+            sRotoTexWhy    = "no vram";
+            sRotoTexFailed = layer;
+            return true;
+        }
+        C3D_TexSetFilter(&r->tex, GPU_NEAREST, GPU_NEAREST);
+        C3D_TexSetWrap(&r->tex, GPU_REPEAT, GPU_REPEAT);
+        r->alloc = true, r->layer = layer, r->w = w, r->h = h, r->valid = false, r->seenFrames = 0;
+        memset(r->used, 0xFF, sizeof(r->used));
+    }
+    const uint16 *pal = sPalShadow[vb];
+    uint32 hash       = RotoContentHash(*r, layer, pal);
+    if (r->valid && r->built != hash) {
+        // Only a few used colours changed, nothing else: they become hot (the texture stays, the mask paints them).
+        uint8 changed[ROTO_HOT_MAX];
+        unsigned n = 0;
+        bool few   = true;
+        for (unsigned i = 1; i < PALETTE_BANK_SIZE && few; ++i) {
+            if (!(r->used[i >> 5] & (1u << (i & 31))) || pal[i] == r->builtPal[i])
+                continue;
+            bool isHot = false;
+            for (unsigned k = 0; k < r->hotCount; ++k)
+                isHot |= r->hot[k] == i;
+            if (isHot)
+                continue;
+            if (r->hotCount + n >= ROTO_HOT_MAX)
+                few = false;
+            else
+                changed[n++] = (uint8)i;
+        }
+        if (few && n) {
+            const unsigned keep = r->hotCount;
+            memcpy(r->hot + r->hotCount, changed, n);
+            r->hotCount += n;
+            if (RotoContentHash(*r, layer, r->builtPal) == RotoContentHash(*r, layer, pal)) {
+                r->built     = RotoContentHash(*r, layer, r->builtPal);
+                r->maskValid = false;
+                hash         = r->built;
+            }
+            else
+                r->hotCount = keep; // something else changed too: an ordinary rebuild
+        }
+    }
+    if (!r->valid || r->built != hash) {
+        r->seenFrames = r->seen == hash ? r->seenFrames + 1 : 1;
+        r->seen       = hash;
+        sRotoTexWhy   = "changing";
+        if (r->seenFrames < 2)
+            return true;
+        if (!BuildRotoTex(*r, layer, sTexPal[vb]))
+            return true;
+        memcpy(r->builtPal, pal, sizeof(r->builtPal));
+        // The colours it uses, from its distinct tiles (until now every colour counted).
+        static uint8 seenTile[TILE_COUNT * 4];
+        memset(seenTile, 0, sizeof(seenTile));
+        memset(r->used, 0, sizeof(r->used));
+        const unsigned texels = (1u << layer->widthShift) << layer->heightShift;
+        for (unsigned i = 0; i < texels; ++i) {
+            const unsigned t = layer->layout[i] & 0xFFF;
+            if (seenTile[t])
+                continue;
+            seenTile[t]      = 1;
+            const uint8 *src = &tilesetPixels[TILE_DATASIZE * t];
+            for (unsigned k = 0; k < TILE_DATASIZE; ++k)
+                r->used[src[k] >> 5] |= 1u << (src[k] & 31);
+        }
+        r->used[0] &= ~1u; // index 0 is transparent whatever its colour
+        r->built = r->seen = RotoContentHash(*r, layer, pal);
+        r->valid           = true;
+        r->maskValid       = false;
+        ++sStats.rotoTexBuilds;
+    }
+    if (r->hotCount && !r->maskValid) {
+        if (!r->maskAlloc) {
+            if (!C3D_TexInitVRAM(&r->mask, (u16)w, (u16)h, GPU_A8)) {
+                r->hotCount = 0; // no room: the hot colours stay as built (they stop changing on screen)
+                r->built    = RotoContentHash(*r, layer, r->builtPal);
+                return true;
+            }
+            C3D_TexSetFilter(&r->mask, GPU_NEAREST, GPU_NEAREST);
+            C3D_TexSetWrap(&r->mask, GPU_REPEAT, GPU_REPEAT);
+            r->maskAlloc = true;
+        }
+        if (!BuildRotoMask(*r, layer))
+            return true;
+        r->maskValid = true;
+    }
+
+    // Each line: the software samples pixel cx at pos + cx * deform (16.16 texels, wrapping); the quad's ends are half
+    // a step outside the first and last samples, so the GPU's samples at pixel centres land on the same texels. In
+    // 1/16 texel from the start's position inside the texture; a line that would not fit an int16 refuses.
+    const uint8 tex     = (uint8)(TEX_ROTO0 + (r - sRotoTex));
+    const int lineSize  = x2 - x1;
+    const uint32 maskX  = (w << 16) - 1, maskY = (h << 16) - 1;
+    const unsigned passes = 1 + (r->maskValid ? r->hotCount : 0);
+    const unsigned need   = (unsigned)(y2 - y1) * passes;
+    sRotoTexWhy = "quads";
+    if (sQuadCount + need > MAX_QUADS)
+        return true;
+    sRotoTexWhy = "range";
+    for (int y = y1; y < y2; ++y) {
+        const ScanlineInfo &s = first[y - y1];
+        const int64 px = (int64)((uint32)s.position.x & maskX), py = (int64)((uint32)s.position.y & maskY);
+        const int64 u0 = px - s.deform.x / 2, v0 = py - s.deform.y / 2;
+        const int64 u1 = u0 + (int64)s.deform.x * lineSize, v1 = v0 + (int64)s.deform.y * lineSize;
+        auto fits = [](int64 v) { return v > -(32000ll << 12) && v < (32000ll << 12); };
+        if (!fits(u0) || !fits(u1) || !fits(v0) || !fits(v1))
+            return true;
+    }
+    // From here on the layer is drawn from the texture.
+    *handled    = true;
+    sRotoTexWhy = "-";
+    r->lastUsed = sRotoFrame;
+    unsigned q = sQuadCount;
+    uint32 *w32 = (uint32 *)&sVbo[sCur][q * 4];
+    for (unsigned pass = 0; pass < passes; ++pass)
+    for (int y = y1; y < y2; ++y) {
+        const ScanlineInfo &s = first[y - y1];
+        const int8 depth      = feet > 0 ? RotoLineDepth(feet, s.deform.x, s.deform.y) : sDepth;
+        // Pass 0 the texture; pass k the mask's hot colour k - 1 in its colour now (as the atlases quantise it).
+        uint8 ptex = tex, pblend = BLEND_NORMAL;
+        uint32 constant = 0;
+        if (pass) {
+            const u16 t       = ToTexel(pal[r->hot[pass - 1]]);
+            const unsigned r5 = t >> 11, g5 = (t >> 6) & 31, b5 = (t >> 1) & 31;
+            const unsigned cr = (r5 << 3) | (r5 >> 2), cg = (g5 << 3) | (g5 >> 2), cb = (b5 << 3) | (b5 >> 2);
+            ptex     = (uint8)(TEX_ROTOMASK0 + (r - sRotoTex));
+            pblend   = BLEND_HOT;
+            constant = ((uint32)(pass * 32) << 24) | (cb << 16) | (cg << 8) | cr;
+        }
+        Batch *last = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
+        if (!last || last->tex != ptex || last->blend != pblend || last->constant != constant || last->depth != depth || last->scissor != sScissor) {
+            if (sBatchCount >= MAX_BATCHES) {
+                sQuadCount = q;
+                return Refuse(GpuRender::REASON_QUAD_LIMIT);
+            }
+            sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor };
+            last                    = &sBatches[sBatchCount - 1];
+        }
+        const int64 px = (int64)((uint32)s.position.x & maskX), py = (int64)((uint32)s.position.y & maskY);
+        const int64 u0 = px - s.deform.x / 2, v0 = py - s.deform.y / 2;
+        const int64 u1 = u0 + (int64)s.deform.x * lineSize, v1 = v0 + (int64)s.deform.y * lineSize;
+        const uint32 uv0 = (uint16)(int16)((u0 + 2048) >> 12) | ((uint32)(uint16)(int16)((v0 + 2048) >> 12) << 16);
+        const uint32 uv1 = (uint16)(int16)((u1 + 2048) >> 12) | ((uint32)(uint16)(int16)((v1 + 2048) >> 12) << 16);
+        const uint32 X0 = (uint32)(x1 << 2), X1 = (uint32)(x2 << 2);
+        const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
+        w32[0] = X0 | Y0, w32[1] = uv0, w32[2] = 0xFFFFFFFFu;
+        w32[3] = X1 | Y0, w32[4] = uv1, w32[5] = 0xFFFFFFFFu;
+        w32[6] = X1 | Y1, w32[7] = uv1, w32[8] = 0xFFFFFFFFu;
+        w32[9] = X0 | Y1, w32[10] = uv0, w32[11] = 0xFFFFFFFFu;
+        w32 += 12, ++q;
+        ++last->count;
+    }
+    sStats.tileQuads += q - sQuadCount;
+    sQuadCount = q;
+    return true;
+}
+
 bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 {
     const int x1 = c.clip[0] < 0 ? 0 : c.clip[0], x2 = c.clip[2] > screens[0].pitch ? screens[0].pitch : c.clip[2];
@@ -1836,6 +2176,14 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     const int lineSize = x2 - x1;
     // c.clip[1] is where the recorded scanlines start (the software reads scanlines[clipBound_Y1]).
     const ScanlineInfo *first = sl + (y1 - c.clip[1]);
+    const float feet          = RotoFeet(first, y1, y2);
+    {
+        bool handled;
+        if (!EmitRotoTex(layer, first, x1, x2, y1, y2, feet, &handled))
+            return false;
+        if (handled)
+            return true;
+    }
 
     // Estimate the runs: tile crossings along x and y per line, plus one.
     unsigned estimate = 0;
@@ -1863,15 +2211,6 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     const unsigned first0 = sQuadCount;
     // Stereo: each line's depth from its distance (the walk's step grows with it), the lines at the player's feet
     // (line 200, the Special Stage camera's) on the screen plane, the horizon the farthest.
-    // The title screen's island and clouds: the island's nearest line (screen line 239, TitleBG_Scanline_Island's
-    // i = 87, a step of 2 * 0xA00000 / (8 * 87)) on the screen plane, both layers measured against it.
-    float feet = 0;
-    if (sTitleScene)
-        feet = 2.0f * (float)(0xA00000 / (8 * 87));
-    else if (sDepths) {
-        const int fy = 200 < y1 ? y1 : 200 >= y2 ? y2 - 1 : 200;
-        feet         = sqrtf((float)first[fy - y1].deform.x * first[fy - y1].deform.x + (float)first[fy - y1].deform.y * first[fy - y1].deform.y);
-    }
     const unsigned limit  = first0 + ROTO_MAX_QUADS < MAX_QUADS ? first0 + ROTO_MAX_QUADS : MAX_QUADS;
     unsigned q            = first0, empty = 0;
     uint32 *w             = (uint32 *)&sVbo[sCur][q * 4];
@@ -1891,10 +2230,7 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
         const int32 dx = s.deform.x, dy = s.deform.y;
         const int hx = dx >> 12, hy = dy >> 12; // half a pixel step in 1/32 texel
         if (sDepths && feet > 0) {
-            const float d = sqrtf((float)dx * dx + (float)dy * dy);
-            float f       = d > 0 ? 1.0f - feet / d : 1.0f;
-            f             = f < -0.5f ? -0.5f : f > 1.0f ? 1.0f : f;
-            const int8 depth = (int8)(f * STEREO_FAR + (f < 0 ? -0.5f : 0.5f));
+            const int8 depth = RotoLineDepth(feet, dx, dy);
             if (depth != batch->depth) {
                 // A batch per depth band: close this one, open the next
                 batch->count += q - batchFirst;
@@ -2100,6 +2436,7 @@ void ResetTexEnv()
 unsigned GpuRender::depthMode = 0;
 int GpuRender::stereoFar       = 6;
 bool GpuRender::depthTint      = false;
+const char *GpuRender::RotoTexWhy() { return sRotoTexWhy; }
 const char *GpuRender::DepthSummary() { return sDepthLast[0] ? sDepthLast : "- (no 3D frame yet: slider up or SET force3d 1)"; }
 
 const GpuRender::Stats &GpuRender::GetStats() { return sStats; }
@@ -2244,11 +2581,18 @@ bool GpuRender::Render(const Stream &stream)
         return false;
     }
     if (sSeenContent != contentVersion) {
+        // A new scene: the last one's rotozoom textures and 3D models go too (the models waited for the next 3D
+        // scene, holding VRAM: the title's island texture found none after a Special Stage).
         sSeenContent = contentVersion;
+        for (unsigned i = 0; i < ROTO_TEX_SLOTS; ++i)
+            FreeRotoTex(sRotoTex[i]);
+        sRotoTexFailed = NULL;
+        FreeModels();
         ResetCaches();
     }
     TrackPalette(false, stream.basePalette);
     if (tileDirtyAny) {
+        ++sTileEpoch;
         // Animated tiles rewritten since the last GPU frame: their copies (every bank, every flip variant) go stale.
         tileDirtyAny = false;
         for (unsigned w = 0; w < TILE_COUNT / 32; ++w) {
@@ -2276,6 +2620,7 @@ bool GpuRender::Render(const Stream &stream)
     }
 
     sCur = (sCur + 1) & 1;
+    ++sRotoFrame;
     // Both eyes when the 3D slider is up or DEBUG FORCE 3D is on (as if the slider were at the top: on a 2DS it
     // measures what 3D would cost; the right eye is drawn and never seen).
     sSlider = osGet3DSliderState();
@@ -2556,6 +2901,13 @@ bool GpuRender::Render(const Stream &stream)
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &m);
             curDepth = bt.depth;
         }
+        if (curTex != bt.tex && bt.tex >= TEX_ROTO0) {
+            const bool mask  = bt.tex >= TEX_ROTOMASK0;
+            const RotoTex &r = sRotoTex[bt.tex - (mask ? TEX_ROTOMASK0 : TEX_ROTO0)];
+            C3D_TexBind(0, (C3D_Tex *)(mask ? &r.mask : &r.tex));
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / (r.w * 16.0f), -1.0f / (r.h * 16.0f), 0.0f, 0.0f);
+            curTex = bt.tex;
+        }
         if (curTex != bt.tex) {
             const bool tile = bt.tex == TEX_TILE || bt.tex == TEX_TILE_FINE;
             C3D_TexBind(0, tile ? &sTileTex : bt.tex == TEX_SOFT ? &sSoftTex : &sSprTex);
@@ -2564,6 +2916,30 @@ bool GpuRender::Render(const Stream &stream)
             const float h    = (tile ? TILE_ATLAS_H : bt.tex == TEX_SOFT ? SOFT_H : SPR_ATLAS_H) * fine;
             C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / w, -1.0f / h, 0.0f, 0.0f);
             curTex = bt.tex;
+        }
+        if (bt.blend == BLEND_HOT) {
+            // A rotozoom texture's hot colour: where the mask equals the reference, its colour now, opaque. DEPTH TINT
+            // shows the planes, not the colours: skipped there.
+            if (GpuRender::depthTint)
+                continue;
+            C3D_TexEnv *env = C3D_GetTexEnv(0);
+            C3D_TexEnvInit(env);
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+            C3D_TexEnvColor(env, 0xFF000000u | (bt.constant & 0xFFFFFFu));
+            C3D_AlphaTest(true, GPU_EQUAL, (int)(bt.constant >> 24));
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+            if (maskFrame) { // what it covers is no longer the mask colour
+                C3D_StencilTest(true, GPU_ALWAYS, 0, 0xFF, 0xFF);
+                C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_ZERO);
+            }
+            C3D_DrawElements(GPU_TRIANGLES, (int)(bt.count * 6), C3D_UNSIGNED_SHORT, sIdx + bt.first * 6);
+            ResetTexEnv();
+            C3D_AlphaTest(maskFrame, GPU_GREATER, 0);
+            curBlend = -1;
+            curTint  = -1000;
+            continue;
         }
         // DEPTH TINT (debug): every batch one flat colour by its depth, keeping its silhouette; inks drawn as plain
         // alpha so a dim or additive picture does not read as a far plane. As in ../zelda-tmc-3ds: blue, dark far
