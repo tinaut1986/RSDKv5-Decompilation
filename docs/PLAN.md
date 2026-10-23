@@ -37,7 +37,20 @@
   Stages: 7 and 1+ all on the CPU (DEFORMED SPRITE, #11), 4 / 4+ ~13 fps (animated floor palette, #12), 3D models in
   the wrong depth order everywhere (#13), floor through the track (#10). gpu-renderer.md "Session 5 hand-off".
   Next (owner): #11.
-- **Active release line**: `release/v0.1.0`, on `origin`.
+- **2026-10-23/24, session 6 (merged, beta `v0.1.1`):** the ink tint on the GPU (pause menu 43.5 -> 59.8 fps);
+  the loading box, the tabs (GAME, OPTIONS, UPDATES) and the player's options in production builds, which now use the
+  GPU by default (`Port`, `port-settings.ini`); the version from git (`tools/version.sh`); the in-game updater from
+  ../zelda-tmc-3ds (UPDATES tab, AUTO UPDATE prompt at boot, CIA checked by SHA-256 and installed, restart) and the
+  release workflow (`.github/workflows/build-release.yml`). Beta `v0.1.0` drew every frame on the CPU (the recorder lost
+  its memory to the updater's check): fixed in `v0.1.1`. Memory: the Mania Plus engine (revision 2) instead of v5U
+  (12 MB of Legacy arrays less), storage pools sized on a sweep of every scene on the 2DS (STG 20, MUS 7, SFX 13,
+  TMP 7 MB, STR 512 KB; the old sizes overflowed in Press Garden and a Special Stage). The network buffer is 256 KB on
+  the Old 3DS, as in ../legend-of-doom-3ds. **Stardust Speedway 2 crashed** (heap corruption, since the original port):
+  the scanline table had 240 entries, but vertical-scroll layers index it by column (400): fixed, and the recorder
+  copies such layers by column. Tools: `SET heapcheck 1` (the heap walked every frame and loading step), `SET music 0`,
+  the DEBUG FTP switch, `tools/fbi-install.py` (a CIA to FBI's remote install when the game's FTP is down).
+  Sweep script and results: `debug/pool-sweep/` (gitignored).
+- **Active release line**: `release/v0.1.1`, on `origin` (`v0.1.0` and `v0.1.1` are beta tags on it).
 - **Consoles**: the owner's Old 2DS at `192.168.1.141` and New 3DS at `192.168.1.133` (DHCP: ping first;
   `tools/site.sh -i IP`). Both run the latest dev build of `release/v0.1.0`; the New 3DS takes `--install` over FTP too
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS). Ask the owner before installing in a new session (each session's
@@ -50,9 +63,8 @@
 | Branch | State |
 |---|---|
 | `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
-| `release/v0.1.0` | Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). Merged topic branches deleted. |
+| `release/v0.1.1` | (was `release/v0.1.0`, renamed after the `v0.1.0` tag) Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). Merged topic branches deleted. |
 | `feat/gpu-deformed-sprite` -> `perf/ss4-palette` -> `fix/3d-depth-bands` | **Stacked on the release's last merge, pushed, not merged**: #11 the plasma sky on the GPU (Special Stages 7 / 1+ ~18 -> ~60 fps), #12 animated tiles counted only where used (4 / 4+ ~13 -> ~58), #13 each 3D scene's depth band over its own Z range. Checked by Claude on the 2DS (frozen frames match the software; a tour of the 14 entries at ~60 fps without 3D), **not yet by the owner**, and the 2DS hung on a frozen Special Stage 7 with FORCE 3D while debug switches were toggled (gpu-renderer.md "Tour after the fixes; a hang"). Merge `fix/3d-depth-bands` (it holds the other two) once the owner has seen them and the hang is understood. |
-| `feat/prod-loading-box` | The loading box of the dev bottom screen in production builds too (`DEV_TOOLS=0`), with a plain title screen between loads. Checked in Azahar, **not yet by the owner on the console**. Replaces the old `feat/loading-screen` (deleted 2026-10-23 with `feat/render-backend`, whose `gfx-rewrite` base stays on `origin/gfx-rewrite`). |
 
 ## Tasks
 
