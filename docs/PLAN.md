@@ -29,7 +29,10 @@
   core 1. Special Stage 2 run 43.4 fps / 35.2 with 3D (46.1 / 36.5 with `floorwin 1`). Next: the floor (9-13 ms of
   CPU a frame). See gpu-renderer.md "The audio off core 0". Then `perf/floor-lod`: the floor from five window levels,
   **56.0 fps / 45.1 with 3D** on the same run (gpu-renderer.md "The floor in five levels"). Then
-  `perf/stereo-submit`: **57.7 / 49.5 with 3D** (gpu-renderer.md "Runs of 3D scenes").
+  `perf/stereo-submit`: **57.7 / 49.5 with 3D** (gpu-renderer.md "Runs of 3D scenes"). Tour of all the Special
+  Stages: 7 and 1+ all on the CPU (DEFORMED SPRITE, #11), 4 / 4+ ~13 fps (animated floor palette, #12), 3D models in
+  the wrong depth order everywhere (#13), floor through the track (#10). gpu-renderer.md "Session 5 hand-off".
+  Next (owner): #11.
 - **Active release line**: `release/v0.1.0`, on `origin`.
 - **Consoles**: the owner's Old 2DS at `192.168.1.141` and New 3DS at `192.168.1.133` (DHCP: ping first;
   `tools/site.sh -i IP`). Both run the latest dev build of `release/v0.1.0`; the New 3DS takes `--install` over FTP too

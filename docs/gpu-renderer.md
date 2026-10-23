@@ -493,12 +493,56 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - 2DS, the same frozen frame: command buffer 84-93 % -> 42 %, no eyes dropped. The owner's Special Stage 2 run:
   **49.5 fps with FORCE 3D** (45.1), **57.7** without (56.0).
 
+## Session 5 hand-off (2026-10-23, evening): the Special Stage tour
+
+Branches, stacked, each committed and pushed, none merged (the owner played Special Stage 2 on the 2DS and found it
+good): `perf/floor-lerp` -> `perf/audio-core1` -> `perf/floor-lod` -> `perf/stereo-submit`. Merging the last brings
+them all. Special Stage 2 run on the 2DS: 36.9 / 29.0 fps (3D) at the start of the session, **57.7 / 49.5** now.
+
+A tour of the 14 Special Stage list entries on the 2DS (category 3: 0-6 the stages, 7-13 the Special Stage+ ones; fps
+without FORCE 3D, sampled 15 s after the load, `tools/site.sh STATE`):
+
+| Entry | fps | Seen by the owner | Issue |
+|---|---|---|---|
+| 1 (3 0) | fine | | |
+| 2 (3 1) | ~58 | blue floor lines through the track now and then | #10 |
+| 3 (3 2) | 42 | fine | |
+| 4 (3 3) | 10-13 | very slow | #12 |
+| 5 (3 4) | 37 | 3D models in the wrong depth order (looked like broken polygons) | #13 |
+| 6 (3 5) | 37 | ramps: the floor through the arrow, the arrow seen from behind | #13 |
+| 7 (3 6) | ~20 | every frame on the CPU: DEFORMED SPRITE | #11 |
+| 1+ (3 7) | ~18 | every frame on the CPU: DEFORMED SPRITE | #11 |
+| 2+ (3 8) | ~60 | | |
+| 3+ (3 9) | ~58 | fine | |
+| 4+ (3 10) | slow | as 4 | #12 |
+| 5+, 6+ (3 11, 3 12) | 54 | 3D depth order; floor through the track | #13, #10 |
+| 7+ (3 13) | 54 | palm trees in the wrong depth order | #13 |
+
+- **#11** `DrawDeformedSprite` has no GPU command: the frame hazards to the CPU whole (layers, sprites, 3D, faces in
+  software). The owner's chosen next step.
+- **#12** Special Stage 4's floor colours change every frame (`floor changing`, `roto texture changing` in
+  `SITE REFUSED`): the windows and the rotozoom textures never hold, the atlas reconverts each frame, ~36 ms of
+  geometry.
+- **#13** every 3D scene has its own slice of the depth range, later nearer (`Draw3DSceneGpu`, uniform `band`), so a
+  model drawn later wins whatever its depth; coplanar faces (a ramp's arrow) fight in the depth test.
+- **#10** the floor levels' one-pixel-per-texel sampling (or a line changing level) lets a floor line win over the
+  track at some camera angles. Minor (the owner).
+- Tools of this session: the DEBUG tab's CAPTURE button (`tools/capture.sh`), `SITE C3D` (pframe split, audio
+  shares, music gaps), `load:` and `storage:` lines in the log, `SET floorwin/floorfog/floorfogavg/audioprio`.
+- Measuring: `RUNPLAY` with no FTP polling during the run (each poll costs fps); `SITE RUN` gives the result with
+  `music gaps`. The 30 s tour script lives in the session's scratchpad: per entry `SITE SCENE 3 N`, wait for the
+  load (STATE answers with the old scene while the main thread loads: wait for the `load:` line or the new scene
+  number), play, `tools/shot.sh`.
+- Debug switches left on the console: `frameskip 0`, `force3d` as last set, `ufotime 1` (not saved); `ufonofall` off.
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
 
-0. Check the other Special Stages and the title with the floor levels and the 3D runs; then what is left of a 3D
-   frame (~20 ms on the 2DS: logic ~3.5, recording ~2.5, geometry ~5, the two eyes' submit ~5).
+0. Special Stages: #11 DEFORMED SPRITE on the GPU (7 and 1+), #12 Special Stage 4's animated floor palette, #13 the 3D
+   scenes' depth order, #10 the floor through the track; the title with the floor levels and the shader binary
+   (not checked yet). What is left of a 3D frame (~20 ms on the 2DS: logic ~3.5, recording ~2.5, geometry ~5, the two
+   eyes' submit ~5).
 1. #1 Save states tab (the owner wants it to reach spots quickly; `SITE GOTO` kills the player far away: the camera
    bounds do not follow).
 2. #5 INK_TINT on the GPU (the pause menu's grey: copy the frame into a texture mid-frame, combiner grey).
