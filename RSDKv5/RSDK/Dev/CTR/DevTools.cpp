@@ -76,10 +76,125 @@ static volatile int sPendingCategory = -1, sPendingScene = -1;
 static char sOrderCur[400], sOrderLast[400];
 static volatile bool sGoto; // SITE GOTO: move the player at the end of the frame
 static volatile bool sUfoTime; // SITE SET ufotime 1: the Special Stage's countdown never runs out (not saved)
+// The Special Stage's static variables as the game (Plus, GAME_VERSION 1.06) lays them out, up to what is used here.
+struct UfoSetupStatics {
+    uint16 classID;
+    uint8 active;
+    void (*deformCB)();
+    int32 timedOut, encoreStage, machLevel, scoreBonus, machPoints, rings, timer, ringFrame, ringPan, spherePan;
+};
+static UfoSetupStatics *UfoSetup()
+{
+    static uint32 hash[4];
+    static bool hashed;
+    if (!hashed) {
+        GEN_HASH_MD5("UFO_Setup", hash);
+        hashed = true;
+    }
+    for (int32 i = 0; i < sceneInfo.classCount; ++i) {
+        ObjectClass &oc = objectClassList[stageObjectIDs[i]];
+        if (HASH_MATCH_MD5(oc.hash, hash) && oc.staticVars && *oc.staticVars)
+            return (UfoSetupStatics *)*oc.staticVars;
+    }
+    return NULL;
+}
 static int32 sGotoX, sGotoY;
 // SITE HIDE <ObjectName>: one class not drawn (to see what it covers); SITE HIDE alone shows it again. Not saved.
 static uint32 sHideHash[4];
 static volatile bool sHideSet;
+// Recorded runs: keys per logic pass from the end of a scene load (12 button bits, the circle pad's 4 in 12-15).
+enum { RUN_MAX = 60 * 60 * 5 }; // five minutes
+enum RunMode { RUN_OFF, RUN_ARM_REC, RUN_REC, RUN_ARM_PLAY, RUN_PLAY };
+static uint16 sRunKeys[RUN_MAX];
+static unsigned sRunCount, sRunPos;
+static volatile int sRunMode;
+static uint32 sRunContent; // GpuFrame::contentVersion when armed: a new value means the scene has been loaded
+static int sRunCategory = -1, sRunListPos = -1;
+static unsigned sRunFrames0;
+static u64 sRunTick0;
+static char sRunResult[96] = "-";
+static bool sRunFreezeAtEnd; // RUNPLAY N F: freeze the objects on the last pass (to compare two playbacks' pictures)
+static const char *kRunPath = "sdmc:/3ds/Sonic Mania 3DS/debug/run.bin";
+static unsigned sRunRecLimit; // RUNREC N: stop by itself after N passes, frozen (to compare with RUNPLAY N F)
+// The objects' static variables when the recording started: a reload resets only what each class's StageLoad sets
+// (the Special Stage's frame counter, the camera...), so the playback starts from a copy of them, or it drifts off the
+// route. Per class: its size (int32) then its bytes, in the stage's class order.
+enum { RUN_STATICS_MAX = 96 * 1024 };
+static uint8 sRunStatics[RUN_STATICS_MAX];
+static uint32 sRunStaticsSize;
+
+// True when `v` points into the engine's data storage (AllocateStorage): the storage tracks the variable that holds
+// each allocation, so such a word is never overwritten (a restored pointer from another load corrupted it and the next
+// scene load crashed in DefragmentAndGarbageCollectStorage).
+static bool InStorage(uint32 v)
+{
+    for (int32 set = 0; set < DATASET_MAX; ++set) {
+        const uint32 lo = (uint32)(uintptr_t)dataStorage[set].memoryTable;
+        if (lo && v >= lo && v < lo + dataStorage[set].storageLimit)
+            return true;
+    }
+    return false;
+}
+
+// Puts back a class's recorded statics, word by word, keeping the words that hold storage pointers (now or then).
+static void RunStaticsRestore(uint8 *dst, const uint8 *src, uint32 size)
+{
+    uint32 i = 0;
+    for (; i + 4 <= size; i += 4) {
+        uint32 now, was;
+        memcpy(&now, dst + i, 4);
+        memcpy(&was, src + i, 4);
+        if (!InStorage(now) && !InStorage(was))
+            memcpy(dst + i, &was, 4);
+    }
+    for (; i < size; ++i)
+        dst[i] = src[i];
+}
+
+static void RunStaticsCopy(bool save)
+{
+    uint32 off = 0;
+    bool same = true;
+    for (int32 i = 0; i < sceneInfo.classCount; ++i) {
+        ObjectClass &oc = objectClassList[stageObjectIDs[i]];
+        const int32 size = oc.staticVars && *oc.staticVars ? oc.staticClassSize : 0;
+        if (off + 4 + (uint32)(size > 0 ? size : 0) > RUN_STATICS_MAX)
+            break;
+        if (save) {
+            memcpy(sRunStatics + off, &size, 4);
+            if (size > 0)
+                memcpy(sRunStatics + off + 4, *oc.staticVars, (size_t)size);
+        }
+        else {
+            int32 was;
+            memcpy(&was, sRunStatics + off, 4);
+            if (off + 4 > sRunStaticsSize || was != size) {
+                same = false; // another build or scene: left as loaded
+                break;
+            }
+            if (size > 0)
+                RunStaticsRestore((uint8 *)*oc.staticVars, sRunStatics + off + 4, (uint32)size);
+        }
+        off += 4 + (uint32)(size > 0 ? size : 0);
+    }
+    if (save)
+        sRunStaticsSize = off;
+    else if (!same)
+        DevTools::Log("run: the recorded statics do not match this scene's classes, not restored");
+}
+
+static void RunSave()
+{
+    FILE *f = fopen(kRunPath, "wb");
+    if (!f)
+        return;
+    const int32 hdr[3] = { sRunCategory, sRunListPos, (int32)sRunCount };
+    fwrite(hdr, sizeof(hdr), 1, f);
+    fwrite(sRunKeys, 2, sRunCount, f);
+    fwrite(&sRunStaticsSize, 4, 1, f);
+    fwrite(sRunStatics, 1, sRunStaticsSize, f);
+    fclose(f);
+}
 static volatile int sShotRequest; // 1 top screen, 2 bottom screen, 3 top screen's right eye
 
 struct Session {
@@ -727,6 +842,8 @@ static void HandleSession(int ctrl)
                     DevTools::swLock30 = v != 0;
                 else if (!strncmp(path, "force3d", 7))
                     DevTools::swForce3D = v != 0;
+                else if (!strncmp(path, "gpuskip", 7))
+                    GpuRender::gpuSkip = (unsigned)v;
                 else if (!strncmp(path, "floorwin", 8))
                     GpuRender::floorWindows = v != 0;
                 else if (!strncmp(path, "ufotime", 7))
@@ -742,7 +859,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|floorwin <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|floorwin|gpuskip <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
@@ -884,6 +1001,83 @@ static void HandleSession(int ctrl)
                 // the CPU renderers can be compared on the same picture. FREEZE 0 resumes.
                 DevTools::freeze = path && atoi(path) != 0;
                 Reply(s, "200 freeze %d", (int)DevTools::freeze);
+            }
+            else if (!strcmp(sub, "RUNREC")) {
+                // The current scene again from its load, recording the keys until RUNSTOP (or five minutes).
+                sRunCategory = sceneInfo.activeCategory, sRunListPos = sceneInfo.listPos;
+                sRunCount = 0, sRunContent = GpuFrame::contentVersion;
+                sRunRecLimit = path ? (unsigned)atoi(path) : 0;
+                sRunMode = RUN_ARM_REC;
+                // Reloaded by the main thread (FrameEnd), as SITE SCENE does.
+                sPendingCategory = sRunCategory;
+                sPendingScene    = sRunListPos - sceneInfo.listCategory[sRunCategory].sceneOffsetStart;
+                Reply(s, "200 recording from the reload of category %d list %d", sRunCategory, sRunListPos);
+            }
+            else if (!strcmp(sub, "RUNSTOP")) {
+                if (sRunMode == RUN_REC || sRunMode == RUN_ARM_REC) {
+                    sRunMode = RUN_OFF;
+                    RunSave();
+                    snprintf(sRunResult, sizeof(sRunResult), "recorded %u passes (%.1f s) of category %d list %d", sRunCount, sRunCount / 60.0f,
+                             sRunCategory, sRunListPos);
+                }
+                else
+                    sRunMode = RUN_OFF;
+                Reply(s, "200 %s", sRunResult);
+            }
+            else if (!strcmp(sub, "RUNPLAY")) {
+                // The recorded run (debug/run.bin) from its scene's load; RUN shows the result (drawn fps). RUNPLAY N: only
+                // its first N passes (3600: a minute of play).
+                FILE *f = fopen(kRunPath, "rb");
+                int32 hdr[3] = { -1, -1, 0 };
+                if (f) {
+                    if (fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[2] > 0 && hdr[2] <= RUN_MAX)
+                        sRunCount = (unsigned)fread(sRunKeys, 2, (size_t)hdr[2], f);
+                    sRunStaticsSize = 0; // older recordings end with the keys
+                    if (fread(&sRunStaticsSize, 4, 1, f) != 1 || sRunStaticsSize > RUN_STATICS_MAX ||
+                        fread(sRunStatics, 1, sRunStaticsSize, f) != sRunStaticsSize)
+                        sRunStaticsSize = 0;
+                    fclose(f);
+                }
+                unsigned limit = 0;
+                char freezeArg[4] = "";
+                if (path)
+                    sscanf(path, "%u %3s", &limit, freezeArg);
+                sRunFreezeAtEnd = freezeArg[0] == 'F' || freezeArg[0] == 'f';
+                if (limit && limit < sRunCount)
+                    sRunCount = limit;
+                if (hdr[0] < 0 || !sRunCount)
+                    Reply(s, "550 no recorded run (RUNREC, then RUNSTOP)");
+                else {
+                    sRunCategory = hdr[0], sRunListPos = hdr[1];
+                    sRunPos = 0, sRunContent = GpuFrame::contentVersion;
+                    sRunMode = RUN_ARM_PLAY;
+                    sPendingCategory = sRunCategory;
+                    sPendingScene    = sRunListPos - sceneInfo.listCategory[sRunCategory].sceneOffsetStart;
+                    snprintf(sRunResult, sizeof(sRunResult), "playing %u passes", sRunCount);
+                    Reply(s, "200 playing %u passes of category %d list %d", sRunCount, sRunCategory, sRunListPos);
+                }
+            }
+            else if (!strcmp(sub, "TIMES")) {
+                // The frame's costs in one short line (ms; STATE's is cut by the FTP limit): logic, recording, flip
+                // (pcopy geometry, pframe citro3d frame), wait, and the GPU's own drawing time.
+                const GpuRender::Stats &g = GpuRender::GetStats();
+                Reply(s, "200 frame %.1f upd %.1f draw %.1f flip %.1f pcopy %.1f pframe %.1f wait %.1f | gpu draw %.1f submit %.1f | quads %u batches %u cmdbuf %u%% eyes dropped %u",
+                      sLastFrameMs, sLastStageMs[DevTools::STAGE_UPDATE], sLastStageMs[DevTools::STAGE_DRAW], sLastStageMs[DevTools::STAGE_FLIP], sLastStageMs[DevTools::STAGE_PCOPY],
+                      sLastStageMs[DevTools::STAGE_PFRAME], sLastStageMs[DevTools::STAGE_WAIT], g.gpuDrawMs, g.gpuProcMs, g.quads, g.batches, g.cmdBufPct, g.eyesDropped);
+            }
+            else if (!strcmp(sub, "EMIT")) {
+                // pcopy split: before the commands, then the geometry building per command type (ms, last frame).
+                const GpuRender::Stats &g = GpuRender::GetStats();
+                using namespace GpuFrame;
+                Reply(s, "200 pre %.2f | layer %.2f roto-spr %.2f sprite %.2f 3d %.2f faces %.2f face %.2f line %.2f rect %.2f fill %.2f circle %.2f other %.2f",
+                      g.preMs, g.emitMs[CMD_LAYER], g.emitMs[CMD_ROTO], g.emitMs[CMD_SPRITE], g.emitMs[CMD_SCENE3D],
+                      g.emitMs[CMD_FACES] + g.emitMs[CMD_BLENDED_FACES], g.emitMs[CMD_FACE] + g.emitMs[CMD_BLENDED_FACE], g.emitMs[CMD_LINE],
+                      g.emitMs[CMD_RECT], g.emitMs[CMD_FILL], g.emitMs[CMD_CIRCLE] + g.emitMs[CMD_CIRCLE_OUTLINE],
+                      g.emitMs[CMD_LINEBUF] + g.emitMs[CMD_PALETTE]);
+            }
+            else if (!strcmp(sub, "RUN")) {
+                static const char *kMode[] = { "off", "armed to record", "recording", "armed to play", "playing" };
+                Reply(s, "200 %s %u/%u | %s", kMode[sRunMode], sRunMode == RUN_PLAY ? sRunPos : sRunCount, sRunCount, sRunResult);
             }
             else if (!strcmp(sub, "INPUT")) {
                 // SITE INPUT <hex mask of 3DS keys, e.g. 10 = A, 10 = KEY_A bit>: held until set to 0.
@@ -1113,6 +1307,67 @@ int DevTools::optFps          = 0;
 int DevTools::optHud          = 1;
 int DevTools::uiTab           = 0;
 bool DevTools::swForce3D      = false;
+
+void DevTools::RunKeys(uint32 *held, uint32 *down)
+{
+    const int mode = sRunMode;
+    if (mode == RUN_OFF)
+        return;
+    // Armed: wait for the reload to end (the first regular pass with a new content version).
+    if (mode == RUN_ARM_REC || mode == RUN_ARM_PLAY) {
+        if (GpuFrame::contentVersion == sRunContent || sceneInfo.state == ENGINESTATE_LOAD) {
+            if (mode == RUN_ARM_PLAY)
+                *held = *down = 0;
+            return;
+        }
+        sRunMode    = mode == RUN_ARM_REC ? RUN_REC : RUN_PLAY;
+        // The same random numbers in the recording and the playback (the game's ReplayRecorder seeds it the same
+        // way); without it a replay drifted off the route.
+        SetRandSeed(1624633040);
+        // Statics the Special Stage does not reset on a reload (its frame counter: every other frame does things):
+        // from the same values in the recording and the playback.
+        // The objects' statics: copied when recording, put back when playing (see sRunStatics).
+        if (mode == RUN_ARM_REC)
+            RunStaticsCopy(true);
+        else if (sRunStaticsSize)
+            RunStaticsCopy(false);
+        sRunFrames0 = sTotGpu + sTotCpu;
+        sRunTick0   = svcGetSystemTick();
+        Log("run: %s from category %d list %d", mode == RUN_ARM_REC ? "recording" : "playing", sRunCategory, sRunListPos);
+    }
+    if (sRunMode == RUN_REC) {
+        if (sRunRecLimit && sRunCount >= sRunRecLimit) {
+            // Done: saved as RUNSTOP does, and frozen on this pass.
+            sRunMode = RUN_OFF;
+            freeze   = true;
+            RunSave();
+            snprintf(sRunResult, sizeof(sRunResult), "recorded %u passes, frozen", sRunCount);
+            return;
+        }
+        if (sRunCount < RUN_MAX)
+            sRunKeys[sRunCount++] = (uint16)((*held & 0xFFF) | ((*held >> 16) & 0xF000)); // circle pad bits 28-31 -> 12-15
+        return;
+    }
+    // Playing: the recorded keys instead of the real ones; at the end, the drawn frames a second over the run.
+    if (sRunPos < sRunCount) {
+        // The buttons, and the circle pad's directions (KEY_LEFT etc. are the d-pad's or the circle pad's).
+        auto unpack       = [](uint16 k) { return (uint32)(k & 0xFFF) | ((uint32)(k & 0xF000) << 16); };
+        const uint32 prev = sRunPos ? unpack(sRunKeys[sRunPos - 1]) : 0;
+        *held             = unpack(sRunKeys[sRunPos]);
+        *down             = *held & ~prev;
+        ++sRunPos;
+        return;
+    }
+    const float secs = (float)(svcGetSystemTick() - sRunTick0) / SYSCLOCK_ARM11;
+    const unsigned frames = sTotGpu + sTotCpu - sRunFrames0;
+    snprintf(sRunResult, sizeof(sRunResult), "played %u passes in %.1f s: %u frames drawn, %.1f fps", sRunCount, secs, frames,
+             secs > 0 ? frames / secs : 0.0f);
+    Log("run: %s", sRunResult);
+    sRunMode = RUN_OFF;
+    if (sRunFreezeAtEnd)
+        freeze = true;
+    *held = *down = 0;
+}
 
 bool DevTools::HideEntityClass(uint16 classID)
 {
@@ -1392,9 +1647,9 @@ void DevTools::SaveSettings()
     FILE *f = fopen(kSettingsPath, "w");
     if (!f)
         return;
-    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpumode=%d\nsyncdraw=%d\nvblank=%d\nlock30=%d\nfps=%d\nhud=%d\ntab=%d\ngpu3d=%d\nstereofar=%d\n", (int)swFrameSkip,
+    fprintf(f, "frameskip=%d\nmaxskip=%d\nflipcopy=%d\ngpumode=%d\nsyncdraw=%d\nvblank=%d\nlock30=%d\nfps=%d\nhud=%d\ntab=%d\ngpu3d=%d\nstereofar=%d\nforce3d=%d\n", (int)swFrameSkip,
             swMaxSkip, (int)swFlipCopy, (int)GpuMode(), (int)swSyncDraw, (int)swVblankWait, (int)swLock30, optFps, optHud, uiTab, (int)swGpu3D,
-            GpuRender::stereoFar);
+            GpuRender::stereoFar, (int)swForce3D);
     fclose(f);
 }
 
@@ -1426,6 +1681,8 @@ static void LoadSettings()
             DevTools::optHud = v < 0 || v > 2 ? 1 : v;
         else if (!strcmp(key, "gpu3d"))
             DevTools::swGpu3D = v != 0;
+        else if (!strcmp(key, "force3d"))
+            DevTools::swForce3D = v != 0;
         else if (!strcmp(key, "stereofar"))
             GpuRender::stereoFar = v < 0 ? 0 : v > 16 ? 16 : v;
         else if (!strcmp(key, "tab"))
@@ -1468,28 +1725,10 @@ bool DevTools::FrameEnd()
     }
     if (sUfoTime) {
         // SITE SET ufotime 1: the Special Stage's countdown (UFO_Setup->rings, one a second, time over at 0) kept at
-        // 50 or more, to test the floor at leisure. The game's static struct as Plus (GAME_VERSION 1.06) lays it out.
-        struct UfoSetupStatics {
-            uint16 classID;
-            uint8 active;
-            void (*deformCB)();
-            int32 timedOut, encoreStage, machLevel, scoreBonus, machPoints, rings;
-        };
-        static uint32 hash[4];
-        static bool hashed;
-        if (!hashed) {
-            GEN_HASH_MD5("UFO_Setup", hash);
-            hashed = true;
-        }
-        for (int32 i = 0; i < sceneInfo.classCount; ++i) {
-            ObjectClass &oc = objectClassList[stageObjectIDs[i]];
-            if (HASH_MATCH_MD5(oc.hash, hash) && oc.staticVars && *oc.staticVars) {
-                UfoSetupStatics *u = (UfoSetupStatics *)*oc.staticVars;
-                if (u->rings < 50)
-                    u->rings = 50;
-                break;
-            }
-        }
+        // 50 or more, to test the floor at leisure.
+        UfoSetupStatics *u = UfoSetup();
+        if (u && u->rings < 50)
+            u->rings = 50;
     }
     if (sGoto) {
         sGoto = false;

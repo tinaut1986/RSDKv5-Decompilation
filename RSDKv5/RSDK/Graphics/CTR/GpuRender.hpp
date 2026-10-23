@@ -42,6 +42,10 @@ struct Stats {
     unsigned rotoSoftRuns, rotoSoftQuads; // rotozoom layers sent to the software: too many runs / quads (total)
     unsigned rotoUs, rotoQuads; // rotozoom layers as tile runs: build time (us) and quads (last frame)
     unsigned rotoTexBuilds; // rotozoom layers drawn into their own texture (RotoTex), times built (total)
+    float gpuDrawMs, gpuProcMs; // citro3d: the last GPU frame's drawing time and its submit time (ms)
+    float emitMs[GpuFrame::CMD_TYPES_MAX]; // the last frame's geometry building per command type (ms; the last attempt)
+    float preMs;                 // before the commands: palette tracking, animated tiles, set-up (ms)
+    unsigned batches;           // batches of the last frame
     unsigned eyesDropped;   // right eyes not drawn because the command buffer would not hold them (total)
     unsigned cmdBufPct;     // most of the GPU command buffer a frame has used (%), since boot
     unsigned tileEvictions; // times the full tile atlas gave back the cells not used in the frame (total)
@@ -62,6 +66,8 @@ extern bool depthTint;
 // The Special Stage floor from map windows (FloorWin). Off: on the 2DS it was slower than the tile runs (the window
 // moves' synchronous copies wait for the GPU, the fog passes add fill). SITE SET floorwin 1 to try it; not saved.
 extern bool floorWindows;
+// SITE SET gpuskip N (debug, not saved): batch kinds not drawn, to weigh their GPU time (bits: see the draw loop).
+extern unsigned gpuSkip;
 // The last 3D frame's depths ("L<layer> g<group> near..far | ... far N playfield #i sprites behind n"), SITE DEPTHS.
 const char *DepthSummary();
 // Why the last rotozoom layer was not drawn from a texture of its own ("-": it was), for SITE REFUSED.

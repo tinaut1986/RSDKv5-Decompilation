@@ -60,7 +60,7 @@ inline int16 Quarter(float p) { return (int16)(p >= 0 ? p * 4.0f + 0.5f : p * 4.
 // TEX_ROTO0..: a rotozoom layer drawn whole into a texture of its own (RotoTex), texel coordinates in 1/16 texel.
 // TEX_ROTOMASK0..: that layer's hot-colour mask (RotoTex::mask), drawn with BLEND_HOT.
 // TEX_FLOOR0.. / TEX_FLOORMASK0..: the Special Stage floor windows and their fog-group masks (FloorWin), 1/16 texel.
-enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE, TEX_FLOOR0, TEX_FLOOR1, TEX_FLOORMASK0, TEX_FLOORMASK1, TEX_ROTO0, TEX_ROTO1, TEX_ROTOMASK0, TEX_ROTOMASK1 };
+enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE, TEX_FLOOR0, TEX_FLOOR1, TEX_FLOOR2, TEX_FLOORMASK0, TEX_FLOORMASK1, TEX_FLOORMASK2, TEX_ROTO0, TEX_ROTO1, TEX_ROTOMASK0, TEX_ROTOMASK1 };
 
 // Software layers: a layer kind the GPU cannot draw (rotozoom, vscroll, a layer split by the water line) is drawn by
 // the engine's own function into screens[1] (unused on the 3DS), keyed with a colour no palette produces in practice,
@@ -177,6 +177,9 @@ enum { ROTO_TEX_SLOTS = 2, ROTO_BANK_BUDGET = 1024 * 1024 };
 // VRAM a Special Stage texture leaves free for the 3D models (GpuScene3D: ~600 KB in stage 1; on the 2DS the floor
 // windows took it first and every frame with a 3D scene went to the CPU).
 enum { VRAM_RESERVE = 800 * 1024 };
+u32 sModelVram; // VRAM the 3D models hold now: the reserve is what they may still need
+
+u32 VramReserve() { return sModelVram < VRAM_RESERVE ? VRAM_RESERVE - sModelVram : 0; }
 RotoTex sRotoTex[ROTO_TEX_SLOTS];
 const TileLayer *sRotoTexFailed; // a layer whose texture could not be allocated (not tried again until the next scene)
 uint32 sTileEpoch;               // bumped when animated tiles change the tileset
@@ -1260,6 +1263,7 @@ void FreeModels()
             vramFree(g.idx);
     }
     memset(sModels, 0, sizeof(sModels));
+    sModelVram = 0;
 }
 
 // Copies `bytes` (a multiple of 16) from linear memory to VRAM with the transfer engine, as citro3d's
@@ -1318,6 +1322,7 @@ bool EnsureModel(unsigned m)
         DEV_LOG("gpu3d: no VRAM for model %u (%u KB)", m, (unsigned)((vbytes + ibytes + cbytes) >> 10));
         return false;
     }
+    sModelVram += vbytes + ibytes + (colors ? cbytes : 0);
     bool ok = UploadVram(g.vtx, vbytes, [&](u32 off, u32 n, u8 *buf) {
         int16 *o = (int16 *)buf;
         for (u32 i = 0; i < n / 2; ++i) {
@@ -1536,52 +1541,8 @@ bool EmitRect(const Cmd &c)
     return true;
 }
 
-// DrawLine: the software's clipping and Bresenham steps, pixel for pixel, with the pixels gathered into horizontal or
-// vertical runs, one quad each (the Special Stage's wireframe item boxes, the giant ring's portal).
-struct LineRuns {
-    int x0, y0, len;
-    bool vertical;
-    uint8 blend, r, g, b, a;
-    bool ok = true;
-    void Flush()
-    {
-        if (len <= 0 || !ok)
-            return;
-        const float x1 = vertical ? x0 + 1.0f : (float)(x0 + len), y1 = vertical ? (float)(y0 + len) : y0 + 1.0f;
-        if (!AddQuad(TEX_SPRITE, blend, (float)x0, (float)y0, x1, y1, 4.0f, 4.0f, 4.0f, 4.0f, SPR_ATLAS_W, SPR_ATLAS_H, r, g, b, a))
-            ok = false;
-        len = 0;
-    }
-    void Put(int x, int y)
-    {
-        if (len) {
-            // Extends the run when the pixel continues it (a 1-pixel run may turn into either kind)
-            if (len == 1 && y == y0 && x == x0 + 1) {
-                vertical = false, ++len;
-                return;
-            }
-            if (len == 1 && x == x0 && (y == y0 + 1 || y == y0 - 1)) {
-                vertical = true, ++len;
-                if (y < y0)
-                    y0 = y;
-                return;
-            }
-            if (!vertical && y == y0 && x == x0 + len) {
-                ++len;
-                return;
-            }
-            if (vertical && x == x0 && (y == y0 + len || y == y0 - 1)) {
-                if (y < y0)
-                    y0 = y;
-                ++len;
-                return;
-            }
-            Flush();
-        }
-        x0 = x, y0 = y, len = 1, vertical = false;
-    }
-};
-
+// DrawLine: the software's clipping, then one thin quad (the Special Stage's wireframe item boxes, the giant ring's
+// portal).
 bool EmitLine(const Cmd &c)
 {
     const int32 *p = c.p;
@@ -1671,46 +1632,39 @@ bool EmitLine(const Cmd &c)
     drawX1 = clampTo(drawX1, cx1, cx2), drawY1 = clampTo(drawY1, cy1, cy2);
     drawX2 = clampTo(drawX2, cx1, cx2), drawY2 = clampTo(drawY2, cy1, cy2);
 
-    const int32 sizeX = abs(drawX2 - drawX1), sizeY = abs(drawY2 - drawY1);
-    const int32 max = sizeY;
-    int32 hSize     = sizeX <= sizeY ? -sizeY >> 2 : sizeX >> 2;
-    if (drawX2 < drawX1) {
-        int32 v = drawX1;
-        drawX1 = drawX2, drawX2 = v;
-        v = drawY1, drawY1 = drawY2, drawY2 = v;
-    }
-
+    // One quad: a parallelogram a pixel thick across the line's major axis, which covers a pixel of each column (or
+    // row) as the software's steps do, give or take one at the half-way rounding. Walking the steps and gathering runs
+    // made a quad a pixel on diagonals (the Special Stage's wireframe item boxes: ~3 ms of the 2DS's frame).
     const uint16 c16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
     const unsigned r5 = c16 >> 11, g6 = (c16 >> 5) & 0x3F, b5 = c16 & 0x1F;
-    LineRuns runs;
-    runs.len = 0, runs.blend = blend, runs.a = (uint8)alpha;
-    runs.r = (uint8)((r5 << 3) | (r5 >> 2)), runs.g = (uint8)((g6 << 2) | (g6 >> 4)), runs.b = (uint8)((b5 << 3) | (b5 >> 2));
-    // The pixels the software writes: the frame buffer pointer stays inside the screen, so do the steps (capped).
-    int guard = 4096;
-    if (drawY1 > drawY2) {
-        while ((drawX1 < drawX2 || drawY1 >= drawY2) && --guard > 0) {
-            runs.Put(drawX1, drawY1);
-            if (hSize > -sizeX)
-                hSize -= max, ++drawX1;
-            if (hSize < max)
-                --drawY1, hSize += sizeX;
+    const uint8 r = (uint8)((r5 << 3) | (r5 >> 2)), g = (uint8)((g6 << 2) | (g6 >> 4)), b = (uint8)((b5 << 3) | (b5 >> 2));
+    float px[4], py[4];
+    if (abs(drawX2 - drawX1) >= abs(drawY2 - drawY1)) { // x-major: a pixel tall
+        if (drawX2 < drawX1) {
+            int32 t = drawX1;
+            drawX1 = drawX2, drawX2 = t;
+            t = drawY1, drawY1 = drawY2, drawY2 = t;
         }
+        px[0] = (float)drawX1, py[0] = (float)drawY1;
+        px[1] = drawX2 + 1.0f, py[1] = (float)drawY2;
+        px[2] = drawX2 + 1.0f, py[2] = drawY2 + 1.0f;
+        px[3] = (float)drawX1, py[3] = drawY1 + 1.0f;
     }
-    else {
-        while (--guard > 0) {
-            runs.Put(drawX1, drawY1);
-            if (drawX1 < drawX2 || drawY1 < drawY2) {
-                if (hSize > -sizeX)
-                    hSize -= max, ++drawX1;
-                if (hSize < max)
-                    hSize += sizeX, ++drawY1;
-            }
-            else
-                break;
+    else { // y-major: a pixel wide
+        if (drawY2 < drawY1) {
+            int32 t = drawX1;
+            drawX1 = drawX2, drawX2 = t;
+            t = drawY1, drawY1 = drawY2, drawY2 = t;
         }
+        px[0] = (float)drawX1, py[0] = (float)drawY1;
+        px[1] = drawX1 + 1.0f, py[1] = (float)drawY1;
+        px[2] = drawX2 + 1.0f, py[2] = drawY2 + 1.0f;
+        px[3] = (float)drawX2, py[3] = drawY2 + 1.0f;
     }
-    runs.Flush();
-    return runs.ok ? true : Refuse(GpuRender::REASON_QUAD_LIMIT);
+    static const float kWhite[4] = { 4, 4, 4, 4 }; // the solid block at the sprite atlas's origin
+    if (!AddQuadFree(TEX_SPRITE, blend, px, py, kWhite, kWhite, SPR_ATLAS_W, SPR_ATLAS_H, r, g, b, (uint8)alpha))
+        return Refuse(GpuRender::REASON_QUAD_LIMIT);
+    return true;
 }
 
 void ConvertSoft(const SoftJob &j);
@@ -2052,7 +2006,7 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
         RotoBank &rb = r->bank[b];
         if (!rb.alloc) {
             // Leave room for the Special Stage's 3D models (VRAM_RESERVE).
-            if ((sUfoScene && vramSpaceFree() < w * h * 2 + VRAM_RESERVE) || !C3D_TexInitVRAM(&rb.tex, (u16)w, (u16)h, GPU_RGBA5551)) {
+            if ((sUfoScene && vramSpaceFree() < w * h * 2 + VramReserve()) || !C3D_TexInitVRAM(&rb.tex, (u16)w, (u16)h, GPU_RGBA5551)) {
                 sRotoTexWhy = "no vram";
                 if (!b || bankCount == 1)
                     sRotoTexFailed = layer;
@@ -2231,23 +2185,24 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
 
 // ---------------------------------------------------------------- the Special Stage floor windows
 //
-// The Special Stage floor (512x512 tiles, 8192 px) does not fit a texture. Its lines are drawn from two windows of the
-// map kept in repeating textures, where a world pixel lives at its position modulo the window (so when a window moves
-// only the cells entering it are written: a strided copy for a column of cells, a plain one for a row):
-// - level 0: 1024x1024 texels at full resolution (cells of a tile), for the lines near the camera (a step of up to
-//   FLOOR_STEP0 texels a pixel, ~80 % of the tile runs);
-// - level 1: 512x512 texels at a quarter of the resolution (each texel the map pixel at the middle of its 4x4; cells
-//   of 2x2 tiles, one 8x8 block), 2048x2048 px of the map, for the farther lines up to FLOOR_STEP1 (fogged, where the
-//   software's samples are 2-4 map pixels apart already; farther lines make few runs).
+// The Special Stage floor (512x512 tiles, 8192 px) does not fit a texture. Its lines are drawn from three windows of
+// the map kept in repeating 512x512 textures, where a map pixel lives at its position modulo the window (so when a
+// window moves only the cells entering it are written: a strided copy for a column of cells, a plain one for a row):
+// level 0 at full resolution (cells of a tile, 512 px of the map) for the near lines, level 1 at half (each texel the
+// map pixel in the middle of its 2x2, 1024 px), level 2 at a quarter (2048 px) for the far ones (kFloorStep). 1.9 MB
+// with the masks: the first try (1024x1024 + 512x512, 3.1 MB) left no VRAM for Special Stage 2's small floor.
 // Each line is one quad from the finest window that holds it; the rest stay tile runs. The windows hold palette bank
 // 0; the fog banks 1-7 (UFO_Setup: bank k = bank 0 faded towards bank 7 by f_k, chosen per line by distance) are
 // painted over: an A4 mask holds each pixel's fog group (the distinct bank 7 colours its palette indices fade to,
 // g + 1; the GPU widens it to (g + 1) * 17) and per line and group a pass blends the group's colour in by f_k
 // (BLEND_FOG). Checked when the palette changes: banks that are not such fades send the floor back to tile runs.
-// VRAM: 2.5 MB for level 0, 0.6 MB for level 1, each made only when VRAM_RESERVE stays free for the 3D models (on
+// VRAM: 640 KB a level, each made only when VramReserve() stays free for the 3D models (on
 // the 2DS the windows took it first and every frame with a 3D scene went to the CPU).
-enum { FLOOR_LEVELS = 2, FLOOR_GROUPS = 7 };
-const float FLOOR_STEP0 = 2.0f, FLOOR_STEP1 = 4.0f;
+enum { FLOOR_LEVELS = 3, FLOOR_GROUPS = 7 };
+// Per level: texels (square), map pixels per texel (log2), texels a cell, and the largest step (map pixels a screen
+// pixel) of the lines it takes; a level takes no line under 3/4 of the previous level's limit (too blurred).
+const unsigned kFloorTexW[FLOOR_LEVELS] = { 512, 512, 512 }, kFloorShift[FLOOR_LEVELS] = { 0, 1, 2 }, kFloorCell[FLOOR_LEVELS] = { 16, 8, 8 };
+const float kFloorStep[FLOOR_LEVELS] = { 1.0f, 2.0f, 4.0f };
 struct FloorLevel {
     C3D_Tex tex, mask;
     bool alloc, valid;
@@ -2345,12 +2300,47 @@ void FloorCell(const FloorLevel &l, const TileLayer *layer, u16 *col, uint8 *msk
 }
 
 // Writes cell column sx (for origin x ox, y oy) or cell row sy of a level.
+// The windows' moves go to VRAM without waiting: their copies join citro3d's queue behind the previous frame's
+// drawing (C3D_SyncTextureCopy waited for it there and then: the 2DS spent the time at each move) and C3D_FrameBegin
+// waits for them with the rest. Their data stays in this linear ring until then: a frame's copies are done by the
+// next frame's emission (C3D_FrameBegin emptied the queue in between), so it starts over each frame. A move that
+// does not fit takes the staging buffer and waits.
+enum { FLOOR_RING = 128 * 1024 };
+u8 *sFloorRing;
+u32 sFloorRingUsed;
+
+u8 *FloorRingTake(u32 bytes)
+{
+    if (!sFloorRing)
+        sFloorRing = (u8 *)linearAlloc(FLOOR_RING);
+    if (!sFloorRing || sFloorRingUsed + bytes > FLOOR_RING)
+        return NULL;
+    u8 *p = sFloorRing + sFloorRingUsed;
+    sFloorRingUsed += (bytes + 15) & ~15u;
+    return p;
+}
+
+// `bytes` of `src` into VRAM in runs of `run` bytes, `gap` bytes skipped after each (0, 0: plain); queued when `async`.
+void FloorCopy(const void *src, void *dst, u32 bytes, u32 run, u32 gap, bool async)
+{
+    GSPGPU_FlushDataCache(src, bytes);
+    const u32 indim = run ? GX_BUFFER_DIM(run >> 4, 0) : 0, outdim = run ? GX_BUFFER_DIM(run >> 4, gap >> 4) : 0;
+    if (async)
+        GX_TextureCopy((u32 *)src, indim, (u32 *)dst, outdim, bytes, 8);
+    else
+        C3D_SyncTextureCopy((u32 *)src, indim, (u32 *)dst, outdim, bytes, 8);
+}
+
 bool FloorWriteColumn(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsigned sx, const u16 *tex)
 {
-    u8 *staging = (u8 *)C3DPresent::Staging();
+    const unsigned cells = l.Cells(), bpc = l.cellTex / 8, blocksW = l.texW / 8;
+    const u32 colBytes = cells * bpc * bpc * 128, mskBytes = cells * bpc * bpc * 32;
+    u8 *staging = FloorRingTake(colBytes + mskBytes);
+    const bool async = staging != NULL;
+    if (!staging)
+        staging = (u8 *)C3DPresent::Staging();
     if (!staging)
         return false;
-    const unsigned cells = l.Cells(), bpc = l.cellTex / 8, blocksW = l.texW / 8;
     u16 *col   = (u16 *)staging;
     uint8 *msk = staging + cells * bpc * bpc * 128; // A4 mask: 32 bytes a block
     const int cx = ox + (int)((sx - (unsigned)ox) & (cells - 1));
@@ -2358,26 +2348,30 @@ bool FloorWriteColumn(FloorLevel &l, const TileLayer *layer, int ox, int oy, uns
         const int cy = oy + (int)((sy - (unsigned)oy) & (cells - 1));
         FloorCell(l, layer, col, msk, bpc, 0, sy * bpc, cx, cy, tex);
     }
-    CopyToVramStrided(col, (u8 *)l.tex.data + sx * bpc * 128, cells * bpc * bpc * 128, bpc * 128, (blocksW - bpc) * 128);
-    CopyToVramStrided(msk, (u8 *)l.mask.data + sx * bpc * 32, cells * bpc * bpc * 32, bpc * 32, (blocksW - bpc) * 32);
+    FloorCopy(col, (u8 *)l.tex.data + sx * bpc * 128, colBytes, bpc * 128, (blocksW - bpc) * 128, async);
+    FloorCopy(msk, (u8 *)l.mask.data + sx * bpc * 32, mskBytes, bpc * 32, (blocksW - bpc) * 32, async);
     return true;
 }
 
 bool FloorWriteRow(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsigned sy, const u16 *tex)
 {
-    u8 *staging = (u8 *)C3DPresent::Staging();
+    const unsigned cells = l.Cells(), bpc = l.cellTex / 8, blocksW = l.texW / 8;
+    const u32 colBytes = blocksW * bpc * 128, mskBytes = blocksW * bpc * 32;
+    u8 *staging = FloorRingTake(colBytes + mskBytes);
+    const bool async = staging != NULL;
+    if (!staging)
+        staging = (u8 *)C3DPresent::Staging();
     if (!staging)
         return false;
-    const unsigned cells = l.Cells(), bpc = l.cellTex / 8, blocksW = l.texW / 8;
     u16 *col   = (u16 *)staging;
-    uint8 *msk = staging + blocksW * bpc * 128;
+    uint8 *msk = staging + colBytes;
     const int cy = oy + (int)((sy - (unsigned)oy) & (cells - 1));
     for (unsigned sx = 0; sx < cells; ++sx) {
         const int cx = ox + (int)((sx - (unsigned)ox) & (cells - 1));
         FloorCell(l, layer, col, msk, blocksW, sx * bpc, 0, cx, cy, tex);
     }
-    CopyToVram(col, (u8 *)l.tex.data + sy * bpc * blocksW * 128, blocksW * bpc * 128);
-    CopyToVram(msk, (u8 *)l.mask.data + sy * bpc * blocksW * 32, blocksW * bpc * 32);
+    FloorCopy(col, (u8 *)l.tex.data + sy * bpc * blocksW * 128, colBytes, 0, 0, async);
+    FloorCopy(msk, (u8 *)l.mask.data + sy * bpc * blocksW * 32, mskBytes, 0, 0, async);
     return true;
 }
 
@@ -2508,8 +2502,10 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
     for (int y = y1; y < y2; ++y) {
         const ScanlineInfo &s = first[y - y1];
         const float step      = sqrtf((float)s.deform.x * s.deform.x + (float)s.deform.y * s.deform.y) / 65536.0f;
-        const int k           = step <= FLOOR_STEP0 ? 0 : step <= FLOOR_STEP1 ? 1 : -1;
-        if (k < 0)
+        int k = 0;
+        while (k < FLOOR_LEVELS && step > kFloorStep[k])
+            ++k;
+        if (k == FLOOR_LEVELS)
             continue;
         const float ax = s.position.x / 65536.0f, ay = s.position.y / 65536.0f;
         const float bx = ax + s.deform.x / 65536.0f * lineSize, by = ay + s.deform.y / 65536.0f * lineSize;
@@ -2517,7 +2513,7 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
         minY[k] = fminf(minY[k], fminf(ay, by)), maxY[k] = fmaxf(maxY[k], fmaxf(ay, by));
         ++count[k];
     }
-    if (count[0] + count[1] < 8) {
+    if (count[0] + count[1] + count[2] < 8) {
         sFloorWhy = "few lines";
         return true;
     }
@@ -2535,11 +2531,10 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
                 hash = (hash ^ pal[i]) * 16777619u;
     }
     if (!f.level[0].alloc) {
-        static const unsigned kTexW[FLOOR_LEVELS] = { 1024, 512 }, kShift[FLOOR_LEVELS] = { 0, 2 }, kCell[FLOOR_LEVELS] = { 16, 8 };
         for (int k = 0; k < FLOOR_LEVELS; ++k) {
             FloorLevel &l = f.level[k];
-            l.texW = kTexW[k], l.shift = kShift[k], l.cellTex = kCell[k];
-            if (vramSpaceFree() < l.texW * l.texW * 5 / 2 + VRAM_RESERVE)
+            l.texW = kFloorTexW[k], l.shift = kFloorShift[k], l.cellTex = kFloorCell[k];
+            if (vramSpaceFree() < l.texW * l.texW * 5 / 2 + VramReserve())
                 break;
             if (!C3D_TexInitVRAM(&l.tex, (u16)l.texW, (u16)l.texW, GPU_RGBA5551))
                 break;
@@ -2612,7 +2607,7 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
         const float step = sqrtf((float)s.deform.x * s.deform.x + (float)s.deform.y * s.deform.y) / 65536.0f;
         for (int k = 0; k < FLOOR_LEVELS; ++k) {
             const FloorLevel &l = f.level[k];
-            if (!l.valid || step > (k ? FLOOR_STEP1 : FLOOR_STEP0) || (k && step <= FLOOR_STEP0 * 0.75f))
+            if (!l.valid || step > kFloorStep[k] || (k && step <= kFloorStep[k - 1] * 0.75f))
                 continue;
             const float c = (float)l.CellPx(), x0 = l.ox * c, y0 = l.oy * c, x1w = (l.ox + l.Cells()) * c - 1, y1w = (l.oy + l.Cells()) * c - 1;
             if (fminf(ax, bx) < x0 || fmaxf(ax, bx) > x1w || fminf(ay, by) < y0 || fmaxf(ay, by) > y1w)
@@ -2623,11 +2618,12 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
         }
     }
     static char why[48];
-    snprintf(why, sizeof(why), "%u+%u/%d+%d lines", lines[0], lines[1], count[0], count[1]);
+    snprintf(why, sizeof(why), "%u+%u+%u/%d+%d+%d lines", lines[0], lines[1], lines[2], count[0], count[1], count[2]);
     sFloorWhy = why;
-    if (!lines[0] && !lines[1])
+    const unsigned linesAll = lines[0] + lines[1] + lines[2];
+    if (!linesAll)
         return true;
-    if (sQuadCount + (lines[0] + lines[1]) * (1 + f.groupCount) > MAX_QUADS) {
+    if (sQuadCount + linesAll * (1 + f.groupCount) > MAX_QUADS) {
         memset(sLineDone, 0, sizeof(sLineDone));
         return true;
     }
@@ -2966,6 +2962,7 @@ unsigned GpuRender::depthMode = 0;
 int GpuRender::stereoFar       = 6;
 bool GpuRender::depthTint      = false;
 bool GpuRender::floorWindows   = false;
+unsigned GpuRender::gpuSkip    = 0;
 const char *GpuRender::RotoTexWhy()
 {
     static char buf[48];
@@ -3157,6 +3154,7 @@ bool GpuRender::Render(const Stream &stream)
 
     sCur = (sCur + 1) & 1;
     ++sRotoFrame;
+    sFloorRingUsed = 0; // the last frame's queued window copies are done (C3D_FrameBegin emptied the queue)
     // Both eyes when the 3D slider is up or DEBUG FORCE 3D is on (as if the slider were at the top: on a 2DS it
     // measures what 3D would cost; the right eye is drawn and never seen).
     sSlider = osGet3DSliderState();
@@ -3176,6 +3174,7 @@ bool GpuRender::Render(const Stream &stream)
                 sPlayfieldEnd = k;
     bool ok;
     unsigned i = 0;
+    u64 emitTicks[CMD_TYPES_MAX], tEmit0 = 0, tCmd = 0; // SITE EMIT: geometry building per command type
     for (int attempt = 0;; ++attempt) {
     sQuadCount    = 0;
     sBatchCount   = 0;
@@ -3199,8 +3198,15 @@ bool GpuRender::Render(const Stream &stream)
     sDepthLen     = 0;
     sDepthCur[0]  = 0;
 
+    memset(emitTicks, 0, sizeof(emitTicks));
+    tEmit0 = tCmd = svcGetSystemTick();
     for (i = 0; i < stream.count && ok; ++i) {
         const Cmd &c = stream.cmds[i];
+        if (i) { // the previous command's emission time, by type (SITE TIMES)
+            const u64 now = svcGetSystemTick();
+            emitTicks[stream.cmds[i - 1].type < CMD_TYPES_MAX ? stream.cmds[i - 1].type : 0] += now - tCmd;
+            tCmd = now;
+        }
         sDepth = !sDepths ? 0 : (sUfoStage && i < 8192) ? sCmdDepth[i] : CmdDepth(c, i);
         if (GpuRender::depthMode & 1024) { // debug: everything scissored to the top-left quarter (checks the mapping)
             static const int16 kQuarter[4] = { 0, 0, 200, 120 };
@@ -3327,6 +3333,14 @@ bool GpuRender::Render(const Stream &stream)
     }
 
     // ---- the frame is decided: textures, then geometry
+    if (i)
+        emitTicks[stream.cmds[i - 1].type < CMD_TYPES_MAX ? stream.cmds[i - 1].type : 0] += svcGetSystemTick() - tCmd;
+    {
+        const float k = 1000.0f / SYSCLOCK_ARM11;
+        for (unsigned t2 = 0; t2 < CMD_TYPES_MAX; ++t2)
+            sStats.emitMs[t2] = emitTicks[t2] * k;
+        sStats.preMs = (tEmit0 - tStart) * k;
+    }
     GPU_TIME(STAGE_PCOPY, tStart);
     u64 t = svcGetSystemTick();
     C3D_RenderTarget *target = (C3D_RenderTarget *)C3DPresent::Target();
@@ -3406,6 +3420,14 @@ bool GpuRender::Render(const Stream &stream)
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     for (unsigned b = 0; b < sBatchCount; ++b) {
         const Batch &bt = sBatches[b];
+        // SITE SET gpuskip (debug): batches not drawn, to weigh their GPU time: 1 rotozoom tile runs, 2 3D scenes,
+        // 4 tile layers, 8 sprites / rectangles, 16 rotozoom textures and floor windows.
+        if (GpuRender::gpuSkip) {
+            const unsigned kind = bt.tex == TEX_TILE_FINE ? 1 : bt.tex == TEX_3D ? 2 : bt.tex == TEX_TILE ? 4 : bt.tex == TEX_SPRITE ? 8
+                                : bt.tex >= TEX_FLOOR0 ? 16 : 0;
+            if (GpuRender::gpuSkip & kind)
+                continue;
+        }
         if (bt.scissor != curScissor) {
             if (!bt.scissor)
                 C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
@@ -3434,7 +3456,7 @@ bool GpuRender::Render(const Stream &stream)
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &m);
             curDepth = bt.depth;
         }
-        if (curTex != bt.tex && bt.tex >= TEX_FLOOR0 && bt.tex <= TEX_FLOORMASK1) {
+        if (curTex != bt.tex && bt.tex >= TEX_FLOOR0 && bt.tex <= TEX_FLOORMASK2) {
             const bool mask     = bt.tex >= TEX_FLOORMASK0;
             const FloorLevel &l = sFloor.level[bt.tex - (mask ? TEX_FLOORMASK0 : TEX_FLOOR0)];
             C3D_TexBind(0, (C3D_Tex *)(mask ? &l.mask : &l.tex));
@@ -3610,6 +3632,10 @@ bool GpuRender::Render(const Stream &stream)
         sStats.cmdBufPct = pct > sStats.cmdBufPct ? pct : sStats.cmdBufPct;
     }
     C3D_FrameEnd(0);
+    // citro3d's timings of the last finished GPU frame: drawing (the PICA's work) and processing (the CPU's submit).
+    sStats.gpuDrawMs = C3D_GetDrawingTime();
+    sStats.gpuProcMs = C3D_GetProcessingTime();
+    sStats.batches   = sBatchCount;
     GPU_TIME(STAGE_PFRAME, t);
     return true;
 }

@@ -89,6 +89,10 @@ extern int swMaxSkip;    // most passes skipped in a row
 extern bool swDraw;      // run the draw lists (off isolates the cost of the logic)
 extern bool swFlipCopy;  // copy the frame into the screen (off isolates the cost of the flip)
 extern uint32 injectKeys; // 3DS key mask held on top of the real buttons (SITE INPUT)
+// Recorded runs (SITE RUNREC / RUNSTOP / RUNPLAY): the 3DS keys of every logic pass from a scene's load, played back
+// from the same load to compare builds on one route. Called by the input device with the real keys; during playback
+// it replaces them.
+void RunKeys(uint32 *held, uint32 *down);
 extern bool freeze;       // skip the objects' update, keep drawing (SITE FREEZE): the same frame in both renderers
 extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy (part of the GPU mode)
 extern bool swGpuRender;   // execute recorded frames on the GPU (needs swRecord and swGpuPresent)
@@ -104,7 +108,7 @@ extern bool swLock30;      // FRAMES LOCK 30: draw every other pass (logic stays
 extern int optFps;         // SHOW FPS on the top screen: 0 off, 1 top left, 2 top right, 3 bottom left, 4 bottom right
 extern int optHud;         // TOP HUD: 0 shown, 1 auto (hidden while the GAME tab is open), 2 hidden
 extern int uiTab;          // the bottom screen's open tab (BottomUi::Tab)
-extern bool swForce3D;     // DEBUG FORCE 3D: draw both eyes as if the slider were up (cost on an Old 2DS); not saved
+extern bool swForce3D;     // DEBUG FORCE 3D: draw both eyes as if the slider were up (cost on an Old 2DS); saved
 // True when entities of this (stage) class must not be drawn: the game's HUD under TOP HUD hidden / auto.
 bool HideEntityClass(uint16 classID);
 
