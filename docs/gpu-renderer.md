@@ -481,12 +481,24 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - The owner's Special Stage 2 run on the 2DS: **56.0 fps** (tile runs 43.6), **45.1 with FORCE 3D** (35.3). This
   morning, before the audio work: 36.9 / 29.0.
 
+## Runs of 3D scenes without the 2D state between them (perf/stereo-submit, 2026-10-23)
+
+- Special Stage 2 records up to ~75 3D scenes a frame, one model each, mostly **in a row** (57 in a row in a capture).
+  After every scene the draw loop put the whole 2D state back (program, attributes, buffers, combiner, depth,
+  projection) and the next scene put the 3D one back: ~1.4 KB of commands and ~50 us of CPU a scene, twice in 3D.
+- Now the 2D state comes back only before a 2D batch, and a scene that follows another sets only its own uniforms
+  (screen centre, depth band, lighting). Both shaders are one binary (`renderer_shbin.h` from gpu.v.pica and
+  scene3d.v.pica, DVLE 0 and 1; `tools/gen-shader.sh renderer a.v.pica b.v.pica`): citro3d uploads no shader code
+  when the two programs share it.
+- 2DS, the same frozen frame: command buffer 84-93 % -> 42 %, no eyes dropped. The owner's Special Stage 2 run:
+  **49.5 fps with FORCE 3D** (45.1), **57.7** without (56.0).
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
 
-0. Special Stage with 3D: the citro3d submit of two eyes (the shader switch per 3D scene, the command buffer at ~90 %);
-   check the other Special Stages and the title's rotozoom layers with the floor levels.
+0. Check the other Special Stages and the title with the floor levels and the 3D runs; then what is left of a 3D
+   frame (~20 ms on the 2DS: logic ~3.5, recording ~2.5, geometry ~5, the two eyes' submit ~5).
 1. #1 Save states tab (the owner wants it to reach spots quickly; `SITE GOTO` kills the player far away: the camera
    bounds do not follow).
 2. #5 INK_TINT on the GPU (the pause menu's grey: copy the frame into a texture mid-frame, combiner grey).
