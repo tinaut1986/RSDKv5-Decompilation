@@ -210,6 +210,63 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Installs: the New 3DS (192.168.1.133) runs the dev build too; `./build_3ds.sh --install 192.168.1.133` works there
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS).
 
+## Rotozoom textures per palette bank; Special Stage 2 at 59 fps (perf/special-floor, 2026-10-23)
+
+- What Special Stage 2 spent on the 2DS was its small 3D floor (a 16x16-tile grid, 256x256 px, `UFO_Setup_Scanline_3DFloor`
+  picks a fog bank per line): `RotoTex` needed one bank, so it was tile runs, often over the quad limit and drawn in
+  software (CPU frames "ROTOZOOM LAYER").
+- `RotoTex` now keeps a copy per palette bank its lines use (`RotoBank`, 128 KB each here; up to ROTO_BANK_BUDGET, 1 MB,
+  for several banks), each line drawn from its bank's copy: no extra passes. Hot colours stay shared (the mask), their
+  pass colour taken from the line's bank. Far lines of a small repeating layer span thousands of texels: their texel
+  unit grows (`Batch::uvk`, 1/16 << k) instead of refusing the layer. Bugs found on the way: a non-zero bank's batch
+  was rebound to the sprite atlas by the generic bind (`curTex` holds a key for roto textures now); the "too big"
+  status of the big floor hid the small layer's in `SITE REFUSED`.
+- 2DS, same frozen frame (both all-GPU): pcopy 13.7 -> 6.7 ms and 13.7 -> 4.7 ms at two spots. Playing (turning):
+  **50.0 -> 58.7 fps**, 59.3 with FORCE 3D. Sweep of the Special Stages with textures: 1, 3, 5, 6 at 58-60 fps with
+  and without 3D (4 and 7 ended or loaded during the sample). With 3D, stages 5 and 6 peaked the command buffer at
+  93 % and dropped 4-8 right eyes: the next thing to look at for 3D.
+- `VRAM_RESERVE` (800 KB for the 3D models) applies to every Special Stage texture.
+
+## Special Stage floor from two map windows (perf/special-floor, 2026-10-23)
+
+- The floor (512x512 tiles, 8192 px) cannot be one texture. From a `SITE LAYERS` dump of Special Stage 1: ~2330 tile
+  runs a frame, 909 on lines with a step under 1 texel a pixel, 987 between 1 and 2, 431 between 2 and 4, none beyond;
+  the lines up to a step of 2 fit a 1024 px box of the map, those up to 4 a 2048 px one.
+- `FloorWin`: two windows in repeating VRAM textures where a map pixel lives at its position modulo the window, so a
+  move writes only the cells entering it (a column with one strided `C3D_SyncTextureCopy`, a row with a plain one):
+  level 0 1024x1024 texels at full resolution (cells of a tile) for steps up to 2; level 1 512x512 at a quarter (each
+  texel the map pixel in the middle of its 4x4; cells of one 8x8 block, 2x2 tiles) for steps 1.5-4. A window moves
+  when its lines' box leaves it. Each line is one quad from the finest window holding it whole; the rest stay tile
+  runs (`sLineDone`). VRAM: 3.75 MB (both windows and masks); ~185 KB left in the Special Stage.
+- **Fog**: UFO_Setup makes banks 1-6 as `SetPaletteFade(k, 0, 7, 36k)` over indices 160-255 and picks the bank per
+  line by distance; bank 7 holds a fog colour per ramp of 8 (green, blue, grey, red...: 6 distinct in stage 1). The
+  windows hold bank 0, an A4 mask holds each pixel's fog group (g + 1, the distinct bank 7 colours of the indices
+  it uses), and per line and group a pass blends the group colour in by f_k (`BLEND_FOG`: alpha test EQUAL, constant
+  colour, blend constant alpha). `FloorFog` fits f_k per bank from the palette and refuses (tile runs) when a bank is
+  not such a fade within a step and a half.
+- Rebuilt when the colours the floor uses (any bank), the layout or its tiles change, once held two frames.
+  `sTileEpoch` now moves only when an animated tile's picture really changes (DrawAniTile rewrites tiles every frame,
+  mostly the same).
+- Results in Azahar (frozen frames, turning; quad counts only): stage 1 floor 2780-5020 quads as runs -> 720-1580; stage 2 frame
+  ~6950 -> 2500-3300 quads (it no longer goes over the 6000-quad limit). Against the CPU renderer the windows differ as
+  much as the runs did (stage 2: 466 vs 507 pixels); the level-1 lines (rows ~140-160) differ a few hundred pixels more
+  from the reduced resolution, hardly visible (fogged). With FORCE 3D cmdbuf peaked at 37 %.
+- **Measured on the 2DS (2026-10-23): slower than the tile runs, so off by default** (`SITE SET floorwin 1`, not
+  saved). Turning in stage 1: windows 55.1 fps (pcopy 6.5 ms, pframe 3.1) vs runs 59.9 (5.4, 1.5); with FORCE 3D 45.5
+  (22 right eyes dropped) vs 58.6. Stage 2: 43.9 vs 48.6. Frozen (no window moves) both cost the same (pcopy 12.7 vs
+  13.2 in stage 2). Causes: a window move's copies are `C3D_SyncTextureCopy`, which waits for the GPU's queue; the fog
+  passes (one per group, full lines, twice in 3D) add GPU fill. The first try also took the VRAM the 3D models
+  needed (every 3D frame to the CPU): masks are A4 now and each window keeps FLOOR_RESERVE (800 KB) free.
+- What stage 2 really spends (~12 ms of pcopy) is its small 3D floor drawn in software every frame: the next target.
+  To revive the windows: queue the copies (GX_TextureCopy into the frame's queue, a staging area per copy) and fog
+  without per-group passes.
+- Still: stage 2's small 3D floor (16x16 tiles, fog banks per line) is tile runs and sometimes a software layer
+  (`RotoTex` needs one bank: the same fog passes would do); `SITE SET depthmode 256` (rotozoom layers in software,
+  debug) draws that layer black, the CPU renderer draws it: a bug of the debug mode.
+- Debug: `SITE REFUSED` `floor A+B/C+D lines` (lines drawn from level 0 + level 1 / candidates), or why not (`few
+  lines`, `changing`, `fog`, `no vram`); `depthmode 512` turns the windows off too. `SITE SET ufotime 1` keeps the
+  Special Stage's countdown (UFO_Setup->rings) at 50 or more, not saved.
+
 ## Rotozoom layers from a texture of their own (perf/roto-texture, 2026-10-23)
 
 - The title's island (64x64 tiles, 1024x1024 px) and clouds (16x16) were ~3500 one-pixel tile-run quads of the ~4000
@@ -231,8 +288,9 @@ assembled with `tools/gen-shader.sh x.v.pica` (picasso) into a committed `x_shbi
 - Debug: `SITE SET depthmode 512` draws them as tile runs again; `SITE REFUSED` ends with `roto texture <why>` (`-`
   drawn from it; `too big`, `no vram`, `banks` lines in several palette banks, `changing`, `quads`, `range`) and the
   VRAM free; `SITE STATE` `roto N us M quads tex B` (B: builds since boot).
-- Not measured on hardware yet (consoles off): expected to save most of the title's roto build time (~3.4 ms of CPU on
-  the New 3DS for 3362 quads) and GPU time; check `SITE STATE` and fps on the 2DS.
+- Measured on the 2DS (2026-10-23): roto build 3.9 -> 0.9 ms, pcopy 5.3 -> 1.3 ms, 55.0 -> 58.5 fps; with FORCE 3D
+  56.2 -> 57.2 fps, the GPU slower (pframe 4.0 -> 7.7 ms: the hot passes, and sampling a big texture at steps of up to
+  2.5 texels).
 - Next: the Special Stage floor (~512x512 tiles) does not fit: a window texture around the player for near lines plus
   a reduced copy of the whole map for far ones, fog by distance in the combiner (issue #7).
 

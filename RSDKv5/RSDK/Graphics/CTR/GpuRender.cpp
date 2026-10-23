@@ -59,7 +59,8 @@ inline int16 Quarter(float p) { return (int16)(p >= 0 ? p * 4.0f + 0.5f : p * 4.
 // texel (rotozoom layers: affine runs need sub-texel coordinates).
 // TEX_ROTO0..: a rotozoom layer drawn whole into a texture of its own (RotoTex), texel coordinates in 1/16 texel.
 // TEX_ROTOMASK0..: that layer's hot-colour mask (RotoTex::mask), drawn with BLEND_HOT.
-enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE, TEX_ROTO0, TEX_ROTO1, TEX_ROTOMASK0, TEX_ROTOMASK1 };
+// TEX_FLOOR0.. / TEX_FLOORMASK0..: the Special Stage floor windows and their fog-group masks (FloorWin), 1/16 texel.
+enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE, TEX_FLOOR0, TEX_FLOOR1, TEX_FLOORMASK0, TEX_FLOORMASK1, TEX_ROTO0, TEX_ROTO1, TEX_ROTOMASK0, TEX_ROTOMASK1 };
 
 // Software layers: a layer kind the GPU cannot draw (rotozoom, vscroll, a layer split by the water line) is drawn by
 // the engine's own function into screens[1] (unused on the 3DS), keyed with a colour no palette produces in practice,
@@ -72,7 +73,8 @@ struct SoftJob {
 // screen holds / does not hold the mask colour (see the mask frame in Render).
 // BLEND_HOT: a rotozoom texture's hot colour (RotoTex): the mask's texels equal to the constant's top byte, painted
 // opaque in the constant's colour (0xRRGGBB in the low bytes, as the texture combiner takes it).
-enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL, BLEND_MASKED, BLEND_UNMASKED, BLEND_HOT };
+// BLEND_FOG: the floor window's fog: as BLEND_HOT, but blended in by Batch::fog / 255 (the line's bank's fade).
+enum Blend { BLEND_NORMAL, BLEND_ADD, BLEND_SUB, BLEND_FILL, BLEND_MASKED, BLEND_UNMASKED, BLEND_HOT, BLEND_FOG };
 
 struct Batch {
     uint8 tex, blend;
@@ -80,6 +82,8 @@ struct Batch {
     uint32 constant;       // BLEND_FILL: the per-channel alpha (R, G, B in the low bytes)
     int8 depth;            // stereoscopic disparity in pixels at the full slider (+ behind the screen, - in front)
     uint8 scissor;         // index in sScissors (0: none)
+    uint8 fog;             // BLEND_FOG: the fade, 0..255; TEX_ROTO*: the bank copy
+    uint8 uvk;             // TEX_ROTO*: texel coordinates in 1/16 texel << uvk (lines with a long span)
 };
 
 // Scissor rectangles (screen pixels x0, y0, x1, y1) of this frame: a rotated sprite or a 3D scene under a clip smaller
@@ -111,6 +115,7 @@ bool ScissorFor(const int16 *clip)
 bool sStereo;  // this frame is drawn for both eyes (the 3D slider is up, or DEBUG FORCE 3D)
 bool sDepths;  // this frame works out depths: stereo, or DEPTH TINT (which shows them with the slider down too)
 bool sUfoStage; // a Special Stage (scene folder UFO*): depths of its own
+bool sUfoScene; // a Special Stage, depths or not (the floor window)
 bool sTitleScene; // the title screen (scene folder Title): depths of its own (TitleDepth)
 float sSlider; // 0..1
 int8 sDepth;   // depth of the command being emitted (0 when not stereo: no extra batches)
@@ -148,35 +153,45 @@ bool sRotoSoft; // this attempt draws rotozoom layers in software (the tile runs
 // hot: the texture keeps whatever they were, an A8 mask holds hot colour k + 1 (x 32) where its pixels use them, and
 // each frame every hot colour is painted over from the mask in its current colour (a pass of the same line quads).
 enum { ROTO_HOT_MAX = 4 };
+// A layer whose lines use several palette banks (the Special Stage's fog per line) gets a copy per bank used.
+struct RotoBank {
+    C3D_Tex tex;
+    bool alloc, valid;
+    uint32 built, seen; // content hash the copy holds / was seen last frame
+    unsigned seenFrames;
+    uint16 builtPal[PALETTE_BANK_SIZE]; // the bank the copy was built with
+};
 struct RotoTex {
-    C3D_Tex tex, mask;
-    bool alloc, maskAlloc, maskValid;
+    const TileLayer *layer; // NULL: a free slot
+    unsigned w, h;
+    RotoBank bank[8];
+    C3D_Tex mask;
+    bool maskAlloc, maskValid;
     uint8 hot[ROTO_HOT_MAX]; // hot palette indices
     unsigned hotCount;
-    uint16 builtPal[PALETTE_BANK_SIZE]; // the bank the texture was built with
-    const TileLayer *layer;
-    unsigned w, h;
-    uint32 built, seen; // content hash the texture holds / was seen last frame
-    uint32 used[8];     // palette indices its pixels use (only those colours count as a change); all until built
-    unsigned seenFrames;
-    bool valid;
+    uint32 used[8]; // palette indices its pixels use (only those colours count as a change); all until usedOk
+    bool usedOk;
     uint32 lastUsed; // sRotoFrame when last drawn
 };
-enum { ROTO_TEX_SLOTS = 2 };
+enum { ROTO_TEX_SLOTS = 2, ROTO_BANK_BUDGET = 1024 * 1024 };
+// VRAM a Special Stage texture leaves free for the 3D models (GpuScene3D: ~600 KB in stage 1; on the 2DS the floor
+// windows took it first and every frame with a 3D scene went to the CPU).
+enum { VRAM_RESERVE = 800 * 1024 };
 RotoTex sRotoTex[ROTO_TEX_SLOTS];
 const TileLayer *sRotoTexFailed; // a layer whose texture could not be allocated (not tried again until the next scene)
 uint32 sTileEpoch;               // bumped when animated tiles change the tileset
-const char *sRotoTexWhy = "-";
+const char *sRotoTexWhy = "-";   // why the last rotozoom layer was not drawn from its texture (SITE REFUSED)
 uint32 sRotoFrame;               // GPU frames, to free textures no longer drawn
 
 void FreeRotoTex(RotoTex &r)
 {
-    if (r.alloc)
-        C3D_TexDelete(&r.tex);
+    for (RotoBank &b : r.bank)
+        if (b.alloc)
+            C3D_TexDelete(&b.tex);
     if (r.maskAlloc)
         C3D_TexDelete(&r.mask);
     memset(&r, 0, sizeof(r));
-}   // why the last rotozoom layer was not drawn from its texture (SITE REFUSED)
+}
 
 struct SprSlot {
     uint64 key; // 0 = free
@@ -1698,6 +1713,9 @@ bool EmitLine(const Cmd &c)
     return runs.ok ? true : Refuse(GpuRender::REASON_QUAD_LIMIT);
 }
 
+void ConvertSoft(const SoftJob &j);
+void UploadSoftRows(unsigned texY, unsigned rows);
+
 bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int kind)
 {
     if (!sSoftData || !C3DPresent::Staging())
@@ -1739,9 +1757,13 @@ bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int k
     currentScreen     = keepScreen;
     memcpy(gfxLineBuffer, keepLines, sizeof(keepLines));
 
+    // Into its rows of the texture now: the next software layer clears the same rows of screen 1 (two in one frame
+    // over the same lines: the Special Stage 2's small floor vanished under the big one).
     const unsigned texY        = sSoftRows;
     sSoftJobs[sSoftJobCount++] = { (int16)x1, (int16)y1, (int16)x2, (int16)y2, (int16)texY };
     sSoftRows                  = (texY + (unsigned)h + 7) & ~7u; // jobs start on a block row
+    ConvertSoft(sSoftJobs[sSoftJobCount - 1]);
+    UploadSoftRows(texY, (unsigned)h);
     ++sStats.softLayers;
     if (!AddQuad(TEX_SOFT, BLEND_NORMAL, (float)x1, (float)y1, (float)x2, (float)y2, (float)x1, (float)texY, (float)x2, (float)(texY + h), SOFT_W, SOFT_H, 255, 255,
                  255, 255))
@@ -1750,7 +1772,7 @@ bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int k
 }
 
 // Copies a software layer's rows from screen 1 into the staging buffer as RGBA5551 (the key colour transparent), in
-// plain rows: the display-transfer engine tiles the whole buffer into the texture afterwards (UploadSoft).
+// plain rows: the display-transfer engine tiles them into the texture right after (UploadSoftRows).
 void ConvertSoft(const SoftJob &j)
 {
     const ScreenInfo &scr = screens[1];
@@ -1765,11 +1787,15 @@ void ConvertSoft(const SoftJob &j)
     }
 }
 
-void UploadSoft()
+// Tiles rows [texY, texY + rows) of the staging buffer into the texture (texY on a block row; rows rounded up to one).
+void UploadSoftRows(unsigned texY, unsigned rows)
 {
-    void *staging = C3DPresent::Staging();
-    GSPGPU_FlushDataCache(staging, SOFT_W * SOFT_H * 2);
-    C3D_SyncDisplayTransfer((u32 *)staging, GX_BUFFER_DIM(SOFT_W, SOFT_H), (u32 *)sSoftTex.data, GX_BUFFER_DIM(SOFT_W, SOFT_H),
+    rows = (rows + 7) & ~7u;
+    if (texY + rows > SOFT_H)
+        rows = SOFT_H - texY;
+    u16 *staging = (u16 *)C3DPresent::Staging() + texY * SOFT_W;
+    GSPGPU_FlushDataCache(staging, rows * SOFT_W * 2);
+    C3D_SyncDisplayTransfer((u32 *)staging, GX_BUFFER_DIM(SOFT_W, rows), (u32 *)((u16 *)sSoftTex.data + texY * SOFT_W), GX_BUFFER_DIM(SOFT_W, rows),
                             GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB5A1) |
                                 GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB5A1) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
 }
@@ -1893,12 +1919,12 @@ int8 RotoLineDepth(float feet, int32 dx, int32 dy)
 }
 
 // Draws the whole layer into its texture: per 16x16 tile, four 8x8 Morton blocks, through the staging buffer.
-bool BuildRotoTex(RotoTex &r, const TileLayer *layer, const u16 *tex)
+bool BuildRotoTex(C3D_Tex &t, unsigned w, unsigned h, const TileLayer *layer, const u16 *tex)
 {
-    const unsigned w = r.w, rowBytes = w * 8 * 2; // one row of 8x8 blocks
+    const unsigned rowBytes = w * 8 * 2; // one row of 8x8 blocks
     const unsigned wShift = layer->widthShift;
     static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
-    return UploadVram(r.tex.data, w * r.h * 2, [&](u32 off, u32 n, u8 *staging) {
+    return UploadVram(t.data, w * h * 2, [&](u32 off, u32 n, u8 *staging) {
         u16 *dst            = (u16 *)staging;
         const unsigned br0  = off / rowBytes, rows = n / rowBytes;
         for (unsigned br = br0; br < br0 + rows; ++br) {
@@ -1977,21 +2003,27 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
     if (GpuRender::depthMode & 512) // debug: the tile runs as before
         return true;
     const unsigned w = (unsigned)TILE_SIZE << layer->widthShift, h = (unsigned)TILE_SIZE << layer->heightShift;
-    sRotoTexWhy = w > 1024 || h > 1024 ? "too big" : layer == sRotoTexFailed ? "no vram" : "banks";
-    if (w > 1024 || h > 1024 || layer == sRotoTexFailed)
+    if (w > 1024 || h > 1024) // the floor windows' business (sFloorWhy)
         return true;
-    const uint8 bank = sLineBuf[y1];
-    for (int y = y1 + 1; y < y2; ++y)
-        if (sLineBuf[y] != bank)
-            return true;
+    sRotoTexWhy = layer == sRotoTexFailed ? "no vram" : "banks";
+    if (layer == sRotoTexFailed)
+        return true;
+    // The palette banks its lines use: a copy of the texture each (the Special Stage's fog banks per line). Within
+    // ROTO_BANK_BUDGET of VRAM, the title's one-bank island aside.
+    unsigned banks = 0, bankCount = 0;
+    for (int y = y1; y < y2; ++y)
+        banks |= 1u << (sLineBuf[y] & 7);
+    for (unsigned b = 0; b < 8; ++b)
+        bankCount += (banks >> b) & 1;
+    if (bankCount > 1 && w * h * 2 * bankCount > ROTO_BANK_BUDGET)
+        return true;
     sRotoTexWhy = "slots";
-    const unsigned vb = sBankMap[bank];
 
     // The layer's slot (a layer slot holds another scene's layer of another size after a scene change: anew), else a
     // free one, else one not drawn for a second (its VRAM goes back).
     RotoTex *r = NULL;
     for (unsigned i = 0; i < ROTO_TEX_SLOTS && !r; ++i)
-        if (sRotoTex[i].alloc && sRotoTex[i].layer == layer) {
+        if (sRotoTex[i].layer == layer) {
             r = &sRotoTex[i];
             if (r->w != w || r->h != h) {
                 FreeRotoTex(*r);
@@ -2000,7 +2032,7 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
         }
     if (!r) {
         for (unsigned i = 0; i < ROTO_TEX_SLOTS && !r; ++i)
-            if (!sRotoTex[i].alloc)
+            if (!sRotoTex[i].layer)
                 r = &sRotoTex[i];
         for (unsigned i = 0; i < ROTO_TEX_SLOTS && !r; ++i)
             if (sRotoFrame - sRotoTex[i].lastUsed > 60) {
@@ -2009,83 +2041,106 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
             }
         if (!r)
             return true;
-        if (!C3D_TexInitVRAM(&r->tex, (u16)w, (u16)h, GPU_RGBA5551)) {
-            sRotoTexWhy    = "no vram";
-            sRotoTexFailed = layer;
-            return true;
-        }
-        C3D_TexSetFilter(&r->tex, GPU_NEAREST, GPU_NEAREST);
-        C3D_TexSetWrap(&r->tex, GPU_REPEAT, GPU_REPEAT);
-        r->alloc = true, r->layer = layer, r->w = w, r->h = h, r->valid = false, r->seenFrames = 0;
+        r->layer = layer, r->w = w, r->h = h;
         memset(r->used, 0xFF, sizeof(r->used));
     }
-    const uint16 *pal = sPalShadow[vb];
-    uint32 hash       = RotoContentHash(*r, layer, pal);
-    if (r->valid && r->built != hash) {
-        // Only a few used colours changed, nothing else: they become hot (the texture stays, the mask paints them).
-        uint8 changed[ROTO_HOT_MAX];
-        unsigned n = 0;
-        bool few   = true;
-        for (unsigned i = 1; i < PALETTE_BANK_SIZE && few; ++i) {
-            if (!(r->used[i >> 5] & (1u << (i & 31))) || pal[i] == r->builtPal[i])
-                continue;
-            bool isHot = false;
-            for (unsigned k = 0; k < r->hotCount; ++k)
-                isHot |= r->hot[k] == i;
-            if (isHot)
-                continue;
-            if (r->hotCount + n >= ROTO_HOT_MAX)
-                few = false;
-            else
-                changed[n++] = (uint8)i;
-        }
-        if (few && n) {
-            const unsigned keep = r->hotCount;
-            memcpy(r->hot + r->hotCount, changed, n);
-            r->hotCount += n;
-            if (RotoContentHash(*r, layer, r->builtPal) == RotoContentHash(*r, layer, pal)) {
-                r->built     = RotoContentHash(*r, layer, r->builtPal);
-                r->maskValid = false;
-                hash         = r->built;
+
+    // Each bank's copy: made, current (its colours, the layout, the tileset), or rebuilt once the change has held.
+    for (unsigned b = 0; b < 8; ++b) {
+        if (!(banks & (1u << b)))
+            continue;
+        RotoBank &rb = r->bank[b];
+        if (!rb.alloc) {
+            // Leave room for the Special Stage's 3D models (VRAM_RESERVE).
+            if ((sUfoScene && vramSpaceFree() < w * h * 2 + VRAM_RESERVE) || !C3D_TexInitVRAM(&rb.tex, (u16)w, (u16)h, GPU_RGBA5551)) {
+                sRotoTexWhy = "no vram";
+                if (!b || bankCount == 1)
+                    sRotoTexFailed = layer;
+                return true;
             }
-            else
-                r->hotCount = keep; // something else changed too: an ordinary rebuild
+            C3D_TexSetFilter(&rb.tex, GPU_NEAREST, GPU_NEAREST);
+            C3D_TexSetWrap(&rb.tex, GPU_REPEAT, GPU_REPEAT);
+            rb.alloc = true, rb.valid = false, rb.seenFrames = 0;
         }
-    }
-    if (!r->valid || r->built != hash) {
-        r->seenFrames = r->seen == hash ? r->seenFrames + 1 : 1;
-        r->seen       = hash;
-        sRotoTexWhy   = "changing";
-        if (r->seenFrames < 2)
-            return true;
-        if (!BuildRotoTex(*r, layer, sTexPal[vb]))
-            return true;
-        memcpy(r->builtPal, pal, sizeof(r->builtPal));
-        // The colours it uses, from its distinct tiles (until now every colour counted).
-        static uint8 seenTile[TILE_COUNT * 4];
-        memset(seenTile, 0, sizeof(seenTile));
-        memset(r->used, 0, sizeof(r->used));
-        const unsigned texels = (1u << layer->widthShift) << layer->heightShift;
-        for (unsigned i = 0; i < texels; ++i) {
-            const unsigned t = layer->layout[i] & 0xFFF;
-            if (seenTile[t])
-                continue;
-            seenTile[t]      = 1;
-            const uint8 *src = &tilesetPixels[TILE_DATASIZE * t];
-            for (unsigned k = 0; k < TILE_DATASIZE; ++k)
-                r->used[src[k] >> 5] |= 1u << (src[k] & 31);
+        const uint16 *pal = sPalShadow[sBankMap[b]];
+        uint32 hash       = RotoContentHash(*r, layer, pal);
+        if (rb.valid && rb.built != hash) {
+            // Only a few used colours changed, nothing else: they become hot (the copies stay, the mask paints them).
+            uint8 changed[ROTO_HOT_MAX];
+            unsigned n = 0;
+            bool few   = true;
+            for (unsigned i = 1; i < PALETTE_BANK_SIZE && few; ++i) {
+                if (!(r->used[i >> 5] & (1u << (i & 31))) || pal[i] == rb.builtPal[i])
+                    continue;
+                bool isHot = false;
+                for (unsigned k = 0; k < r->hotCount; ++k)
+                    isHot |= r->hot[k] == i;
+                if (isHot)
+                    continue;
+                if (r->hotCount + n >= ROTO_HOT_MAX)
+                    few = false;
+                else
+                    changed[n++] = (uint8)i;
+            }
+            if (few && n) {
+                const unsigned keep = r->hotCount;
+                memcpy(r->hot + r->hotCount, changed, n);
+                r->hotCount += n;
+                if (RotoContentHash(*r, layer, rb.builtPal) == RotoContentHash(*r, layer, pal)) {
+                    // Every copy's hash leaves the new hot colours out from now on.
+                    for (unsigned c = 0; c < 8; ++c)
+                        if (r->bank[c].valid)
+                            r->bank[c].built = RotoContentHash(*r, layer, r->bank[c].builtPal);
+                    r->maskValid = false;
+                    hash         = rb.built;
+                }
+                else
+                    r->hotCount = keep; // something else changed too: an ordinary rebuild
+            }
         }
-        r->used[0] &= ~1u; // index 0 is transparent whatever its colour
-        r->built = r->seen = RotoContentHash(*r, layer, pal);
-        r->valid           = true;
-        r->maskValid       = false;
-        ++sStats.rotoTexBuilds;
+        if (!rb.valid || rb.built != hash) {
+            rb.seenFrames = rb.seen == hash ? rb.seenFrames + 1 : 1;
+            rb.seen       = hash;
+            sRotoTexWhy   = "changing";
+            if (rb.seenFrames < 2)
+                return true;
+            if (!BuildRotoTex(rb.tex, w, h, layer, sTexPal[sBankMap[b]]))
+                return true;
+            memcpy(rb.builtPal, pal, sizeof(rb.builtPal));
+            if (!r->usedOk) {
+                // The colours it uses, from its distinct tiles (until now every colour counted).
+                static uint8 seenTile[TILE_COUNT * 4];
+                memset(seenTile, 0, sizeof(seenTile));
+                memset(r->used, 0, sizeof(r->used));
+                const unsigned texels = (1u << layer->widthShift) << layer->heightShift;
+                for (unsigned i = 0; i < texels; ++i) {
+                    const unsigned t = layer->layout[i] & 0xFFF;
+                    if (seenTile[t])
+                        continue;
+                    seenTile[t]      = 1;
+                    const uint8 *src = &tilesetPixels[TILE_DATASIZE * t];
+                    for (unsigned k = 0; k < TILE_DATASIZE; ++k)
+                        r->used[src[k] >> 5] |= 1u << (src[k] & 31);
+                }
+                r->used[0] &= ~1u; // index 0 is transparent whatever its colour
+                r->usedOk = true;
+                for (unsigned c = 0; c < 8; ++c) // their hashes counted every colour
+                    if (r->bank[c].valid)
+                        r->bank[c].built = RotoContentHash(*r, layer, r->bank[c].builtPal);
+            }
+            rb.built = rb.seen = RotoContentHash(*r, layer, pal);
+            rb.valid           = true;
+            r->maskValid       = false;
+            ++sStats.rotoTexBuilds;
+        }
     }
     if (r->hotCount && !r->maskValid) {
         if (!r->maskAlloc) {
             if (!C3D_TexInitVRAM(&r->mask, (u16)w, (u16)h, GPU_A8)) {
                 r->hotCount = 0; // no room: the hot colours stay as built (they stop changing on screen)
-                r->built    = RotoContentHash(*r, layer, r->builtPal);
+                for (unsigned c = 0; c < 8; ++c)
+                    if (r->bank[c].valid)
+                        r->bank[c].built = RotoContentHash(*r, layer, r->bank[c].builtPal);
                 return true;
             }
             C3D_TexSetFilter(&r->mask, GPU_NEAREST, GPU_NEAREST);
@@ -2100,59 +2155,66 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
     // Each line: the software samples pixel cx at pos + cx * deform (16.16 texels, wrapping); the quad's ends are half
     // a step outside the first and last samples, so the GPU's samples at pixel centres land on the same texels. In
     // 1/16 texel from the start's position inside the texture; a line that would not fit an int16 refuses.
-    const uint8 tex     = (uint8)(TEX_ROTO0 + (r - sRotoTex));
-    const int lineSize  = x2 - x1;
-    const uint32 maskX  = (w << 16) - 1, maskY = (h << 16) - 1;
+    const unsigned slot   = (unsigned)(r - sRotoTex);
+    const int lineSize    = x2 - x1;
+    const uint32 maskX    = (w << 16) - 1, maskY = (h << 16) - 1;
     const unsigned passes = 1 + (r->maskValid ? r->hotCount : 0);
     const unsigned need   = (unsigned)(y2 - y1) * passes;
     sRotoTexWhy = "quads";
     if (sQuadCount + need > MAX_QUADS)
         return true;
-    sRotoTexWhy = "range";
-    for (int y = y1; y < y2; ++y) {
-        const ScanlineInfo &s = first[y - y1];
-        const int64 px = (int64)((uint32)s.position.x & maskX), py = (int64)((uint32)s.position.y & maskY);
-        const int64 u0 = px - s.deform.x / 2, v0 = py - s.deform.y / 2;
-        const int64 u1 = u0 + (int64)s.deform.x * lineSize, v1 = v0 + (int64)s.deform.y * lineSize;
-        auto fits = [](int64 v) { return v > -(32000ll << 12) && v < (32000ll << 12); };
-        if (!fits(u0) || !fits(u1) || !fits(v0) || !fits(v1))
-            return true;
-    }
     // From here on the layer is drawn from the texture.
     *handled    = true;
-    sRotoTexWhy = "-";
+    {
+        static char why[48];
+        snprintf(why, sizeof(why), "- %ux%u banks %02x hot %u", w, h, banks, r->maskValid ? r->hotCount : 0);
+        sRotoTexWhy = why;
+    }
     r->lastUsed = sRotoFrame;
     unsigned q = sQuadCount;
     uint32 *w32 = (uint32 *)&sVbo[sCur][q * 4];
     for (unsigned pass = 0; pass < passes; ++pass)
     for (int y = y1; y < y2; ++y) {
         const ScanlineInfo &s = first[y - y1];
+        const unsigned b      = sLineBuf[y] & 7;
         const int8 depth      = feet > 0 ? RotoLineDepth(feet, s.deform.x, s.deform.y) : sDepth;
-        // Pass 0 the texture; pass k the mask's hot colour k - 1 in its colour now (as the atlases quantise it).
-        uint8 ptex = tex, pblend = BLEND_NORMAL;
+        // Pass 0 the line's bank's copy; pass k the mask's hot colour k - 1 in that bank now (as the atlases quantise
+        // it).
+        uint8 ptex = (uint8)(TEX_ROTO0 + slot), pblend = BLEND_NORMAL;
         uint32 constant = 0;
         if (pass) {
-            const u16 t       = ToTexel(pal[r->hot[pass - 1]]);
+            const u16 t       = ToTexel(sPalShadow[sBankMap[b]][r->hot[pass - 1]]);
             const unsigned r5 = t >> 11, g5 = (t >> 6) & 31, b5 = (t >> 1) & 31;
             const unsigned cr = (r5 << 3) | (r5 >> 2), cg = (g5 << 3) | (g5 >> 2), cb = (b5 << 3) | (b5 >> 2);
-            ptex     = (uint8)(TEX_ROTOMASK0 + (r - sRotoTex));
+            ptex     = (uint8)(TEX_ROTOMASK0 + slot);
             pblend   = BLEND_HOT;
             constant = ((uint32)(pass * 32) << 24) | (cb << 16) | (cg << 8) | cr;
-        }
-        Batch *last = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
-        if (!last || last->tex != ptex || last->blend != pblend || last->constant != constant || last->depth != depth || last->scissor != sScissor) {
-            if (sBatchCount >= MAX_BATCHES) {
-                sQuadCount = q;
-                return Refuse(GpuRender::REASON_QUAD_LIMIT);
-            }
-            sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor };
-            last                    = &sBatches[sBatchCount - 1];
         }
         const int64 px = (int64)((uint32)s.position.x & maskX), py = (int64)((uint32)s.position.y & maskY);
         const int64 u0 = px - s.deform.x / 2, v0 = py - s.deform.y / 2;
         const int64 u1 = u0 + (int64)s.deform.x * lineSize, v1 = v0 + (int64)s.deform.y * lineSize;
-        const uint32 uv0 = (uint16)(int16)((u0 + 2048) >> 12) | ((uint32)(uint16)(int16)((v0 + 2048) >> 12) << 16);
-        const uint32 uv1 = (uint16)(int16)((u1 + 2048) >> 12) | ((uint32)(uint16)(int16)((v1 + 2048) >> 12) << 16);
+        // 1/16 texel, or coarser where the line spans thousands of texels (far lines of a small repeating layer).
+        int64 big = 0;
+        for (int64 v : { u0, u1, v0, v1 })
+            big = (v < 0 ? -v : v) > big ? (v < 0 ? -v : v) : big;
+        unsigned k = 0;
+        while ((big >> (12 + k)) >= 32000 && k < 12)
+            ++k;
+        const unsigned sh = 12 + k;
+        const int64 rnd   = (int64)1 << (sh - 1);
+        const uint8 sub = pass ? 0 : (uint8)b; // the bank copy (Batch::fog holds it for TEX_ROTO*)
+        Batch *last     = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
+        if (!last || last->tex != ptex || last->blend != pblend || last->constant != constant || last->depth != depth || last->scissor != sScissor ||
+            last->fog != sub || last->uvk != k) {
+            if (sBatchCount >= MAX_BATCHES) {
+                sQuadCount = q;
+                return Refuse(GpuRender::REASON_QUAD_LIMIT);
+            }
+            sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor, sub, (uint8)k };
+            last                    = &sBatches[sBatchCount - 1];
+        }
+        const uint32 uv0 = (uint16)(int16)((u0 + rnd) >> sh) | ((uint32)(uint16)(int16)((v0 + rnd) >> sh) << 16);
+        const uint32 uv1 = (uint16)(int16)((u1 + rnd) >> sh) | ((uint32)(uint16)(int16)((v1 + rnd) >> sh) << 16);
         const uint32 X0 = (uint32)(x1 << 2), X1 = (uint32)(x2 << 2);
         const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
         w32[0] = X0 | Y0, w32[1] = uv0, w32[2] = 0xFFFFFFFFu;
@@ -2161,6 +2223,467 @@ bool EmitRotoTex(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, in
         w32[9] = X0 | Y1, w32[10] = uv0, w32[11] = 0xFFFFFFFFu;
         w32 += 12, ++q;
         ++last->count;
+    }
+    sStats.tileQuads += q - sQuadCount;
+    sQuadCount = q;
+    return true;
+}
+
+// ---------------------------------------------------------------- the Special Stage floor windows
+//
+// The Special Stage floor (512x512 tiles, 8192 px) does not fit a texture. Its lines are drawn from two windows of the
+// map kept in repeating textures, where a world pixel lives at its position modulo the window (so when a window moves
+// only the cells entering it are written: a strided copy for a column of cells, a plain one for a row):
+// - level 0: 1024x1024 texels at full resolution (cells of a tile), for the lines near the camera (a step of up to
+//   FLOOR_STEP0 texels a pixel, ~80 % of the tile runs);
+// - level 1: 512x512 texels at a quarter of the resolution (each texel the map pixel at the middle of its 4x4; cells
+//   of 2x2 tiles, one 8x8 block), 2048x2048 px of the map, for the farther lines up to FLOOR_STEP1 (fogged, where the
+//   software's samples are 2-4 map pixels apart already; farther lines make few runs).
+// Each line is one quad from the finest window that holds it; the rest stay tile runs. The windows hold palette bank
+// 0; the fog banks 1-7 (UFO_Setup: bank k = bank 0 faded towards bank 7 by f_k, chosen per line by distance) are
+// painted over: an A4 mask holds each pixel's fog group (the distinct bank 7 colours its palette indices fade to,
+// g + 1; the GPU widens it to (g + 1) * 17) and per line and group a pass blends the group's colour in by f_k
+// (BLEND_FOG). Checked when the palette changes: banks that are not such fades send the floor back to tile runs.
+// VRAM: 2.5 MB for level 0, 0.6 MB for level 1, each made only when VRAM_RESERVE stays free for the 3D models (on
+// the 2DS the windows took it first and every frame with a 3D scene went to the CPU).
+enum { FLOOR_LEVELS = 2, FLOOR_GROUPS = 7 };
+const float FLOOR_STEP0 = 2.0f, FLOOR_STEP1 = 4.0f;
+struct FloorLevel {
+    C3D_Tex tex, mask;
+    bool alloc, valid;
+    unsigned texW;    // texels (square)
+    unsigned shift;   // map pixels per texel, log2
+    unsigned cellTex; // texels a cell (16: a tile; 8: a block)
+    int ox, oy;       // origin in cells (unwrapped)
+    unsigned Cells() const { return texW / cellTex; }
+    int CellPx() const { return (int)(cellTex << shift); }
+};
+struct FloorWin {
+    FloorLevel level[FLOOR_LEVELS];
+    bool fogOk;
+    const TileLayer *layer;
+    uint32 built, seen; // content hash the windows hold / was seen last frame
+    unsigned seenFrames;
+    uint8 group[PALETTE_BANK_SIZE];   // fog group + 1 of each palette index (0: transparent or unused), a mask nibble
+    uint32 groupColour[FLOOR_GROUPS]; // the groups' bank 7 colours, 0xBBGGRR as the combiner takes them
+    unsigned groupCount;
+    uint8 fogAlpha[PALETTE_BANK_COUNT]; // f_k * 255
+    uint32 used[8];
+    bool usedOk;
+    uint32 usedEpoch;
+};
+FloorWin sFloor;
+bool sFloorFailed;
+const char *sFloorWhy = "-"; // the floor windows' state for SITE REFUSED (the last frame with a floor)
+uint8 sLineDone[SCREEN_YSIZE]; // per line of the rotozoom layer being emitted: 1 + the window level drawing it, 0 none
+
+void FreeFloor()
+{
+    for (FloorLevel &l : sFloor.level)
+        if (l.alloc) {
+            C3D_TexDelete(&l.tex);
+            C3D_TexDelete(&l.mask);
+        }
+    memset(&sFloor, 0, sizeof(sFloor));
+    sFloorFailed = false;
+}
+
+// Strided copy into VRAM: `bytes` of `src` in runs of `run` bytes, each followed by `gap` bytes skipped in `dst`.
+void CopyToVramStrided(const void *src, void *dst, u32 bytes, u32 run, u32 gap)
+{
+    GSPGPU_FlushDataCache(src, bytes);
+    C3D_SyncTextureCopy((u32 *)src, GX_BUFFER_DIM(run >> 4, 0), (u32 *)dst, GX_BUFFER_DIM(run >> 4, gap >> 4), bytes, 8);
+}
+
+inline unsigned FloorTileAt(const TileLayer *layer, int tx, int ty)
+{
+    const unsigned mx = (1u << layer->widthShift) - 1, my = (1u << layer->heightShift) - 1;
+    return layer->layout[((unsigned)tx & mx) + (((unsigned)ty & my) << layer->widthShift)] & 0xFFF;
+}
+
+// One cell of a level (world cell (cx, cy)) into `col` / `msk` at block (bx, by) of buffers `blocksW` blocks wide.
+void FloorCell(const FloorLevel &l, const TileLayer *layer, u16 *col, uint8 *msk, unsigned blocksW, unsigned bx, unsigned by, int cx, int cy,
+               const u16 *tex)
+{
+    const uint8 *grp = sFloor.group;
+    static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
+    if (!l.shift) { // a tile: four blocks
+        const unsigned t = FloorTileAt(layer, cx, cy);
+        for (unsigned j = 0; j < 2; ++j)
+            for (unsigned i = 0; i < 2; ++i) {
+                const unsigned blk = ((by + j) * blocksW + bx + i) << 6;
+                const uint8 *sp    = &tilesetPixels[TILE_DATASIZE * t + j * 8 * 16 + i * 8];
+                u16 *c             = col + blk;
+                uint8 *m           = msk + (blk >> 1); // A4: two texels a byte, the even Morton index low
+                for (unsigned y = 0; y < 8; ++y, sp += 16) {
+                    u16 *b   = c + my[y];
+                    uint8 *a = m + (my[y] >> 1);
+                    b[0] = tex[sp[0]], b[1] = tex[sp[1]], b[4] = tex[sp[2]], b[5] = tex[sp[3]];
+                    b[16] = tex[sp[4]], b[17] = tex[sp[5]], b[20] = tex[sp[6]], b[21] = tex[sp[7]];
+                    a[0] = (uint8)(grp[sp[0]] | grp[sp[1]] << 4), a[2] = (uint8)(grp[sp[2]] | grp[sp[3]] << 4);
+                    a[8] = (uint8)(grp[sp[4]] | grp[sp[5]] << 4), a[10] = (uint8)(grp[sp[6]] | grp[sp[7]] << 4);
+                }
+            }
+        return;
+    }
+    // A block of reduced texels: each the map pixel at the middle of its (1 << shift) square.
+    const unsigned blk = (by * blocksW + bx) << 6, step = 1u << l.shift;
+    const int px0 = cx * l.CellPx(), py0 = cy * l.CellPx();
+    static const uint8 mx[8] = { 0, 1, 4, 5, 16, 17, 20, 21 };
+    for (unsigned v = 0; v < 8; ++v) {
+        const int wy = py0 + (int)(v * step + step / 2);
+        for (unsigned u = 0; u < 8; ++u) {
+            const int wx      = px0 + (int)(u * step + step / 2);
+            const unsigned t  = FloorTileAt(layer, wx >> 4, wy >> 4);
+            const uint8 idx   = tilesetPixels[TILE_DATASIZE * t + (wy & 15) * 16 + (wx & 15)];
+            const unsigned m  = blk + my[v] + mx[u];
+            col[m]            = tex[idx];
+            uint8 &a          = msk[m >> 1];
+            a                 = (uint8)((m & 1) ? (a & 0x0F) | grp[idx] << 4 : (a & 0xF0) | grp[idx]);
+        }
+    }
+}
+
+// Writes cell column sx (for origin x ox, y oy) or cell row sy of a level.
+bool FloorWriteColumn(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsigned sx, const u16 *tex)
+{
+    u8 *staging = (u8 *)C3DPresent::Staging();
+    if (!staging)
+        return false;
+    const unsigned cells = l.Cells(), bpc = l.cellTex / 8, blocksW = l.texW / 8;
+    u16 *col   = (u16 *)staging;
+    uint8 *msk = staging + cells * bpc * bpc * 128; // A4 mask: 32 bytes a block
+    const int cx = ox + (int)((sx - (unsigned)ox) & (cells - 1));
+    for (unsigned sy = 0; sy < cells; ++sy) {
+        const int cy = oy + (int)((sy - (unsigned)oy) & (cells - 1));
+        FloorCell(l, layer, col, msk, bpc, 0, sy * bpc, cx, cy, tex);
+    }
+    CopyToVramStrided(col, (u8 *)l.tex.data + sx * bpc * 128, cells * bpc * bpc * 128, bpc * 128, (blocksW - bpc) * 128);
+    CopyToVramStrided(msk, (u8 *)l.mask.data + sx * bpc * 32, cells * bpc * bpc * 32, bpc * 32, (blocksW - bpc) * 32);
+    return true;
+}
+
+bool FloorWriteRow(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsigned sy, const u16 *tex)
+{
+    u8 *staging = (u8 *)C3DPresent::Staging();
+    if (!staging)
+        return false;
+    const unsigned cells = l.Cells(), bpc = l.cellTex / 8, blocksW = l.texW / 8;
+    u16 *col   = (u16 *)staging;
+    uint8 *msk = staging + blocksW * bpc * 128;
+    const int cy = oy + (int)((sy - (unsigned)oy) & (cells - 1));
+    for (unsigned sx = 0; sx < cells; ++sx) {
+        const int cx = ox + (int)((sx - (unsigned)ox) & (cells - 1));
+        FloorCell(l, layer, col, msk, blocksW, sx * bpc, 0, cx, cy, tex);
+    }
+    CopyToVram(col, (u8 *)l.tex.data + sy * bpc * blocksW * 128, blocksW * bpc * 128);
+    CopyToVram(msk, (u8 *)l.mask.data + sy * bpc * blocksW * 32, blocksW * bpc * 32);
+    return true;
+}
+
+// Places a level's window at origin (wantX, wantY) cells: the cells entering it, or all of it.
+bool FloorMove(FloorLevel &l, const TileLayer *layer, int wantX, int wantY, bool all, const u16 *tex)
+{
+    const int cells = (int)l.Cells();
+    const int dxC = wantX - l.ox, dyC = wantY - l.oy;
+    if (all || dxC >= cells || dxC <= -cells || dyC >= cells || dyC <= -cells) {
+        for (unsigned sx = 0; sx < (unsigned)cells; ++sx)
+            if (!FloorWriteColumn(l, layer, wantX, wantY, sx, tex))
+                return false;
+    }
+    else {
+        // Columns entering (for the new x origin and the old y one), then rows entering (new origin).
+        for (int k = 0; k < (dxC < 0 ? -dxC : dxC); ++k) {
+            const int cx = dxC > 0 ? l.ox + cells + k : wantX + k;
+            if (!FloorWriteColumn(l, layer, wantX, l.oy, (unsigned)cx & (unsigned)(cells - 1), tex))
+                return false;
+        }
+        for (int k = 0; k < (dyC < 0 ? -dyC : dyC); ++k) {
+            const int cy = dyC > 0 ? l.oy + cells + k : wantY + k;
+            if (!FloorWriteRow(l, layer, wantX, wantY, (unsigned)cy & (unsigned)(cells - 1), tex))
+                return false;
+        }
+    }
+    l.ox = wantX, l.oy = wantY;
+    return true;
+}
+
+// The palette indices the floor's pixels use, from its distinct tiles (once per layer and tileset epoch).
+void FloorUsed(const TileLayer *layer)
+{
+    FloorWin &f = sFloor;
+    if (!f.usedOk) {
+        static uint8 seenTile[TILE_COUNT * 4];
+        memset(seenTile, 0, sizeof(seenTile));
+        memset(f.used, 0, sizeof(f.used));
+        const unsigned n = (1u << layer->widthShift) << layer->heightShift;
+        for (unsigned i = 0; i < n; ++i) {
+            const unsigned t = layer->layout[i] & 0xFFF;
+            if (seenTile[t])
+                continue;
+            seenTile[t]      = 1;
+            const uint8 *src = &tilesetPixels[TILE_DATASIZE * t];
+            for (unsigned k = 0; k < TILE_DATASIZE; ++k)
+                f.used[src[k] >> 5] |= 1u << (src[k] & 31);
+        }
+        f.used[0] &= ~1u;
+        f.usedOk = true;
+    }
+}
+
+// The fog groups and fades from the palette: false when the banks are not fades of bank 0 towards bank 7.
+bool FloorFog(const TileLayer *layer)
+{
+    FloorWin &f = sFloor;
+    // The banks as the frame uses them (sBankMap: a snapshot taken mid-frame).
+    const uint16 *b0 = sPalShadow[sBankMap[0]], *b7 = sPalShadow[sBankMap[7]];
+    auto ch          = [](uint16 c, int k) { return k == 0 ? (c >> 11) << 3 : k == 1 ? ((c >> 5) & 63) << 2 : (c & 31) << 3; };
+    memset(f.group, 0, sizeof(f.group));
+    f.groupCount = 0;
+    for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i) {
+        if (!(f.used[i >> 5] & (1u << (i & 31))))
+            continue;
+        const uint32 c = (uint32)ch(b7[i], 0) | ((uint32)ch(b7[i], 1) << 8) | ((uint32)ch(b7[i], 2) << 16);
+        unsigned g     = 0;
+        while (g < f.groupCount && f.groupColour[g] != c)
+            ++g;
+        if (g == f.groupCount) {
+            if (f.groupCount >= FLOOR_GROUPS)
+                return false;
+            f.groupColour[f.groupCount++] = c;
+        }
+        f.group[i] = (uint8)(g + 1);
+    }
+    // Each bank's fade: the best f over the used colours, then every colour within a step and a half of what it gives.
+    f.fogAlpha[0] = 0;
+    for (unsigned k = 1; k < PALETTE_BANK_COUNT; ++k) {
+        const uint16 *bk = sPalShadow[sBankMap[k]];
+        float num = 0, den = 0;
+        for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i)
+            if (f.used[i >> 5] & (1u << (i & 31)))
+                for (int c = 0; c < 3; ++c) {
+                    const float a = (float)ch(b0[i], c), b = (float)ch(b7[i], c), v = (float)ch(bk[i], c);
+                    num += (v - a) * (b - a), den += (b - a) * (b - a);
+                }
+        float fk = den > 0 ? num / den : 0;
+        fk       = fk < 0 ? 0 : fk > 1 ? 1 : fk;
+        for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i)
+            if (f.used[i >> 5] & (1u << (i & 31)))
+                for (int c = 0; c < 3; ++c) {
+                    const float a = (float)ch(b0[i], c), b = (float)ch(b7[i], c), v = (float)ch(bk[i], c);
+                    const float e = a + (b - a) * fk - v;
+                    if (e > 12.0f || e < -12.0f)
+                        return false;
+                }
+        f.fogAlpha[k] = (uint8)(fk * 255.0f + 0.5f);
+    }
+    return true;
+}
+
+// Draws from the windows the lines [y1, y2) they hold and marks them in sLineDone; the rest are left to the tile runs.
+bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, int y1, int y2, float feet)
+{
+    memset(sLineDone, 0, sizeof(sLineDone));
+    if (!GpuRender::floorWindows || !sUfoScene || (GpuRender::depthMode & 512) || sFloorFailed) {
+        sFloorWhy = GpuRender::floorWindows ? sFloorWhy : "off";
+        return true;
+    }
+    // Only a layer too big for a texture of its own (the floor), and one at a time: the stage's other rotozoom layers
+    // (UFO2's small 3D floor, in fog banks per line) are left to the tile runs.
+    FloorWin &f = sFloor;
+    if (((unsigned)TILE_SIZE << layer->widthShift) <= 1024 && ((unsigned)TILE_SIZE << layer->heightShift) <= 1024)
+        return true;
+    if (f.layer != layer) {
+        if (f.layer)
+            return true;
+        f.layer = layer;
+    }
+    const int lineSize = x2 - x1;
+
+    // Per level the lines it is meant for (a step up to its limit) and their samples' box in map pixels (unwrapped).
+    float minX[FLOOR_LEVELS], maxX[FLOOR_LEVELS], minY[FLOOR_LEVELS], maxY[FLOOR_LEVELS];
+    int count[FLOOR_LEVELS] = {};
+    for (int k = 0; k < FLOOR_LEVELS; ++k)
+        minX[k] = minY[k] = 1e9f, maxX[k] = maxY[k] = -1e9f;
+    for (int y = y1; y < y2; ++y) {
+        const ScanlineInfo &s = first[y - y1];
+        const float step      = sqrtf((float)s.deform.x * s.deform.x + (float)s.deform.y * s.deform.y) / 65536.0f;
+        const int k           = step <= FLOOR_STEP0 ? 0 : step <= FLOOR_STEP1 ? 1 : -1;
+        if (k < 0)
+            continue;
+        const float ax = s.position.x / 65536.0f, ay = s.position.y / 65536.0f;
+        const float bx = ax + s.deform.x / 65536.0f * lineSize, by = ay + s.deform.y / 65536.0f * lineSize;
+        minX[k] = fminf(minX[k], fminf(ax, bx)), maxX[k] = fmaxf(maxX[k], fmaxf(ax, bx));
+        minY[k] = fminf(minY[k], fminf(ay, by)), maxY[k] = fmaxf(maxY[k], fmaxf(ay, by));
+        ++count[k];
+    }
+    if (count[0] + count[1] < 8) {
+        sFloorWhy = "few lines";
+        return true;
+    }
+
+    // The content: the colours the floor uses in every bank, tileset epoch, layout pointer. Rebuilt once it has held
+    // (other colours change every frame in some stages).
+    if (f.usedEpoch != sTileEpoch)
+        f.usedOk = false, f.usedEpoch = sTileEpoch;
+    FloorUsed(layer);
+    uint32 hash = 2166136261u ^ sTileEpoch * 16777619u ^ (uint32)(uintptr_t)layer->layout;
+    for (unsigned b = 0; b < PALETTE_BANK_COUNT; ++b) {
+        const uint16 *pal = sPalShadow[sBankMap[b]];
+        for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i)
+            if (f.used[i >> 5] & (1u << (i & 31)))
+                hash = (hash ^ pal[i]) * 16777619u;
+    }
+    if (!f.level[0].alloc) {
+        static const unsigned kTexW[FLOOR_LEVELS] = { 1024, 512 }, kShift[FLOOR_LEVELS] = { 0, 2 }, kCell[FLOOR_LEVELS] = { 16, 8 };
+        for (int k = 0; k < FLOOR_LEVELS; ++k) {
+            FloorLevel &l = f.level[k];
+            l.texW = kTexW[k], l.shift = kShift[k], l.cellTex = kCell[k];
+            if (vramSpaceFree() < l.texW * l.texW * 5 / 2 + VRAM_RESERVE)
+                break;
+            if (!C3D_TexInitVRAM(&l.tex, (u16)l.texW, (u16)l.texW, GPU_RGBA5551))
+                break;
+            if (!C3D_TexInitVRAM(&l.mask, (u16)l.texW, (u16)l.texW, GPU_A4)) {
+                C3D_TexDelete(&l.tex);
+                break;
+            }
+            for (C3D_Tex *t : { &l.tex, &l.mask }) {
+                C3D_TexSetFilter(t, GPU_NEAREST, GPU_NEAREST);
+                C3D_TexSetWrap(t, GPU_REPEAT, GPU_REPEAT);
+            }
+            l.alloc = true;
+        }
+        if (!f.level[0].alloc) {
+            sFloorFailed = true;
+            sFloorWhy    = "no vram";
+            return true;
+        }
+    }
+    const u16 *tex = sTexPal[sBankMap[0]];
+    // Where each window should be: centred on its lines' box.
+    int wantX[FLOOR_LEVELS], wantY[FLOOR_LEVELS];
+    for (int k = 0; k < FLOOR_LEVELS; ++k) {
+        const FloorLevel &l = f.level[k];
+        const float half    = (float)(l.texW << l.shift) / 2;
+        wantX[k] = l.alloc && count[k] ? (int)floorf(((minX[k] + maxX[k]) * 0.5f - half) / l.CellPx()) : l.ox;
+        wantY[k] = l.alloc && count[k] ? (int)floorf(((minY[k] + maxY[k]) * 0.5f - half) / l.CellPx()) : l.oy;
+    }
+    if (f.built != hash || !f.level[0].valid) {
+        f.seenFrames = f.seen == hash ? f.seenFrames + 1 : 1;
+        f.seen       = hash;
+        sFloorWhy    = "changing";
+        if (f.seenFrames < 2)
+            return true;
+        f.fogOk = FloorFog(layer);
+        if (!f.fogOk) {
+            sFloorWhy = "fog";
+            for (FloorLevel &l : f.level)
+                l.valid = false;
+            return true;
+        }
+        for (int k = 0; k < FLOOR_LEVELS; ++k) {
+            FloorLevel &l = f.level[k];
+            l.valid       = false;
+            if (l.alloc && FloorMove(l, layer, wantX[k], wantY[k], true, tex))
+                l.valid = true;
+        }
+        f.built = hash;
+        ++sStats.rotoTexBuilds;
+    }
+    else
+        for (int k = 0; k < FLOOR_LEVELS; ++k) {
+            // A window moves only when its lines' box leaves it (a cell of margin): the cells that enter.
+            FloorLevel &l = f.level[k];
+            if (!l.valid || !count[k])
+                continue;
+            const float c = (float)l.CellPx(), cells = (float)l.Cells();
+            const bool inside = minX[k] >= (l.ox + 1) * c && maxX[k] < (l.ox + cells - 1) * c && minY[k] >= (l.oy + 1) * c &&
+                                maxY[k] < (l.oy + cells - 1) * c;
+            if (!inside && !FloorMove(l, layer, wantX[k], wantY[k], false, tex))
+                l.valid = false;
+        }
+
+    // Each line from the finest window holding it whole (its quad's ends, half a step outside the samples).
+    unsigned lines[FLOOR_LEVELS] = {};
+    for (int y = y1; y < y2; ++y) {
+        const ScanlineInfo &s = first[y - y1];
+        const float ax = (s.position.x - s.deform.x * 0.5f) / 65536.0f, ay = (s.position.y - s.deform.y * 0.5f) / 65536.0f;
+        const float bx = ax + s.deform.x / 65536.0f * lineSize, by = ay + s.deform.y / 65536.0f * lineSize;
+        const float step = sqrtf((float)s.deform.x * s.deform.x + (float)s.deform.y * s.deform.y) / 65536.0f;
+        for (int k = 0; k < FLOOR_LEVELS; ++k) {
+            const FloorLevel &l = f.level[k];
+            if (!l.valid || step > (k ? FLOOR_STEP1 : FLOOR_STEP0) || (k && step <= FLOOR_STEP0 * 0.75f))
+                continue;
+            const float c = (float)l.CellPx(), x0 = l.ox * c, y0 = l.oy * c, x1w = (l.ox + l.Cells()) * c - 1, y1w = (l.oy + l.Cells()) * c - 1;
+            if (fminf(ax, bx) < x0 || fmaxf(ax, bx) > x1w || fminf(ay, by) < y0 || fmaxf(ay, by) > y1w)
+                continue;
+            sLineDone[y - y1] = (uint8)(1 + k);
+            ++lines[k];
+            break;
+        }
+    }
+    static char why[48];
+    snprintf(why, sizeof(why), "%u+%u/%d+%d lines", lines[0], lines[1], count[0], count[1]);
+    sFloorWhy = why;
+    if (!lines[0] && !lines[1])
+        return true;
+    if (sQuadCount + (lines[0] + lines[1]) * (1 + f.groupCount) > MAX_QUADS) {
+        memset(sLineDone, 0, sizeof(sLineDone));
+        return true;
+    }
+    // Passes: each window, then each fog group per bank. Coordinates in 1/16 texel from a multiple of the window's
+    // map size below its origin (2048 texels at most), as its texels repeat.
+    unsigned q  = sQuadCount;
+    uint32 *w32 = (uint32 *)&sVbo[sCur][q * 4];
+    for (int k = 0; k < FLOOR_LEVELS; ++k) {
+        if (!lines[k])
+            continue;
+        const FloorLevel &l = f.level[k];
+        const int64 span    = (int64)(l.texW << l.shift);
+        const int64 baseX = (int64)floorf((float)l.ox * l.CellPx() / span) * span, baseY = (int64)floorf((float)l.oy * l.CellPx() / span) * span;
+        const unsigned sh = 12 + l.shift; // 16.16 map pixels -> 1/16 texel
+        for (unsigned pass = 0; pass <= f.groupCount; ++pass)
+            for (int y = y1; y < y2; ++y) {
+                if (sLineDone[y - y1] != 1 + k)
+                    continue;
+                const unsigned bank = sLineBuf[y];
+                if (pass && !f.fogAlpha[bank])
+                    continue;
+                const ScanlineInfo &s = first[y - y1];
+                const int8 depth      = feet > 0 ? RotoLineDepth(feet, s.deform.x, s.deform.y) : sDepth;
+                uint8 ptex = (uint8)(TEX_FLOOR0 + k), pblend = BLEND_NORMAL;
+                uint32 constant = 0;
+                uint8 fog       = 0;
+                if (pass) {
+                    ptex     = (uint8)(TEX_FLOORMASK0 + k);
+                    pblend   = BLEND_FOG;
+                    constant = ((uint32)(pass * 17) << 24) | f.groupColour[pass - 1]; // the A4 nibble widened
+                    fog      = f.fogAlpha[bank]; // BLEND_FOG: the line's bank's fade
+                }
+                Batch *last = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
+                if (!last || last->tex != ptex || last->blend != pblend || last->constant != constant || last->depth != depth ||
+                    last->scissor != sScissor || last->fog != fog) {
+                    if (sBatchCount >= MAX_BATCHES) {
+                        sQuadCount = q;
+                        return Refuse(GpuRender::REASON_QUAD_LIMIT);
+                    }
+                    sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor, fog };
+                    last                    = &sBatches[sBatchCount - 1];
+                }
+                const int64 u0 = (int64)s.position.x - s.deform.x / 2 - (baseX << 16), v0 = (int64)s.position.y - s.deform.y / 2 - (baseY << 16);
+                const int64 u1 = u0 + (int64)s.deform.x * lineSize, v1 = v0 + (int64)s.deform.y * lineSize;
+                const int64 rnd = (int64)1 << (sh - 1);
+                const uint32 uv0 = (uint16)(int16)((u0 + rnd) >> sh) | ((uint32)(uint16)(int16)((v0 + rnd) >> sh) << 16);
+                const uint32 uv1 = (uint16)(int16)((u1 + rnd) >> sh) | ((uint32)(uint16)(int16)((v1 + rnd) >> sh) << 16);
+                const uint32 X0 = (uint32)(x1 << 2), X1 = (uint32)(x2 << 2);
+                const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
+                w32[0] = X0 | Y0, w32[1] = uv0, w32[2] = 0xFFFFFFFFu;
+                w32[3] = X1 | Y0, w32[4] = uv1, w32[5] = 0xFFFFFFFFu;
+                w32[6] = X1 | Y1, w32[7] = uv1, w32[8] = 0xFFFFFFFFu;
+                w32[9] = X0 | Y1, w32[10] = uv0, w32[11] = 0xFFFFFFFFu;
+                w32 += 12, ++q;
+                ++last->count;
+            }
     }
     sStats.tileQuads += q - sQuadCount;
     sQuadCount = q;
@@ -2184,10 +2707,14 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
         if (handled)
             return true;
     }
+    if (!EmitFloorWindow(layer, first, x1, x2, y1, y2, feet))
+        return false;
 
     // Estimate the runs: tile crossings along x and y per line, plus one.
     unsigned estimate = 0;
     for (int y = y1; y < y2; ++y) {
+        if (sLineDone[y - y1])
+            continue;
         const ScanlineInfo &s = first[y - y1];
         const uint32 ax = (uint32)(s.deform.x < 0 ? -s.deform.x : s.deform.x), ay = (uint32)(s.deform.y < 0 ? -s.deform.y : s.deform.y);
         estimate += (uint32)(((uint64)(ax + ay) * (uint32)lineSize) >> 20) + 2;
@@ -2225,6 +2752,8 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     const unsigned wShift = layer->widthShift;
     const uint16 *layout  = layer->layout;
     for (int y = y1; y < y2; ++y) {
+        if (sLineDone[y - y1]) // drawn from the floor window
+            continue;
         const ScanlineInfo &s = first[y - y1];
         const unsigned bank   = sLineBuf[y];
         const int32 dx = s.deform.x, dy = s.deform.y;
@@ -2436,7 +2965,13 @@ void ResetTexEnv()
 unsigned GpuRender::depthMode = 0;
 int GpuRender::stereoFar       = 6;
 bool GpuRender::depthTint      = false;
-const char *GpuRender::RotoTexWhy() { return sRotoTexWhy; }
+bool GpuRender::floorWindows   = false;
+const char *GpuRender::RotoTexWhy()
+{
+    static char buf[48];
+    snprintf(buf, sizeof(buf), "%s, floor %s", sRotoTexWhy, sFloorWhy);
+    return buf;
+}
 const char *GpuRender::DepthSummary() { return sDepthLast[0] ? sDepthLast : "- (no 3D frame yet: slider up or SET force3d 1)"; }
 
 const GpuRender::Stats &GpuRender::GetStats() { return sStats; }
@@ -2587,12 +3122,12 @@ bool GpuRender::Render(const Stream &stream)
         for (unsigned i = 0; i < ROTO_TEX_SLOTS; ++i)
             FreeRotoTex(sRotoTex[i]);
         sRotoTexFailed = NULL;
+        FreeFloor();
         FreeModels();
         ResetCaches();
     }
     TrackPalette(false, stream.basePalette);
     if (tileDirtyAny) {
-        ++sTileEpoch;
         // Animated tiles rewritten since the last GPU frame: their copies (every bank, every flip variant) go stale.
         tileDirtyAny = false;
         for (unsigned w = 0; w < TILE_COUNT / 32; ++w) {
@@ -2610,6 +3145,7 @@ bool GpuRender::Render(const Stream &stream)
                 if (h == sTileHash[t])
                     continue;
                 sTileHash[t] = h;
+                ++sTileEpoch; // the rotozoom textures made from the tileset are stale
                 for (unsigned v = 0; v < 4; ++v) {
                     sTileGroupsOk[t + v * TILE_COUNT] = 0;
                     for (unsigned b = 0; b < BANKS; ++b)
@@ -2628,6 +3164,7 @@ bool GpuRender::Render(const Stream &stream)
         sSlider = 1.0f;
     sStereo = sSlider > 0.0f && C3DPresent::TargetRight();
     sDepths   = sStereo || GpuRender::depthTint;
+    sUfoScene = sceneInfo.listData && !strncmp(sceneInfo.listData[sceneInfo.listPos].folder, "UFO", 3);
     sUfoStage = sDepths && sceneInfo.listData && !strncmp(sceneInfo.listData[sceneInfo.listPos].folder, "UFO", 3);
     sTitleScene = sDepths && sceneInfo.listData && !strcmp(sceneInfo.listData[sceneInfo.listPos].folder, "Title");
     if (sUfoStage)
@@ -2806,10 +3343,6 @@ bool GpuRender::Render(const Stream &stream)
         else
             ConvertSprite(sPending[i]);
     }
-    for (unsigned i = 0; i < sSoftJobCount; ++i)
-        ConvertSoft(sSoftJobs[i]);
-    if (sSoftJobCount)
-        UploadSoft();
     if (sTileDirtyHi > sTileDirtyLo) {
         GSPGPU_FlushDataCache((u8 *)sTileData + sTileDirtyLo, sTileDirtyHi - sTileDirtyLo);
         ++sStats.atlasFlushes;
@@ -2901,14 +3434,25 @@ bool GpuRender::Render(const Stream &stream)
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &m);
             curDepth = bt.depth;
         }
-        if (curTex != bt.tex && bt.tex >= TEX_ROTO0) {
-            const bool mask  = bt.tex >= TEX_ROTOMASK0;
-            const RotoTex &r = sRotoTex[bt.tex - (mask ? TEX_ROTOMASK0 : TEX_ROTO0)];
-            C3D_TexBind(0, (C3D_Tex *)(mask ? &r.mask : &r.tex));
-            C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / (r.w * 16.0f), -1.0f / (r.h * 16.0f), 0.0f, 0.0f);
+        if (curTex != bt.tex && bt.tex >= TEX_FLOOR0 && bt.tex <= TEX_FLOORMASK1) {
+            const bool mask     = bt.tex >= TEX_FLOORMASK0;
+            const FloorLevel &l = sFloor.level[bt.tex - (mask ? TEX_FLOORMASK0 : TEX_FLOOR0)];
+            C3D_TexBind(0, (C3D_Tex *)(mask ? &l.mask : &l.tex));
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / (l.texW * 16.0f), -1.0f / (l.texW * 16.0f), 0.0f, 0.0f);
             curTex = bt.tex;
         }
-        if (curTex != bt.tex) {
+        const int rotoKey = (int)(bt.tex | (bt.blend == BLEND_HOT ? 0 : bt.fog << 8) | bt.uvk << 16);
+        if (bt.tex >= TEX_ROTO0 && curTex != rotoKey) {
+            // A rotozoom layer's texture: the copy for the batch's bank (Batch::fog), or its hot-colour mask; texel
+            // units of 1/16 << uvk.
+            const bool mask  = bt.tex >= TEX_ROTOMASK0;
+            const RotoTex &r = sRotoTex[bt.tex - (mask ? TEX_ROTOMASK0 : TEX_ROTO0)];
+            C3D_TexBind(0, (C3D_Tex *)(mask ? &r.mask : &r.bank[bt.fog & 7].tex));
+            const float unit = 16.0f / (float)(1u << bt.uvk);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / (r.w * unit), -1.0f / (r.h * unit), 0.0f, 0.0f);
+            curTex = rotoKey;
+        }
+        if (curTex != bt.tex && bt.tex < TEX_FLOOR0) { // the atlases and the software-layer texture
             const bool tile = bt.tex == TEX_TILE || bt.tex == TEX_TILE_FINE;
             C3D_TexBind(0, tile ? &sTileTex : bt.tex == TEX_SOFT ? &sSoftTex : &sSprTex);
             const float fine = bt.tex == TEX_TILE_FINE ? 32.0f : 1.0f;
@@ -2917,7 +3461,7 @@ bool GpuRender::Render(const Stream &stream)
             C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / w, -1.0f / h, 0.0f, 0.0f);
             curTex = bt.tex;
         }
-        if (bt.blend == BLEND_HOT) {
+        if (bt.blend == BLEND_HOT || bt.blend == BLEND_FOG) {
             // A rotozoom texture's hot colour: where the mask equals the reference, its colour now, opaque. DEPTH TINT
             // shows the planes, not the colours: skipped there.
             if (GpuRender::depthTint)
@@ -2929,7 +3473,12 @@ bool GpuRender::Render(const Stream &stream)
             C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
             C3D_TexEnvColor(env, 0xFF000000u | (bt.constant & 0xFFFFFFu));
             C3D_AlphaTest(true, GPU_EQUAL, (int)(bt.constant >> 24));
-            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+            if (bt.blend == BLEND_FOG) { // the group's fog colour blended in by the line's fade
+                C3D_BlendingColor((u32)bt.fog << 24);
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_ALPHA, GPU_ONE_MINUS_CONSTANT_ALPHA, GPU_ZERO, GPU_ONE);
+            }
+            else
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
             if (maskFrame) { // what it covers is no longer the mask colour
                 C3D_StencilTest(true, GPU_ALWAYS, 0, 0xFF, 0xFF);
                 C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_ZERO);

@@ -59,6 +59,9 @@ extern unsigned depthMode;
 extern int stereoFar;
 // DEPTH TINT (debug, not saved): every 2D batch painted one flat blue by its stereo depth, slider down too.
 extern bool depthTint;
+// The Special Stage floor from map windows (FloorWin). Off: on the 2DS it was slower than the tile runs (the window
+// moves' synchronous copies wait for the GPU, the fog passes add fill). SITE SET floorwin 1 to try it; not saved.
+extern bool floorWindows;
 // The last 3D frame's depths ("L<layer> g<group> near..far | ... far N playfield #i sprites behind n"), SITE DEPTHS.
 const char *DepthSummary();
 // Why the last rotozoom layer was not drawn from a texture of its own ("-": it was), for SITE REFUSED.

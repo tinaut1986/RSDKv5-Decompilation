@@ -12,7 +12,10 @@
   for the models, floor, sky, track sprites and item boxes; elsewhere layer parallax and the HUD). **2026-10-23,
   session 4 (`feat/layer-depth`, merged):** zones get a stereo depth per band of lines from the horizontal parallax
   (backgrounds in several planes), background sprites sit with their layer, the title screen has its own depths (logo
-  out of the screen, island and trees by line), `stereofar` scale, DEPTH TINT debug view, `SITE HIDE`, `SITE DEPTHS`. Still CPU: INK TINT
+  out of the screen, island and trees by line), `stereofar` scale, DEPTH TINT debug view, `SITE HIDE`, `SITE DEPTHS`.
+  **Later in session 4 (`perf/roto-texture`, `perf/special-floor`, not merged yet):** rotozoom layers up to 1024 px from
+  textures (title 55 -> 58.5 fps on the 2DS), one copy per fog bank (Special Stage 2 50 -> 58.7 fps); the floor windows
+  for the big Special Stage floor were slower on the 2DS and are off (`SET floorwin 1`). Still CPU: INK TINT
   (the pause menu). **Pending work lives in the GitHub issues** (#1 save states, #2 in-game updates, #3 language,
   #4 bottom-screen themes, #5 INK TINT, #6 water line (done: close after the owner's check), #7 Special Stage 60 fps
   turning / with 3D and the floor's quads, #8 options in production builds). Technical record:

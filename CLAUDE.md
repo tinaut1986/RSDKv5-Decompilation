@@ -94,6 +94,7 @@ tools/site.sh "SET stereofar N"             # stereo depth scale (px of disparit
 tools/site.sh DEPTHS                        # last 3D frame's layer depths; debug/depths.txt has every layer's parallax factors
 tools/site.sh "SET depthtint 1"             # debug: paint every 2D batch by its stereo depth (DEPTH TINT button), slider down too
 tools/site.sh "HIDE TitleLogo"              # debug: stop drawing one object class ("HIDE" alone undoes it)
+tools/site.sh "SET ufotime 1"               # debug: the Special Stage countdown stays at 50+ (test it at leisure); not saved
 tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU drew too; right = right eye in 3D)
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
 ```
