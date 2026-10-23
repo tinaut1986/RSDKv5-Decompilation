@@ -28,7 +28,11 @@
 - **2026-10-23, session 5 (`perf/audio-core1`):** the audio took ~20 % of core 0 (Ogg decoding); now decoded on
   core 1. Special Stage 2 run 43.4 fps / 35.2 with 3D (46.1 / 36.5 with `floorwin 1`). Next: the floor (9-13 ms of
   CPU a frame). See gpu-renderer.md "The audio off core 0". Then `perf/floor-lod`: the floor from five window levels,
-  **56.0 fps / 45.1 with 3D** on the same run (gpu-renderer.md "The floor in five levels").
+  **56.0 fps / 45.1 with 3D** on the same run (gpu-renderer.md "The floor in five levels"). Then
+  `perf/stereo-submit`: **57.7 / 49.5 with 3D** (gpu-renderer.md "Runs of 3D scenes"). Tour of all the Special
+  Stages: 7 and 1+ all on the CPU (DEFORMED SPRITE, #11), 4 / 4+ ~13 fps (animated floor palette, #12), 3D models in
+  the wrong depth order everywhere (#13), floor through the track (#10). gpu-renderer.md "Session 5 hand-off".
+  Next (owner): #11.
 - **Active release line**: `release/v0.1.0`, on `origin`.
 - **Consoles**: the owner's Old 2DS at `192.168.1.141` and New 3DS at `192.168.1.133` (DHCP: ping first;
   `tools/site.sh -i IP`). Both run the latest dev build of `release/v0.1.0`; the New 3DS takes `--install` over FTP too
@@ -46,6 +50,7 @@
 | `feat/layer-depth` | stereo depth by layer band, title depths, DEPTH TINT; merged into the release (2026-10-23). |
 | `perf/roto-texture`, `perf/special-floor`, `feat/run-replay` | merged into the release (2026-10-23). |
 | `perf/floor-lerp` | floor windows (two-pass fog, off by default), hard-reset runs, `ufonofall`, command buffer stats; committed, not merged. |
+| `perf/stereo-submit` | (cut from `perf/floor-lod`) runs of 3D scenes keep their state, both shaders in one binary; SS2 run 49.5 fps with 3D / 57.7 without; not merged. |
 | `perf/floor-lod` | (cut from `perf/audio-core1`) the floor in five window levels, one texture and one quad a line (fog to black at 60 %), exact VRAM reserve; SS2 run 56.0 fps / 45.1 with 3D; not merged. |
 | `perf/audio-core1` | (cut from `perf/floor-lerp`) the music decoded on core 1 (30 % share), SITE C3D, CAPTURE button, storage / load logs; SS2 run 36.9 -> 43.4 fps (29 -> 35.2 with 3D); owner heard it clean on the 2DS; not merged. |
 | `perf/special-stage`, `feat/bottom-tabs` | merged into the release (2026-10-23); may be deleted. |

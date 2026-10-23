@@ -1,9 +1,11 @@
 #!/bin/bash
 # Assembles a PICA vertex shader and writes it as a C array next to it: tools/gen-shader.sh x.v.pica
-# -> x_shbin.h (name: x_shbin). Needs devkitPro's picasso.
+# -> x_shbin.h (name: x_shbin). Several shaders in one binary (one DVLE each, in order, sharing the code):
+# tools/gen-shader.sh name a.v.pica b.v.pica -> name_shbin.h next to a.v.pica. Needs devkitPro's picasso.
 set -euo pipefail
-SRC="$1"; BASE=$(basename "$SRC" .v.pica); DIR=$(dirname "$SRC")
-/opt/devkitpro/tools/bin/picasso -o "/tmp/$BASE.shbin" "$SRC"
+if [ $# -gt 1 ]; then BASE="$1"; shift; else BASE=$(basename "$1" .v.pica); fi
+DIR=$(dirname "$1")
+/opt/devkitpro/tools/bin/picasso -o "/tmp/$BASE.shbin" "$@"
 python3 - "/tmp/$BASE.shbin" "$DIR/${BASE}_shbin.h" "${BASE}_shbin" <<'PY'
 import sys
 d=open(sys.argv[1],'rb').read()

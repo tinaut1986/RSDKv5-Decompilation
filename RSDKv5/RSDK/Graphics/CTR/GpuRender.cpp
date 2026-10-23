@@ -11,8 +11,7 @@
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
-#include "RSDK/Graphics/CTR/gpu_shbin.h"
-#include "RSDK/Graphics/CTR/scene3d_shbin.h"
+#include "RSDK/Graphics/CTR/renderer_shbin.h"
 #include "RSDK/Graphics/CTR/GpuScene3D.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 
@@ -421,8 +420,10 @@ bool Setup()
     }
     GSPGPU_FlushDataCache(sIdx, sizeof(u16) * 6 * MAX_QUADS);
 
-    sDvlb = DVLB_ParseFile((u32 *)gpu_shbin, sizeof(gpu_shbin));
-    if (!sDvlb)
+    // One binary for both programs (gpu.v.pica DVLE 0, scene3d.v.pica DVLE 1): switching between programs that share
+    // their code uploads no shader code (a 3D scene between 2D batches cost ~1.3 KB of commands with two binaries).
+    sDvlb = DVLB_ParseFile((u32 *)renderer_shbin, sizeof(renderer_shbin));
+    if (!sDvlb || sDvlb->numDVLE < 2)
         return false;
     shaderProgramInit(&sProgram);
     shaderProgramSetVsh(&sProgram, &sDvlb->DVLE[0]);
@@ -434,10 +435,10 @@ bool Setup()
     AttrInfo_AddLoader(&sAttr, 1, GPU_UNSIGNED_BYTE, 4); // r, g, b, a
 
     // The 3D scene program (optional: without it the scenes go to the software)
-    s3Dvlb = DVLB_ParseFile((u32 *)scene3d_shbin, sizeof(scene3d_shbin));
+    s3Dvlb = sDvlb;
     if (s3Dvlb) {
         shaderProgramInit(&s3Prog);
-        shaderProgramSetVsh(&s3Prog, &s3Dvlb->DVLE[0]);
+        shaderProgramSetVsh(&s3Prog, &s3Dvlb->DVLE[1]);
         const shaderInstance_s *vs = s3Prog.vertexShader;
         s3Loc.proj = shaderInstanceGetUniformLocation(vs, "projection");
         s3Loc.wrow = shaderInstanceGetUniformLocation(vs, "wrow");
@@ -1413,13 +1414,16 @@ bool EmitScene3D(const Cmd &c, const uint8 *arena)
 
 // Depth: each scene gets its own 1/64 of the depth range, later scenes nearer (the draw order between scenes and the
 // 2D around them is kept; inside a scene the depth test replaces the software's face sort).
-void Draw3DSceneGpu(unsigned k)
+// `follows`: the batch before was a 3D scene too (the program, the projection, the eye and the fixed state are set).
+void Draw3DSceneGpu(unsigned k, bool follows)
 {
     const Draw3D &d           = sDraw3D[k];
     const GpuScene3D::Head *h = d.h;
     const bool shaded         = h->drawMode == S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN;
-    C3D_BindProgram(&s3Prog);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s3Loc.proj, (C3D_Mtx *)C3DPresent::Projection());
+    if (!follows) {
+        C3D_BindProgram(&s3Prog);
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s3Loc.proj, (C3D_Mtx *)C3DPresent::Projection());
+    }
     C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, (float)(1 << h->projX), -(float)(1 << h->projY), (float)h->centerX, (float)h->centerY);
     // z / w linear in Z inside the scene's band (1/Z left the near and far sides of a model a few 16-bit steps apart
     // and the last triangle drawn won); later scenes in nearer bands. A 24-bit depth buffer: 2^24 / 64 steps a band.
@@ -1444,16 +1448,18 @@ void Draw3DSceneGpu(unsigned k)
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.difs, 1, 1, 1, 0);
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.spcs, 0, 0, 0, 0);
     }
-    // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it)
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, STEREO_ZC, -0.5f, 1.0f);
-    C3D_TexEnv *env = C3D_GetTexEnv(0);
-    C3D_TexEnvInit(env);
-    C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
-    C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
-    C3D_DepthTest(true, (mode & 2) ? GPU_GREATER : GPU_LESS, GPU_WRITE_ALL);
-    C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF); // a mask frame's stencil does not apply to the 3D scenes
-    C3D_AlphaTest(false, GPU_ALWAYS, 0);
-    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+    if (!follows) {
+        // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it)
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, STEREO_ZC, -0.5f, 1.0f);
+        C3D_TexEnv *env = C3D_GetTexEnv(0);
+        C3D_TexEnvInit(env);
+        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        C3D_DepthTest(true, (mode & 2) ? GPU_GREATER : GPU_LESS, GPU_WRITE_ALL);
+        C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF); // a mask frame's stencil does not apply to the 3D scenes
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+    }
 
     for (int32 i = 0; i < h->count; ++i) {
         const GpuScene3D::Inst &in = d.in[i];
@@ -3464,9 +3470,19 @@ bool GpuRender::Render(const Stream &stream)
     int curBlend = -1, curTex = -1, curDepth = 0; // bind2D sets the projection of depth 0
     int curTint = -1000;                          // DEPTH TINT: the depth the texture combiner paints now
     int curScissor = 0;
+    // The batch before was a 3D scene: its program and state stay for the next scene (a run of them is common: 57 in a
+    // row in Special Stage 2), the 2D ones come back before a 2D batch.
+    bool in3D = false;
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     for (unsigned b = 0; b < sBatchCount; ++b) {
         const Batch &bt = sBatches[b];
+        if (in3D && bt.tex != TEX_3D) {
+            bind2D(); // the 2D state again, textures and blending set anew
+            curBlend = curTex = -1;
+            curDepth = 0;
+            curTint  = -1000;
+            in3D     = false;
+        }
         // SITE SET gpuskip (debug): batches not drawn, to weigh their GPU time: 1 rotozoom tile runs, 2 3D scenes,
         // 4 tile layers, 8 sprites / rectangles, 16 rotozoom textures and floor windows.
         if (GpuRender::gpuSkip) {
@@ -3490,7 +3506,8 @@ bool GpuRender::Render(const Stream &stream)
         if (bt.tex == TEX_3D) {
             u32 *cb0, csz0, coff0;
             GPUCMD_GetBuffer(&cb0, &csz0, &coff0);
-            Draw3DSceneGpu(bt.first);
+            Draw3DSceneGpu(bt.first, in3D);
+            in3D = true;
             u32 *cb1, csz1, coff1;
             GPUCMD_GetBuffer(&cb1, &csz1, &coff1);
             if (!eye) {
@@ -3498,10 +3515,6 @@ bool GpuRender::Render(const Stream &stream)
                 instances3d += (unsigned)sDraw3D[bt.first].h->count;
                 ++scenes3d;
             }
-            bind2D(); // the 2D state again, textures and blending set anew
-            curBlend = curTex = -1;
-            curDepth = 0;
-            curTint  = -1000;
             continue;
         }
         if (bt.depth != curDepth) {
@@ -3685,6 +3698,8 @@ bool GpuRender::Render(const Stream &stream)
         if (maskFrame && (bt.blend == BLEND_NORMAL || bt.blend == BLEND_UNMASKED))
             secondPass(bt.first, bt.count);
     }
+    if (in3D)
+        bind2D();
     // citro3d's state is sticky and citro2d (the bottom screen) draws next: leave no stencil, alpha test or scissor behind.
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);

@@ -2,7 +2,9 @@
 ; engine's S3D_SOLIDCOLOR_SCREEN / S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN modes do it in fixed point (Scene3D.cpp),
 ; here in floats. One instance per draw; the model's frames sit in VRAM and two of them are interpolated.
 ; v0, v2 = position in frame A / B (model units) ; v1, v3 = normal in frame A / B (1.0 = 16384) ; v4 = colour 0..255
-; Regenerate scene3d_shbin.h with:  tools/gen-shader.sh RSDKv5/RSDK/Graphics/CTR/scene3d.v.pica
+; Assembled with the other renderer shader into one binary (renderer_shbin.h, DVLE 0 the 2D one, 1 the 3D one): programs
+; sharing their code switch without citro3d uploading it again (it did for every 3D scene, ~1.3 KB of commands each).
+; Regenerate with:  tools/gen-shader.sh renderer RSDKv5/RSDK/Graphics/CTR/gpu.v.pica RSDKv5/RSDK/Graphics/CTR/scene3d.v.pica
 .fvec projection[4]
 .fvec wrow[3]   ; world matrix rows: (m0 / 256, m1 / 256, m2 / 256, m3)
 .fvec nrow      ; normal matrix row 1 / 256, times 4 (the normals are stored / 4)
@@ -24,7 +26,8 @@
 .out outpos position
 .out outclr color
 
-.proc main
+.entry main3d
+.proc main3d
     ; frame interpolation
     mov r10, lerp
     mul r0, r10.yyyy, v0
