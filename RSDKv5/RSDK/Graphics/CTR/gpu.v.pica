@@ -1,0 +1,34 @@
+; Vertex shader of the GPU renderer (GpuRender.cpp): screen-space quads with a texture coordinate and a colour.
+; v0 = x, y (quarter screen pixels), u, v (texels) as 16-bit integers ; v1 = r, g, b, a as bytes (0..255).
+; uvscale = (1 / texture width, -1 / texture height, 0, 0) of the bound texture: the PICA samples memory row 0 at v = 1.
+; The projection carries the top screen's tilt.
+; Assembled with the other renderer shader into one binary (renderer_shbin.h, DVLE 0 the 2D one, 1 the 3D one): programs
+; sharing their code switch without citro3d uploading it again (it did for every 3D scene, ~1.3 KB of commands each).
+; Regenerate with:  tools/gen-shader.sh renderer RSDKv5/RSDK/Graphics/CTR/gpu.v.pica RSDKv5/RSDK/Graphics/CTR/scene3d.v.pica
+.fvec projection[4]
+.fvec uvscale
+.constf myconst(0.5, 1.0, 0.25, 0.003921569)
+.constf uvbias(0.0, 1.0, 0.0, 0.0)
+.alias half    myconst.xxxx
+.alias ones    myconst.yyyy
+.alias quarter myconst.zzzz
+.alias inv255  myconst.wwww
+
+.out outpos position
+.out outtc0 texcoord0
+.out outclr color
+
+.entry main2d
+.proc main2d
+    mul r0.xy, quarter, v0.xy
+    mov r0.z, half
+    mov r0.w, ones
+    dp4 outpos.x, projection[0], r0
+    dp4 outpos.y, projection[1], r0
+    dp4 outpos.z, projection[2], r0
+    dp4 outpos.w, projection[3], r0
+    mul r1, uvscale, v0.zwzw
+    add outtc0, uvbias, r1
+    mul outclr, inv255, v1
+    end
+.end

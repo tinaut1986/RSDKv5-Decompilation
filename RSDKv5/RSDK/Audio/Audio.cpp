@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 
 using namespace RSDK;
 
@@ -194,6 +195,10 @@ void AudioDeviceBase::InitAudioChannels()
 
 void RSDK::UpdateStreamBuffer(ChannelInfo *channel)
 {
+#if RETRO_AUDIODEVICE_CTR
+    CtrMusicRead(channel); // decoded ahead on core 1 (CTRAudioDevice.cpp)
+    return;
+#endif
     int32 bufferRemaining = MIX_BUFFER_SIZE;
     SAMPLE_FORMAT *buffer         = channel->samplePtr;
 
@@ -229,7 +234,13 @@ void RSDK::LoadStream(ChannelInfo *channel)
     if (channel->state != CHANNEL_LOADING_STREAM)
         return;
 
+#if RETRO_AUDIODEVICE_CTR
+    CtrMusicLock(); // the music decoder keeps off vorbisInfo and its buffers until CtrMusicBegin / the end
+#endif
     stb_vorbis_close(vorbisInfo);
+#if RETRO_AUDIODEVICE_CTR
+    vorbisInfo = NULL;
+#endif
 
     FileInfo info;
     InitFileInfo(&info);
@@ -238,17 +249,38 @@ void RSDK::LoadStream(ChannelInfo *channel)
         streamBufferSize = info.fileSize;
         streamBuffer     = NULL;
         AllocateStorage((void **)&streamBuffer, info.fileSize, DATASET_MUS, false);
+#if RETRO_AUDIODEVICE_CTR
+        // A refused allocation (the pool full) left streamBuffer NULL and the file was read to address 0.
+        DEV_LOG("music: %s, %u KB, buffer %s, MUS %u/%u KB", streamFilePath, (unsigned)(info.fileSize >> 10), streamBuffer ? "ok" : "REFUSED",
+                (unsigned)(dataStorage[DATASET_MUS].usedStorage * 4 >> 10), (unsigned)(dataStorage[DATASET_MUS].storageLimit >> 10));
+        if (!streamBuffer)
+            streamBufferSize = 0;
+        else
+#endif
         ReadBytes(&info, streamBuffer, streamBufferSize);
         CloseFile(&info);
 
         if (streamBufferSize > 0) {
             vorbisAlloc.alloc_buffer_length_in_bytes = 512 * 1024; // 512KiB
+#if RETRO_AUDIODEVICE_CTR
+            // + the decoded music's ring after stb_vorbis's part (CTRAudioDevice.cpp)
+            vorbisAlloc.alloc_buffer = NULL;
+            AllocateStorage((void **)&vorbisAlloc.alloc_buffer, 512 * 1024 + MUSIC_RING_BYTES, DATASET_MUS, false);
+            DEV_LOG("music: decoder buffer %s, MUS %u KB", vorbisAlloc.alloc_buffer ? "ok" : "REFUSED",
+                    (unsigned)(dataStorage[DATASET_MUS].usedStorage * 4 >> 10));
+            if (!vorbisAlloc.alloc_buffer)
+                streamBufferSize = 0;
+#else
             AllocateStorage((void **)&vorbisAlloc.alloc_buffer, 512 * 1024, DATASET_MUS, false);
+#endif
 
-            vorbisInfo = stb_vorbis_open_memory(streamBuffer, streamBufferSize, NULL, &vorbisAlloc);
+            vorbisInfo = streamBufferSize > 0 ? stb_vorbis_open_memory(streamBuffer, streamBufferSize, NULL, &vorbisAlloc) : NULL;
             if (vorbisInfo) {
                 if (streamStartPos)
                     stb_vorbis_seek(vorbisInfo, streamStartPos);
+#if RETRO_AUDIODEVICE_CTR
+                CtrMusicBegin(channel->loop == 1, (uint8 *)vorbisAlloc.alloc_buffer + 512 * 1024); // unlocks
+#endif
                 UpdateStreamBuffer(channel);
 
                 channel->state = CHANNEL_STREAM;
@@ -256,8 +288,12 @@ void RSDK::LoadStream(ChannelInfo *channel)
         }
     }
 
-    if (channel->state == CHANNEL_LOADING_STREAM)
+    if (channel->state == CHANNEL_LOADING_STREAM) {
         channel->state = CHANNEL_IDLE;
+#if RETRO_AUDIODEVICE_CTR
+        LightLock_Unlock(&sMusicLock); // CtrMusicBegin did not run
+#endif
+    }
 }
 
 int32 RSDK::PlayStream(const char *filename, uint32 slot, uint32 startPos, uint32 loopPoint, bool32 loadASync)
@@ -450,6 +486,7 @@ void RSDK::LoadSfxToSlot(char *filename, uint8 slot, uint8 plays, uint8 scope)
 
 void RSDK::LoadSfx(char *filename, uint8 plays, uint8 scope)
 {
+    BottomUi::LoadDetail(filename);
     // Find an empty sound slot.
     uint16 id = -1;
     for (uint32 i = 0; i < SFX_COUNT; ++i) {
@@ -558,6 +595,9 @@ uint32 RSDK::GetChannelPos(uint32 channel)
         return channels[channel].bufferPos;
 
     if (channels[channel].state == CHANNEL_STREAM) {
+#if RETRO_AUDIODEVICE_CTR
+        return CtrMusicPos();
+#endif
         if (!vorbisInfo->current_loc_valid || vorbisInfo->current_loc < 0)
             return 0;
 

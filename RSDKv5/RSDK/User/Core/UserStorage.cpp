@@ -1166,7 +1166,7 @@ void RSDK::SKU::InitUserDirectory()
 #elif RETRO_PLATFORM == RETRO_3DS
 
     // TODO: don't hardcode this directory
-    SKU::SetUserFileCallbacks("/3ds/SonicMania/", NULL, NULL);
+    SKU::SetUserFileCallbacks("/3ds/Sonic Mania 3DS/", NULL, NULL);
 
 #else
 

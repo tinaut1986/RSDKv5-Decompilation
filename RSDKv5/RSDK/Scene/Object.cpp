@@ -1,4 +1,7 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
+#include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
 using namespace RSDK;
 
@@ -363,10 +366,12 @@ void RSDK::InitObjects()
     sceneInfo.createSlot = ENTITY_COUNT - 0x100;
     cameraCount          = 0;
 
+    BottomUi::LoadPhase("Objects", 0.5f, 1.0f);
     for (int32 o = 0; o < sceneInfo.classCount; ++o) {
 #if RETRO_USE_MOD_LOADER
         currentObjectID = o;
 #endif
+        BottomUi::LoadItem(o, sceneInfo.classCount);
 
         if (objectClassList[stageObjectIDs[o]].stageLoad)
             objectClassList[stageObjectIDs[o]].stageLoad();
@@ -395,6 +400,7 @@ void RSDK::InitObjects()
 }
 void RSDK::ProcessObjects()
 {
+    DEV_STAGE(STAGE_UPDATE);
     for (int32 i = 0; i < DRAWGROUP_COUNT; ++i) drawGroups[i].entityCount = 0;
 
     for (int32 o = 0; o < sceneInfo.classCount; ++o) {
@@ -772,12 +778,20 @@ void RSDK::ProcessFrozenObjects()
 }
 void RSDK::ProcessObjectDrawLists()
 {
+    DEV_STAGE(STAGE_DRAW);
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+    DevTools::OrderBegin();
+#endif
 #if RETRO_PLATFORM == RETRO_3DS
-    if (RenderDevice::CheckForFrameSkip())
+    if (RenderDevice::CheckForFrameSkip() || !DEV_SW_DRAW)
       return;
 #endif
 
     if (sceneInfo.state != ENGINESTATE_LOAD && sceneInfo.state != (ENGINESTATE_LOAD | ENGINESTATE_STEPOVER)) {
+#if RETRO_PLATFORM == RETRO_3DS
+        currentScreen = &screens[0];
+        GpuFrame::Begin();
+#endif
         for (int32 s = 0; s < videoSettings.screenCount; ++s) {
             currentScreen             = &screens[s];
             sceneInfo.currentScreenID = s;
@@ -816,7 +830,11 @@ void RSDK::ProcessObjectDrawLists()
                         sceneInfo.entitySlot = list->entries[i];
                         validDraw            = false;
                         sceneInfo.entity     = &objectEntityList[list->entries[i]];
+#if RETRO_PLATFORM == RETRO_3DS
+                        if (sceneInfo.entity->visible && !DEV_HIDE_CLASS(sceneInfo.entity->classID)) {
+#else
                         if (sceneInfo.entity->visible) {
+#endif
                             if (objectClassList[stageObjectIDs[sceneInfo.entity->classID]].draw)
                                 objectClassList[stageObjectIDs[sceneInfo.entity->classID]].draw();
 
@@ -1056,6 +1074,9 @@ void RSDK::ProcessObjectDrawLists()
             currentScreen++;
             sceneInfo.currentScreenID++;
         }
+#if RETRO_PLATFORM == RETRO_3DS
+        GpuFrame::End();
+#endif
     }
 }
 

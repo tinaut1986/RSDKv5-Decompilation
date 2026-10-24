@@ -1,4 +1,8 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
+#include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Graphics/CTR/GpuFrame.hpp"
+#include "RSDK/Graphics/CTR/GpuScene3D.hpp"
 
 using namespace RSDK;
 
@@ -378,6 +382,7 @@ void RSDK::MatrixInverse(Matrix *dest, Matrix *matrix)
 
 uint16 RSDK::LoadMesh(const char *filename, uint8 scope)
 {
+    BottomUi::LoadDetail(filename);
     if (!scope || scope > SCOPE_STAGE)
         return -1;
 
@@ -511,6 +516,10 @@ uint16 RSDK::Create3DScene(const char *name, uint16 vertexLimit, uint8 scope)
 }
 void RSDK::AddModelToScene(uint16 modelFrames, uint16 sceneIndex, uint8 drawMode, Matrix *matWorld, Matrix *matNormals, color color)
 {
+#if RETRO_PLATFORM == RETRO_3DS
+    if (GpuScene3D::AddModel(modelFrames, sceneIndex, drawMode, matWorld, matNormals, color, false, 0, 0, 0))
+        return; // an instance for the GPU
+#endif
     if (modelFrames < MODEL_COUNT && sceneIndex < SCENE3D_COUNT) {
         if (matWorld) {
             Model *mdl            = &modelList[modelFrames];
@@ -656,6 +665,15 @@ void RSDK::AddModelToScene(uint16 modelFrames, uint16 sceneIndex, uint8 drawMode
 void RSDK::AddMeshFrameToScene(uint16 modelFrames, uint16 sceneIndex, Animator *animator, uint8 drawMode, Matrix *matWorld, Matrix *matNormals,
                                color color)
 {
+#if RETRO_PLATFORM == RETRO_3DS
+    if (animator && modelFrames < MODEL_COUNT) {
+        int32 next = animator->frameID + 1;
+        if (next >= animator->frameCount)
+            next = animator->loopIndex;
+        if (GpuScene3D::AddModel(modelFrames, sceneIndex, drawMode, matWorld, matNormals, color, true, animator->frameID, next, animator->timer))
+            return; // an instance for the GPU
+    }
+#endif
     if (modelFrames < MODEL_COUNT && sceneIndex < SCENE3D_COUNT) {
         if (matWorld && animator) {
             Model *mdl            = &modelList[modelFrames];
@@ -823,8 +841,46 @@ void RSDK::AddMeshFrameToScene(uint16 modelFrames, uint16 sceneIndex, Animator *
     }
 }
 
+// Stable merge sort of the faces by depth, deepest first (bottom-up, with a buffer kept between calls).
+static void SortFacesByDepth(Scene3DFace *faces, int32 count)
+{
+    static Scene3DFace *tmp;
+    static int32 tmpCount;
+    if (count < 2)
+        return;
+    if (tmpCount < count) {
+        free(tmp);
+        tmp      = (Scene3DFace *)malloc(sizeof(Scene3DFace) * count);
+        tmpCount = tmp ? count : 0;
+        if (!tmp)
+            return;
+    }
+    Scene3DFace *src = faces, *dst = tmp;
+    for (int32 width = 1; width < count; width *= 2) {
+        for (int32 lo = 0; lo < count; lo += 2 * width) {
+            const int32 mid = lo + width < count ? lo + width : count, hi = lo + 2 * width < count ? lo + 2 * width : count;
+            int32 i = lo, j = mid, k = lo;
+            while (i < mid && j < hi)
+                dst[k++] = src[j].depth > src[i].depth ? src[j++] : src[i++]; // ties keep the earlier face first
+            while (i < mid)
+                dst[k++] = src[i++];
+            while (j < hi)
+                dst[k++] = src[j++];
+        }
+        Scene3DFace *t = src;
+        src = dst, dst = t;
+    }
+    if (src != faces)
+        memcpy(faces, src, sizeof(Scene3DFace) * count);
+}
+
 void RSDK::Draw3DScene(uint16 sceneID)
 {
+    // Not a hazard: the faces below go through DrawFace / DrawBlendedFace / DrawLine, which record themselves.
+#if RETRO_PLATFORM == RETRO_3DS
+    GpuScene3D::OnDraw(sceneID); // the scene's GPU instances, as one command
+#endif
+    DEV_STAGE(STAGE_3D);
     if (sceneID < SCENE3D_COUNT) {
         Entity *entity = sceneInfo.entity;
         Scene3D *scn   = &scene3DList[sceneID];
@@ -873,26 +929,10 @@ void RSDK::Draw3DScene(uint16 sceneID)
             ++faceVertCounts;
         }
 
-        // Sort the face buffer. This is needed so that the faces don't overlap each other incorrectly when they're rendered.
-        // This is an insertion sort, taken from here:
-        // https://web.archive.org/web/20110108233032/http://rosettacode.org/wiki/Sorting_algorithms/Insertion_sort#C
-
-        Scene3DFace *a = scn->faceBuffer;
-
-        int i, j;
-        Scene3DFace temp;
-
-        for(i=1; i<scn->faceCount; i++)
-        {
-            temp = a[i];
-            j = i-1;
-            while(j>=0 && a[j].depth < temp.depth)
-            {
-                a[j+1] = a[j];
-                j -= 1;
-            }
-            a[j+1] = temp;
-        }
+        // Sort the face buffer, deepest first, so that the faces don't overlap each other incorrectly when they're
+        // rendered. A stable merge sort: the insertion sort used here before was O(n^2) on ~800 faces per call
+        // (tens of ms a frame in the Special Stage on the Old 3DS); the order of equal depths is the same.
+        SortFacesByDepth(scn->faceBuffer, scn->faceCount);
 
         // Finally, display the faces.
 

@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/Upstream.hpp"
 
 using namespace RSDK;
 
@@ -117,6 +118,14 @@ bool32 RSDK::LoadDataPack(const char *filePath, size_t fileOffset, bool32 useBuf
 
     char dataPackPath[0x100];
     sprintf_s(dataPackPath, sizeof(dataPackPath), "%s%s", SKU::userFileDir, filePath);
+#if RETRO_PLATFORM == RETRO_3DS
+    {
+        // Our folder first; without the pack there, the original 3DS port's folder, read in place (Upstream.hpp)
+        char found[0x100];
+        if (Port::UpstreamFallback(dataPackPath, filePath, found, sizeof(found)))
+            strcpy(dataPackPath, found);
+    }
+#endif
 
     InitFileInfo(&info);
     info.externalFile = true;

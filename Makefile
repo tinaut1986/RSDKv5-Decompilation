@@ -152,6 +152,17 @@ RSDK_SOURCES += \
 	RSDKv5/RSDK/Core/Link        			\
 	RSDKv5/RSDK/Core/ModAPI       			\
 	RSDKv5/RSDK/Dev/Debug        			\
+	RSDKv5/RSDK/Dev/CTR/DevTools 			\
+	RSDKv5/RSDK/Dev/CTR/BottomUi 			\
+	RSDKv5/RSDK/Dev/CTR/Port 			\
+	RSDKv5/RSDK/Dev/CTR/PortText 		\
+	RSDKv5/RSDK/Dev/CTR/Upstream 		\
+	RSDKv5/RSDK/Dev/CTR/Updater 			\
+	RSDKv5/RSDK/Dev/CTR/UpdateManifest 		\
+	RSDKv5/RSDK/Graphics/CTR/C3DPresent 		\
+	RSDKv5/RSDK/Graphics/CTR/GpuFrame 		\
+	RSDKv5/RSDK/Graphics/CTR/GpuRender 		\
+	RSDKv5/RSDK/Graphics/CTR/GpuScene3D 		\
 	RSDKv5/RSDK/Storage/Storage       		\
 	RSDKv5/RSDK/Storage/Text         		\
 	RSDKv5/RSDK/Graphics/Drawing      		\
@@ -159,6 +170,7 @@ RSDK_SOURCES += \
 	RSDKv5/RSDK/Graphics/Animation    		\
 	RSDKv5/RSDK/Graphics/Sprite       		\
 	RSDKv5/RSDK/Graphics/Palette      		\
+	RSDKv5/RSDK/Cache/Cache      			\
 	RSDKv5/RSDK/Graphics/Video     			\
 	RSDKv5/RSDK/Audio/Audio        			\
 	RSDKv5/RSDK/Input/Input        			\
@@ -191,6 +203,10 @@ GAME_SOURCES += $(GAME_NAME)/Objects/All
 else
 # execute Game/objectmake.py?
 include $(GAME_NAME)/Objects.cfg
+endif
+ifeq ($(PLATFORM),3DS)
+# The bottom screen's view of the run (reads the game's state; compiled as game code)
+GAME_SOURCES += RSDKv5/RSDK/Dev/CTR/GameInfo
 endif
 endif
 

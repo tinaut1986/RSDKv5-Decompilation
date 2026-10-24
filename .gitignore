@@ -259,3 +259,13 @@ Ignored/
 android/local.properties
 
 *.res
+.deps/
+
+# Local build outputs and game data (never commit these)
+3ds/out/
+*.rsdk
+*.romfs
+.3ds_ftp_ip
+*.map
+RSDKv5/RSDK/Dev/CTR/PortVersion.h
+RSDKv5/RSDK/Dev/CTR/UpdateCa.inc

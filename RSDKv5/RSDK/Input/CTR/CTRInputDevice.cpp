@@ -1,3 +1,5 @@
+#include "RSDK/Dev/CTR/BottomUi.hpp"
+
 using namespace RSDK;
 
 InputState mappings[12];
@@ -26,6 +28,15 @@ void RSDK::SKU::InputDeviceCTR::UpdateInput()
 
   u32 kDown = hidKeysDown();
   u32 kHeld = hidKeysHeld();
+#if MANIA_DEV_TOOLS
+  // Keys injected over FTP (SITE INPUT) count as held; a newly set one also counts as pressed.
+  static u32 prevInject;
+  const u32 inject = RSDK::DevTools::injectKeys;
+  kHeld |= inject;
+  kDown |= inject & ~prevInject;
+  prevInject = inject;
+  RSDK::DevTools::RunKeys(&kHeld, &kDown);
+#endif
 
   if (kDown || kHeld)
     this->anyPress = 1;
@@ -37,7 +48,9 @@ void RSDK::SKU::InputDeviceCTR::UpdateInput()
 
   hidTouchRead(&touchPos);
 
-  if (RSDK::engineDebugMode) {
+  // A touch toggled the libctru text console (consoleClear wiped the bottom screen: it flashed on every tap and
+  // kept clearing while a finger moved). Not while the graphical bottom screen owns it.
+  if (RSDK::engineDebugMode && !RSDK::BottomUi::Ready()) {
     if (touchPos.px != touchPosPrev.px || touchPos.py != touchPosPrev.py) {
       printToConsole = !printToConsole;
 

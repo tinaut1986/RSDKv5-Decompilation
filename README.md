@@ -1,107 +1,101 @@
-![header](header.png?raw=true)
+# Sonic Mania 3DS
 
-A complete decompilation of Retro Engine v5 and v5Ultimate.
+Nintendo 3DS port of *Sonic Mania*, built on the RSDKv5 decompilation, aimed at running well on the **Old 3DS and
+2DS** as well as the New 3DS: the game is drawn by the console's GPU instead of the CPU.
 
-# **SUPPORT THE DEVELOPERS OF THE RETRO ENGINE**
-We do not own the Retro Engine in any way, shape or form, and this project would not have been possible had they not developed RSDKv5(U) in the first place. Retro Engine is currently owned by [Evening Star](https://eveningstar.studio/); we highly urge you to follow & support their projects if you enjoyed this project of ours!
+It installs as its own application, **Sonic Mania 3DS**, and keeps its data and saves in
+`sdmc:/3ds/Sonic Mania 3DS/`. Downloads are on this repository's
+[releases](https://github.com/tinaut1986/RSDKv5-Decompilation/releases). The project is in beta.
 
-## **DO NOT USE THIS DECOMPILATION PROJECT AS A MEANS TO PIRATE SONIC MANIA (PLUS) OR ANY OTHER RSDKv5(U) GAMES.**
-We do not condone using this project as a means for piracy in any form. This project was made with love and care for the source material and was created for purely educational purposes.
+No game data is distributed with this project. You need your own copy of Sonic Mania: its `Data.rsdk` file.
 
-# Additional Tweaks
-* Added a built-in mod loader and API allowing to easily create and play mods with features such as save file redirection and XML asset loading, supported by all sub-versions of v5U.
-* Added a built-in shader compiler for backends/platforms that support it.
-* Added various other backends to windows aside from the usual DirectX 9 backends
+**Do not use this project to pirate Sonic Mania or any other Retro Engine game.** The Retro Engine and Sonic Mania
+belong to their owners (the engine to [Evening Star](https://eveningstar.studio/), the game to SEGA); please support
+their work.
 
-## If you are here for Sonic Mania:
-You have the option of building RSDKv5 alongside Mania in [the Sonic Mania Decompilation repo](https://github.com/RSDKModding/Sonic-Mania-Decompilation).
+## Origin
 
-# How to Build
+* [RSDKModding/RSDKv5-Decompilation](https://github.com/RSDKModding/RSDKv5-Decompilation): the decompilation of the
+  Retro Engine v5 / v5U this repository is a fork of.
+* [RSDKModding/Sonic-Mania-Decompilation](https://github.com/RSDKModding/Sonic-Mania-Decompilation): the game's code.
+* [SaturnSH2x2/RSDKv5-Decompilation](https://github.com/SaturnSH2x2/RSDKv5-Decompilation/tree/3ds-main): the New 3DS
+  port this one started from. It has since diverged: its own application, a GPU renderer, bottom screen and tools.
 
-This project uses [CMake](https://cmake.org/), a versatile building system that supports many different compilers and platforms. You can download CMake [here](https://cmake.org/download/). **(Make sure to enable the feature to add CMake to the system PATH during the installation if you're on Windows!)**
+## Features
 
-## Get the source code
+* **GPU renderer** (citro3d): tile layers, sprites, the Special Stages' 3D scenes, rotozoom layers and the masked and
+  tinted inks are drawn by the GPU; the original software renderer stays as reference and fallback (DEBUG >
+  RENDERER in debug builds).
+* **Stereoscopic 3D**: the layers are set in depth by their parallax, with the HUD in front; the Special Stages' models
+  too. Lower the 3D slider for the flat picture.
+* **Frame pacing** for the Old 3DS: AUTO skips a late picture, 30 FPS draws every other one, OFF draws them all (the
+  game slows down instead).
+* **Bottom screen**:
+  * GAME: the stage, the mode, the characters; time, score, rings and lives with the game's own HUD art (the time at
+    the game's rate); the save's chaos emeralds; a row with the item boxes picked up (a shield or a power stays as long
+    as it lasts).
+  * OPTIONS: frames (AUTO, 30 FPS, OFF), an FPS counter on the top screen, the game's HUD hidden while the GAME tab
+    shows it, Sonic Mania Plus, and colour themes (MANIA, which mixes the game's four colours on filled,
+    cut-corner panels, MANIA OUTLINE, and five more).
+  * ACHIEVEMENTS: the PC game's 18 achievements, kept on the SD card: a list with each one's description and unlock
+    date; the unlock notice on the top screen (the game's own) or the bottom one, with a sound.
+  * UPDATES: in-app updates with a STABLE and a + BETAS channel.
+  * A loading box with the step, the file and a bar while the game loads.
+* The bottom screen's text follows the language chosen in the game (English, French, Italian, German, Spanish,
+  Japanese).
+* Debug builds (the beta releases) add a DEBUG tab: frame timings, renderer statistics, switches and an FTP server
+  with a remote control (scene jumps, screenshots, recorded runs).
 
-In order to clone the repository, you need to install Git, which you can get [here](https://git-scm.com/downloads).
+## Installation
 
-Clone the repo **recursively**, using:
-`git clone --recursive https://github.com/RSDKModding/RSDKv5-Decompilation`
+1. Install the CIA from the latest release with FBI (or scan the QR code in the release). There is no 3DSX release:
+   from the Homebrew Launcher the game does not get enough memory.
+2. Copy `Data.rsdk` from your copy of Sonic Mania (on PC, the game's install folder) to:
 
-If you've already cloned the repo, run this command inside of the repository:
-```git submodule update --init```
-
-## Getting dependencies
-
-### Windows
-To handle dependencies, you'll need to install [Visual Studio Community](https://visualstudio.microsoft.com/downloads/) (make sure to install the `Desktop development with C++` package during the installation) and [vcpkg](https://learn.microsoft.com/en-us/vcpkg/get_started/get-started?pivots=shell-cmd#1---set-up-vcpkg) (You only need to follow `1 - Set up vcpkg`).
-
-After installing those, run the following in Command Prompt (make sure to replace `[vcpkg root]` with the path to the vcpkg installation!):
-- `[vcpkg root]/vcpkg.exe install libtheora libogg glew glfw3 sdl2 --triplet=x64-windows-static` (If you're compiling a 32-bit build, replace `x64-windows-static` with `x86-windows-static`.)
-
-Finally, follow the [compilation steps below](#compiling) using `-DCMAKE_TOOLCHAIN_FILE=[vcpkg root]/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static` as arguments for `cmake -B build`.
-  - Make sure to replace `[vcpkg root]` with the path to the vcpkg installation!
-  - If you're compiling a 32-bit build, replace `x64-windows-static` with `x86-windows-static`.
-
-### Linux
-Install the following dependencies: then follow the [compilation steps below](#compiling):
-- **pacman (Arch):** `sudo pacman -S base-devel cmake glew glfw libtheora`
-- **apt (Debian/Ubuntu):** `sudo apt install build-essential cmake libglew-dev libglfw3-dev libtheora-dev`
-- **rpm (Fedora):** `sudo dnf install make cmake gcc glew-devel glfw-devel libtheora-devel zlib-devel`
-- **xbps (Void):** `sudo xbps-install make cmake gcc pkg-config glew-devel glfw-devel libtheora-devel zlib-devel`
-- Your favorite package manager here, [make a pull request](https://github.com/RSDKModding/RSDKv5-Decompilation/fork) (also update [Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation)!)
-
-#### (make sure to [install GL shaders!](FAQ.md#q-why-arent-videosfilters-working-while-using-gl))
-
-### Switch
-[Setup devKitPro](https://devkitpro.org/wiki/Getting_Started), then run the following:
-- `(dkp-)pacman -Syuu switch-dev switch-libogg switch-libtheora switch-sdl2 switch-glad`
-
-Finally, follow the [compilation steps below](#compiling) using `-DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake` as arguments for `cmake -B build`.
-
-#### (make sure to [install GL shaders!](FAQ.md#q-why-arent-videosfilters-working-while-using-gl))
-
-### Android
-Follow the android build instructions [here.](./dependencies/android/README.md)
-
-## Compiling
-
-Compiling is as simple as typing the following in the root repository directory:
-```
-cmake -B build
-cmake --build build --config release
+```text
+sdmc:/3ds/Sonic Mania 3DS/
 ```
 
-The resulting build will be located somewhere in `build/` depending on your system.
+If that folder has no `Data.rsdk`, the game reads the one of the original 3DS port's folder (`sdmc:/3ds/SonicMania/`)
+in place, and at the first start it offers once to copy that folder's saves. Both applications can be installed side
+by side.
 
-The following cmake arguments are available when compiling:
-- Use these by adding `-D[flag-name]=[value]` to the end of the `cmake -B build` command. For example, to build with `RETRO_DISABLE_PLUS` set to on, add `-DRETRO_DISABLE_PLUS=on` to the command.
+**Sonic Mania Plus** (Mighty, Ray, Encore mode) is off by default, as the decompilation's license asks of every build
+given to anyone. When the game data has the Plus content, the first start asks whether to turn it on; do so only if
+you own Sonic Mania Plus. It can be changed later in OPTIONS > PLUS (from the next start).
 
-### RSDKv5 flags
-- `RETRO_REVISION`: What revision to compile for. Takes an integer, defaults to `3` (RSDKv5U).
-- `RETRO_DISABLE_PLUS`: Whether or not to disable the Plus DLC. Takes a boolean (on/off): build with `on` when compiling for distribution. Defaults to `off`.
-- `RETRO_MOD_LOADER`: Enables or disables the mod loader. Takes a boolean, defaults to `on`.
-- `RETRO_MOD_LOADER_VER`: Manually sets the mod loader version. Takes an integer, defaults to the current latest version.
-- `RETRO_SUBSYSTEM`: *Only change this if you know what you're doing.* Changes the subsystem that RSDKv5 will be built for. Defaults to the most standard subsystem for the platform.
+## Updates
 
-## Other Platforms
-Currently, the only officially supported platforms are the ones listed above.
+Open **UPDATES**, pick the **STABLE** or **+ BETAS** channel and install. The notes show every release between the
+installed version and the one offered. Save your game first: the application restarts after an update. The CIA is
+checked against a SHA-256 digest before it replaces the installed one; Wi-Fi is required.
 
-**However,** since release, there have been a multitude of forks made by the community (keep in mind that many of these ports are still a WIP, and some may be out of date): 
-* ### [WebASM](https://github.com/heyjoeway/RSDKv5-Decompilation/tree/emscripten) by heyjoeway 
-* ### [New 3DS](https://github.com/SaturnSH2x2/RSDKv5-Decompilation/tree/3ds-main) by SaturnSH2x2
-* ### [Wii U](https://github.com/Radfordhound/RSDKv5-Decompilation) by Radfordhound
-* ### [Wii U](https://github.com/Clownacy/Sonic-Mania-Decompilation) by Clownacy
-* ### [Wii](https://github.com/Mefiresu/RSDKv5-Decompilation/tree/dev/wii-port) by Mefiresu
-* ### [Vita](https://github.com/SonicMastr/Sonic-Mania-Vita) by SonicMastr
-* #### and a [general optimization fork](https://github.com/smb123w64gb/RSDKv5-Decompilation) by smb123w64gb
+## Building
 
-# FAQ
-You can find the FAQ [here](./FAQ.md).
+Requirements: devkitPro with devkitARM, libctru, citro2d, citro3d and the 3DS portlibs the updater needs (curl,
+mbedTLS, jansson, zlib), plus `3ds-libtheora` (the build script can use an unpacked copy in `.deps/`).
 
-# Special Thanks
-* [st×tic](https://github.com/stxticOVFL) for leading ModAPI development, porting to other platforms, general decompilation assistance, helping me fix bugs, tweaking up my sometimes sloppy code and generally being really helpful and fun to work with on this project
-* [The Weigman](https://github.com/TheWeigman) for making v5 and v5U assets with st×tic such as the header and icons
-* Everyone in the [Retro Engine Modding Server](https://dc.railgun.works/retroengine) for being supportive of me and for giving me a place to show off these things that I've found
+```sh
+./build_3ds.sh                      # bin/3DS/CTR/RSDKv5U.3dsx (with the dev tools)
+./build_3ds.sh --cia                # also 3ds/out/SonicMania.cia
+DEV_TOOLS=0 ./build_3ds.sh --cia    # without the dev tools
+./build_3ds.sh --install <3ds-ip>   # build, upload and install over the running game (dev builds)
+```
 
-# Contact:
-Join the [Retro Engine Modding Discord Server](https://dc.railgun.works/retroengine) for any extra questions you may need to know about the decompilation or modding it.
+A tag `vX.Y.Z` builds and publishes a release (`.github/workflows/build-release.yml`). Contributor and workflow notes
+are in [CLAUDE.md](CLAUDE.md) and [docs/PLAN.md](docs/PLAN.md), the renderer's in
+[docs/gpu-renderer.md](docs/gpu-renderer.md), release notes in [docs/release-notes](docs/release-notes).
+
+## Credits
+
+* [Evening Star](https://eveningstar.studio/): the Retro Engine (RSDK).
+* Rubberduckycooly and chuliRMG ([RSDKModding](https://github.com/RSDKModding)): the decompilation of RSDKv5(U) and of
+  Sonic Mania.
+* [SaturnSH2x2](https://github.com/SaturnSH2x2): the original Nintendo 3DS port.
+* [tinaut1986](https://github.com/tinaut1986): this port (GPU renderer, Old 3DS work, bottom screen, updater).
+
+## License
+
+The code is covered by the **RSDKv5(U) Decompilation Source Code License**: see [LICENSE.md](LICENSE.md). In short:
+no commercial use, the original developers and the decompilation's authors must be credited, no game assets may be
+distributed, and every fork follows the same license.

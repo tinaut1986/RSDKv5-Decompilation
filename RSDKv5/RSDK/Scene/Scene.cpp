@@ -1,4 +1,7 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
+#include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Graphics/CTR/GpuFrame.hpp"
 
 using namespace RSDK;
 
@@ -160,6 +163,7 @@ void RSDK::LoadSceneFolder()
     LoadTileConfig(fullFilePath);
 
     // Load StageConfig
+    BottomUi::LoadPhase("Stage config", 0.0f, 0.05f);
     sprintf_s(fullFilePath, sizeof(fullFilePath), "Data/Stages/%s/StageConfig.bin", currentSceneFolder);
 
     FileInfo info;
@@ -256,7 +260,9 @@ void RSDK::LoadSceneFolder()
 
         uint8 sfxCount = ReadInt8(&info);
         char sfxPath[0x100];
+        BottomUi::LoadPhase("Sound effects", 0.05f, 0.4f);
         for (int32 i = 0; i < sfxCount; ++i) {
+            BottomUi::LoadItem(i, sfxCount);
             ReadString(&info, sfxPath);
             uint8 maxConcurrentPlays = ReadInt8(&info);
             LoadSfx(sfxPath, maxConcurrentPlays, SCOPE_STAGE);
@@ -266,6 +272,7 @@ void RSDK::LoadSceneFolder()
     }
 
     sprintf_s(fullFilePath, sizeof(fullFilePath), "Data/Stages/%s/16x16Tiles.gif", currentSceneFolder);
+    BottomUi::LoadPhase("Tiles", 0.4f, 0.45f);
     LoadStageGIF(fullFilePath);
 
 #if RETRO_USE_MOD_LOADER
@@ -287,6 +294,7 @@ void RSDK::LoadSceneAssets()
 #endif
 
     memset(objectEntityList, 0, ENTITY_COUNT * sizeof(EntityBase));
+    BottomUi::LoadPhase("Scene layout", 0.45f, 0.5f);
 
     SceneListEntry *sceneEntry = &sceneInfo.listData[sceneInfo.listPos];
     char fullFilePath[0x40];
@@ -298,6 +306,7 @@ void RSDK::LoadSceneAssets()
 
     if (screens[0].size.y > 0)
         memset(gfxLineBuffer, 0, screens[0].size.y * sizeof(uint8));
+    GPUFRAME_LINEBUF_CHANGED();
 
     memset(tileLayers, 0, LAYER_COUNT * sizeof(TileLayer));
 
@@ -1293,6 +1302,8 @@ void RSDK::CopyTileLayer(uint16 dstLayerID, int32 dstStartX, int32 dstStartY, ui
 
 void RSDK::DrawLayerHScroll(TileLayer *layer)
 {
+    GPUFRAME_REC(RecLayer(layer, LAYER_HSCROLL));
+    DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
 
@@ -1445,6 +1456,8 @@ void RSDK::DrawLayerHScroll(TileLayer *layer)
 }
 void RSDK::DrawLayerVScroll(TileLayer *layer)
 {
+    GPUFRAME_REC(RecLayer(layer, LAYER_VSCROLL));
+    DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
 
@@ -1587,6 +1600,8 @@ void RSDK::DrawLayerVScroll(TileLayer *layer)
 }
 void RSDK::DrawLayerRotozoom(TileLayer *layer)
 {
+    GPUFRAME_REC(RecLayer(layer, LAYER_ROTOZOOM));
+    DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
 
@@ -1630,6 +1645,8 @@ void RSDK::DrawLayerRotozoom(TileLayer *layer)
 }
 void RSDK::DrawLayerBasic(TileLayer *layer)
 {
+    GPUFRAME_REC(RecLayer(layer, LAYER_BASIC));
+    DEV_STAGE(STAGE_LAYERS);
     if (!layer->xsize || !layer->ysize)
         return;
 

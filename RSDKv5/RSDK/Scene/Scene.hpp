@@ -229,13 +229,27 @@ inline void GetLayerSize(uint16 layerID, Vector2 *size, bool32 usePixelUnits)
     }
 }
 
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+bool DevNoFall(); // SITE SET ufonofall 1: the Special Stage's holes read as ground (DevTools.cpp)
+#endif
+
 inline uint16 GetTile(uint16 layerID, int32 tileX, int32 tileY)
 {
     if (layerID < LAYER_COUNT) {
         TileLayer *layer = &tileLayers[layerID];
-        if (tileX >= 0 && tileX < layer->xsize && tileY >= 0 && tileY < layer->ysize)
-            return layer->layout[tileX + (tileY << layer->widthShift)];
+        if (tileX >= 0 && tileX < layer->xsize && tileY >= 0 && tileY < layer->ysize) {
+            const uint16 tile = layer->layout[tileX + (tileY << layer->widthShift)];
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+            if (tile == (uint16)-1 && DevNoFall())
+                return 0;
+#endif
+            return tile;
+        }
     }
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+    if (DevNoFall())
+        return 0;
+#endif
 
     return (uint16)-1;
 }

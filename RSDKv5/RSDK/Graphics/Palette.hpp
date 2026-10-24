@@ -1,6 +1,8 @@
 #ifndef PALETTE_H
 #define PALETTE_H
 
+#include "RSDK/Graphics/CTR/GpuFrameHazard.hpp"
+
 namespace RSDK
 {
 
@@ -45,6 +47,7 @@ inline void SetActivePalette(uint8 newActiveBank, int32 startLine, int32 endLine
 {
     if (newActiveBank < PALETTE_BANK_COUNT)
         for (int32 l = startLine; l < endLine && l < SCREEN_YSIZE; l++) gfxLineBuffer[l] = newActiveBank;
+    GPUFRAME_LINEBUF_CHANGED();
 }
 
 inline uint32 GetPaletteEntry(uint8 bankID, uint8 index)
@@ -62,11 +65,13 @@ inline uint32 GetPaletteEntry(uint8 bankID, uint8 index)
 
 inline void SetPaletteEntry(uint8 bankID, uint8 index, uint32 color)
 {
+    GPUFRAME_PALETTE_HAZARD();
     fullPalette[bankID][index] = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
 }
 
 inline void SetPaletteMask(uint32 color)
 {
+    GPUFRAME_MASK_HAZARD();
     maskColor = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
 }
 
@@ -83,6 +88,7 @@ inline uint16 *GetTintLookupTable() { return tintLookupTable; }
 
 inline void CopyPalette(uint8 sourceBank, uint8 srcBankStart, uint8 destinationBank, uint8 destBankStart, uint8 count)
 {
+    GPUFRAME_PALETTE_HAZARD();
     if (sourceBank < PALETTE_BANK_COUNT && destinationBank < PALETTE_BANK_COUNT) {
         for (int32 i = 0; i < count; ++i) {
             fullPalette[destinationBank][destBankStart + i] = fullPalette[sourceBank][srcBankStart + i];
@@ -92,6 +98,7 @@ inline void CopyPalette(uint8 sourceBank, uint8 srcBankStart, uint8 destinationB
 
 inline void RotatePalette(uint8 bankID, uint8 startIndex, uint8 endIndex, bool32 right)
 {
+    GPUFRAME_PALETTE_HAZARD();
     if (right) {
         uint16 startClr = fullPalette[bankID][endIndex];
         for (int32 i = endIndex; i > startIndex; --i) fullPalette[bankID][i] = fullPalette[bankID][i - 1];

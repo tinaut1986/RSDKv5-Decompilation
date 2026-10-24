@@ -416,6 +416,13 @@ inline void ReadString(FileInfo *info, char *buffer)
     buffer[size] = 0;
 }
 
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+namespace DevTools
+{
+void Log(const char *fmt, ...);
+}
+#endif
+
 inline int32 Uncompress(uint8 **cBuffer, int32 cSize, uint8 **buffer, int32 size)
 {
     if (!buffer || !cBuffer)
@@ -426,6 +433,12 @@ inline int32 Uncompress(uint8 **cBuffer, int32 cSize, uint8 **buffer, int32 size
 
     int32 result = uncompress(*buffer, &destLen, *cBuffer, cLen);
     (void)result;
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+    // zlib mallocs its state and window: with the heap full it fails and the data stays unwritten (a scene layout of
+    // tile 0, 2026-10-23). Never silently again.
+    if (result != Z_OK)
+        DevTools::Log("uncompress failed: zlib %d (%d -> %d bytes)", (int)result, (int)cSize, (int)size);
+#endif
 
     return (int32)destLen;
 }

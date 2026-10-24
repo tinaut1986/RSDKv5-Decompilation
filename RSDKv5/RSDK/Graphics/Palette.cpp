@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Graphics/CTR/GpuFrameHazard.hpp"
 
 using namespace RSDK;
 
@@ -29,6 +30,7 @@ uint16 RSDK::tintLookupTable[0x10000];
 #if RETRO_REV02
 void RSDK::LoadPalette(uint8 bankID, const char *filename, uint16 disabledRows)
 {
+    GPUFRAME_PALETTE_HAZARD();
     char fullFilePath[0x80];
     sprintf_s(fullFilePath, sizeof(fullFilePath), "Data/Palettes/%s", filename);
 
@@ -55,6 +57,7 @@ void RSDK::LoadPalette(uint8 bankID, const char *filename, uint16 disabledRows)
 
 void RSDK::BlendColors(uint8 destBankID, uint32 *srcColorsA, uint32 *srcColorsB, int32 blendAmount, int32 startIndex, int32 count)
 {
+    GPUFRAME_PALETTE_HAZARD();
     if (destBankID >= PALETTE_BANK_COUNT || !srcColorsA || !srcColorsB)
         return;
 
@@ -78,6 +81,7 @@ void RSDK::BlendColors(uint8 destBankID, uint32 *srcColorsA, uint32 *srcColorsB,
 
 void RSDK::SetPaletteFade(uint8 destBankID, uint8 srcBankA, uint8 srcBankB, int16 blendAmount, int32 startIndex, int32 endIndex)
 {
+    GPUFRAME_PALETTE_HAZARD();
     if (destBankID >= PALETTE_BANK_COUNT || srcBankA >= PALETTE_BANK_COUNT || srcBankB >= PALETTE_BANK_COUNT)
         return;
 

@@ -1,0 +1,253 @@
+// Reading GitHub's release list for the updater (Updater.cpp): which release of the channel is newest, its CIA or
+// 3DSX asset and digest, the notes between this build and it. From ../zelda-tmc-3ds (platform/3ds/source/
+// update_manifest.c), same rules: keep fixes in step with it.
+#ifdef __3DS__
+
+#include "RSDK/Dev/CTR/UpdateManifest.hpp"
+#include <jansson.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+/* rank orders the pre-releases of one number: a dev build (1) comes before its beta or an
+ * upstream -En (2); the plain X.Y.Z comes after all of them. */
+typedef struct Version { unsigned part[3], experiment, rank; bool pre; } Version;
+static bool parse_version(const char *s, Version *v) {
+  memset(v, 0, sizeof(*v));
+  if (!s) return false;
+  if (*s == 'v') s++;
+  for (int i = 0; i < 3; i++) {
+    if (!isdigit((unsigned char)*s)) return false;
+    unsigned n = 0; int digits = 0;
+    while (isdigit((unsigned char)*s)) {
+      n = n * 10 + (*s++ - '0');
+      if (++digits > 5 || n > 65535) return false;
+    }
+    v->part[i] = n;
+    if (*s != '.') break;
+    if (i == 2) return false;
+    s++;
+  }
+  if (*s == '-') {
+    s++;
+    // Our own builds: "-beta" is a published pre-release (the CI bakes the
+    // channel into the binary), "-dev.N+hash" a local or CI build off a
+    // release branch. Both sort below the plain X.Y.Z, like an upstream -En,
+    // and a dev build below the beta: the release branch is renamed to the next
+    // patch after every tag, so a dev build of X.Y.Z predates its tag.
+    if (!strcmp(s, "beta")) { v->pre = true; v->rank = 2; return true; }
+    if (!strncmp(s, "dev", 3)) {
+      for (s += 3; *s; s++)
+        if (!isalnum((unsigned char)*s) && *s != '.' && *s != '+') return false;
+      v->pre = true; v->rank = 1; return true;
+    }
+    if (*s++ != 'E' || !isdigit((unsigned char)*s)) return false;
+    v->pre = true; v->rank = 2;
+    while (isdigit((unsigned char)*s)) {
+      v->experiment = v->experiment * 10 + (*s++ - '0');
+      if (v->experiment > 65535) return false;
+    }
+  }
+  return *s == 0;
+}
+bool Update_ValidVersion(const char *s) { Version v; return parse_version(s, &v); }
+bool Update_IsNewer(const char *candidate, const char *installed) {
+  Version a, b;
+  if (!parse_version(candidate, &a) || !parse_version(installed, &b)) return false;
+  for (int i = 0; i < 3; i++) if (a.part[i] != b.part[i]) return a.part[i] > b.part[i];
+  if (a.pre != b.pre) return !a.pre;
+  if (a.rank != b.rank) return a.rank > b.rank;
+  return a.pre && a.experiment > b.experiment;
+}
+bool Update_AllowedDownloadUrl(const char *url) {
+  const char *prefix = "https://github.com/" UPDATE_REPOSITORY "/releases/download/";
+  return url && !strncmp(url, prefix, strlen(prefix));
+}
+static bool text(json_t *o, const char *key, char *dst, size_t cap) {
+  json_t *v = json_object_get(o, key);
+  if (!json_is_string(v) || json_string_length(v) >= cap ||
+      strlen(json_string_value(v)) != json_string_length(v)) return false;
+  strcpy(dst, json_string_value(v)); return true;
+}
+static bool candidate(json_t *o, int pre, bool homebrew, UpdateRelease *out) {
+  if (!json_is_object(o) || !json_is_false(json_object_get(o, "draft")) ||
+      !json_is_boolean(json_object_get(o, "prerelease")) ||
+      (pre >= 0 && json_is_true(json_object_get(o, "prerelease")) != (pre != 0))) return false;
+  char tag[48];
+  if (!text(o, "tag_name", tag, sizeof(tag)) || !Update_ValidVersion(tag)) return false;
+  const char *v = tag[0] == 'v' ? tag + 1 : tag;
+  char name[96], expected[512];
+  snprintf(name, sizeof(name), "sonic-mania-3ds-v%s.%s", v, homebrew ? "3dsx" : "cia");
+  snprintf(expected, sizeof(expected), "https://github.com/" UPDATE_REPOSITORY "/releases/download/%s/%s", tag, name);
+  json_t *assets = json_object_get(o, "assets"), *a; size_t i; bool found = false;
+  if (!json_is_array(assets)) return false;
+  json_array_foreach(assets, i, a) {
+    char n[96], url[512], digest[80];
+    if (!text(a, "name", n, sizeof(n)) || strcmp(n, name)) continue;
+    if (found || !text(a, "browser_download_url", url, sizeof(url)) || strcmp(url, expected) ||
+        !text(a, "digest", digest, sizeof(digest)) || strlen(digest) != 71 || strncmp(digest, "sha256:", 7)) return false;
+    json_t *s = json_object_get(a, "size");
+    if (!json_is_integer(s) || json_integer_value(s) < 4096 || json_integer_value(s) > UPDATE_MAX_FILE) return false;
+    for (int j = 7; j < 71; j++) if (!isxdigit((unsigned char)digest[j])) return false;
+    memset(out, 0, sizeof(*out)); strcpy(out->version, tag); strcpy(out->url, url);
+    for (int j = 0; j < 64; j++) out->sha256[j] = tolower((unsigned char)digest[j + 7]);
+    json_t *body = json_object_get(o, "body");
+    if (json_is_string(body)) snprintf(out->notes, sizeof(out->notes), "%s", json_string_value(body));
+    out->size = (uint32_t)json_integer_value(s); found = true;
+    out->prerelease = json_is_true(json_object_get(o, "prerelease"));
+  }
+  return found;
+}
+int Update_ParseRelease(const char *data, size_t size, bool pre, bool homebrew, UpdateRelease *out) {
+  memset(out, 0, sizeof(*out));
+  json_error_t err; json_t *root = json_loadb(data, size, JSON_REJECT_DUPLICATES, &err);
+  if (!root) return -1;
+  int result = 0;
+  if (!pre) result = candidate(root, 0, homebrew, out) ? 1 : -1;
+  else if (!json_is_array(root)) result = -1;
+  else {
+    size_t i; json_t *o;
+    json_array_foreach(root, i, o) {
+      if (!json_is_true(json_object_get(o, "prerelease"))) continue;
+      UpdateRelease r;
+      if (!candidate(o, 1, homebrew, &r)) { result = -1; break; }
+      if (!result || Update_IsNewer(r.version, out->version)) *out = r;
+      result = 1;
+    }
+  }
+  json_decref(root); return result;
+}
+
+
+// The player-facing part of one release body: its <!-- mania-notes --> block, or all of it; without the block's own
+// "## What's new" heading (the version's heading replaces it).
+static void notes_block(const char *body, const char **start, size_t *len) {
+  static const char open[] = "<!-- mania-notes -->", close[] = "<!-- /mania-notes -->";
+  const char *a = strstr(body, open);
+  if (!a) { *start = body; *len = strlen(body); return; }
+  a += sizeof(open) - 1;
+  const char *b = strstr(a, close);
+  while (*a == '\n' || *a == '\r' || *a == ' ') a++;
+  if (!strncmp(a, "## What's new", 13)) {
+    const char *eol = strchr(a, '\n');
+    if (eol && (!b || eol < b)) a = eol + 1;
+    while (*a == '\n' || *a == '\r') a++;
+  }
+  *start = a; *len = b ? (size_t)(b - a) : strlen(a);
+}
+int Update_ParseReleases(const char *data, size_t size, bool betas, bool homebrew,
+                         const char *installed, UpdateRelease *out) {
+  static UpdateRelease r;
+  memset(out, 0, sizeof(*out));
+  json_error_t err; json_t *root = json_loadb(data, size, JSON_REJECT_DUPLICATES, &err);
+  if (!root) return -1;
+  if (!json_is_array(root)) { json_decref(root); return -1; }
+  size_t i; json_t *o; int result = 0; char best[64] = "";
+  // A release this build cannot use (no asset, bad digest) is skipped, not fatal: the list
+  // holds every old release too.
+  json_array_foreach(root, i, o) {
+    if (!json_is_object(o) || (!betas && json_is_true(json_object_get(o, "prerelease")))) continue;
+    if (!candidate(o, -1, homebrew, &r)) continue;
+    char cmp[64]; snprintf(cmp, sizeof(cmp), "%s%s", r.version, r.prerelease ? "-beta" : "");
+    if (!result || Update_IsNewer(cmp, best)) { *out = r; snprintf(best, sizeof(best), "%s", cmp); result = 1; }
+  }
+  if (result && installed) {
+    // Up to date: nothing is newer than this build, so the notes are the channel's whole changelog.
+    const char *since = Update_IsNewer(best, installed) ? installed : "0.0.0";
+    static char acc[12289];
+    size_t used = 0; unsigned count = 0;
+    acc[0] = 0;
+    // On the stable channel `best` is the newest stable release, and what changed on the way to it
+    // includes the betas before it (a stable lists everything since the previous stable): their
+    // notes count too. One newer than `best`, or not newer than the install, does not.
+    json_array_foreach(root, i, o) {
+      if (!json_is_object(o)) continue;
+      if (!candidate(o, -1, homebrew, &r)) continue;
+      char cmp[64]; snprintf(cmp, sizeof(cmp), "%s%s", r.version, r.prerelease ? "-beta" : "");
+      if (!Update_IsNewer(cmp, since) || (!betas && r.prerelease && Update_IsNewer(cmp, best))) continue;
+      const char *block; size_t len; notes_block(r.notes, &block, &len);
+      int head = snprintf(acc + used, sizeof(acc) - used, "%s## %s%s\n", count ? "\n" : "", r.version,
+                          r.prerelease ? " BETA" : "");
+      if (head < 0 || (size_t)head >= sizeof(acc) - used) break;
+      used += (size_t)head;
+      if (len > sizeof(acc) - used - 1) len = sizeof(acc) - used - 1;
+      memcpy(acc + used, block, len); used += len; acc[used] = 0;
+      count++;
+    }
+    // One block, newest first, each release under its version's heading (Update_FormatNotes marks those lines).
+    if (count) snprintf(out->notes, sizeof(out->notes), "<!-- mania-notes -->\n%s\n<!-- /mania-notes -->\n", acc);
+  }
+  json_decref(root); return result;
+}
+
+// Plain-text, word-wrapped release body for a 42-column handheld display.
+// Image/link destinations and Markdown markers are presentation, never actions.
+unsigned Update_FormatNotes(const char *md, char lines[][43], unsigned capacity) {
+  char clean[12289]; size_t n = 0;
+  // Release bodies start with a beta notice and a QR code. The handheld shows
+  // the player-facing notes (docs/release-notes/<tag>.md, which the release
+  // workflow puts between <!-- mania-notes --> markers under "## What's new"),
+  // or else the commit list under "## Changelog" (upstream's releases).
+  const char *section = md ? strstr(md, "<!-- mania-notes -->") : NULL;
+  if (section) {
+    md = section;
+    const char *stop = strstr(md, "<!-- /mania-notes -->");
+    size_t len = stop ? (size_t)(stop - md) : strlen(md);
+    static char notes_only[12289];
+    if (len >= sizeof(notes_only)) len = sizeof(notes_only) - 1;
+    memcpy(notes_only, md, len); notes_only[len] = 0;
+    md = notes_only;
+  } else {
+    section = md ? strstr(md, "## Changelog") : NULL;
+    if (section) md = section;
+  }
+
+  bool line_start = true;
+  for (size_t i = 0; md && md[i] && n < sizeof(clean)-1;) {
+    // A Markdown heading ("## v0.1.2 BETA"): its line starts with UPDATE_NOTES_HEADING for the display to colour it.
+    if (line_start && md[i] == '#') {
+      while (md[i] == '#' || md[i] == ' ') i++;
+      clean[n++] = UPDATE_NOTES_HEADING;
+      line_start = false;
+      continue;
+    }
+    line_start = md[i] == '\n';
+    if (md[i] == '<') {
+      const char *end = strchr(md+i, '>');
+      if (end) { i = end-md+1; continue; }
+    }
+    if (md[i] == '!' && md[i+1] == '[') {
+      const char *end = strstr(md+i, ")");
+      if (end) { i = end-md+1; continue; }
+    }
+    if (md[i] == '[') { i++; continue; }
+    if (md[i] == ']' && md[i+1] == '(') {
+      const char *end = strchr(md+i+2, ')');
+      if (end) { i = end-md+1; continue; }
+    }
+    unsigned char c = md[i++];
+    if (c == '*' || c == '`' || c == '#' || c == '\r') continue;
+    if (c >= 128) continue;
+    clean[n++] = c;
+  }
+  clean[n] = 0;
+  unsigned count = 0; const char *p = clean;
+  while (*p && count < capacity) {
+    while (*p == ' ' || (*p == '\n' && (!count || !lines[count-1][0]))) p++;
+    if (!*p) break;
+    const char *end = strchr(p, '\n'); if (!end) end = p + strlen(p);
+    size_t take = end-p;
+    if (take > 42) {
+      take = 42;
+      while (take && p[take] != ' ') take--;
+      if (!take) take = 42;
+    }
+    memcpy(lines[count], p, take); lines[count++][take] = 0;
+    p += take; if (*p == '\n') p++;
+  }
+  if (!count && capacity) { strcpy(lines[0], "No changelog provided."); count = 1; }
+  return count;
+}
+
+#endif

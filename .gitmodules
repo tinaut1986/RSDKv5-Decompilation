@@ -4,3 +4,6 @@
 [submodule "dependencies/all/stb_vorbis"]
 	path = dependencies/all/stb_vorbis
 	url = https://github.com/nothings/stb
+[submodule "dependencies/Sonic-Mania-Decompilation"]
+	path = dependencies/Sonic-Mania-Decompilation
+	url = https://github.com/RSDKModding/Sonic-Mania-Decompilation
