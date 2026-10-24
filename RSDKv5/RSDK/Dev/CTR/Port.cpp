@@ -22,6 +22,7 @@ int Port::hud         = 1;
 int Port::tab         = 0;
 bool Port::autoUpdate = true;
 bool Port::betas      = false;
+int Port::theme       = 0;
 
 // One file for the port, the dev tools' switches in it too (DevTools::SaveSwitches). The game's own Settings.ini
 // (language, video, sound) is the engine's and stays apart; dev-settings.ini is where these lived before: read once.
@@ -52,6 +53,8 @@ static bool ReadSettings(const char *path)
             Port::autoUpdate = v != 0;
         else if (!strcmp(key, "betas"))
             Port::betas = v != 0;
+        else if (!strcmp(key, "theme"))
+            Port::theme = v < 0 || v > 15 ? 0 : v;
     }
     fclose(f);
     return true;
@@ -70,8 +73,8 @@ void Port::Save()
     FILE *f = fopen(kSettings, "w");
     if (!f)
         return;
-    fprintf(f, "frameskip=%d\nlock30=%d\ngpumode=%d\nfps=%d\nhud=%d\ntab=%d\nautoupdate=%d\nbetas=%d\n", (int)frameSkip, (int)lock30,
-            (int)GpuMode(), fps, hud, tab, (int)autoUpdate, (int)betas);
+    fprintf(f, "frameskip=%d\nlock30=%d\ngpumode=%d\nfps=%d\nhud=%d\ntab=%d\nautoupdate=%d\nbetas=%d\ntheme=%d\n", (int)frameSkip,
+            (int)lock30, (int)GpuMode(), fps, hud, tab, (int)autoUpdate, (int)betas, theme);
 #if MANIA_DEV_TOOLS
     DevTools::SaveSwitches(f);
 #endif

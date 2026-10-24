@@ -789,6 +789,8 @@ static void HandleSession(int ctrl)
                     DevTools::swVblankWait = v != 0;
                 else if (!strncmp(path, "tab", 3))
                     Port::tab = v < 0 || v > 3 ? 0 : v;
+                else if (!strncmp(path, "theme", 5)) // the bottom screen's colours (OPTIONS > THEME)
+                    Port::theme = v < 0 || v > 15 ? 0 : v;
                 else if (!strncmp(path, "fps", 3))
                     Port::fps = v < 0 || v > 4 ? 0 : v;
                 else if (!strncmp(path, "hud", 3))
@@ -894,6 +896,16 @@ static void HandleSession(int ctrl)
                 }
                 else
                     Reply(s, "550 cannot write debug/layers.bin");
+            }
+            else if (!strcmp(sub, "TOUCH") && path) {
+                // SITE TOUCH <x> <y>: one tap on the bottom screen (320x240), to drive its tabs and options remotely.
+                int x = -1, y = -1;
+                if (sscanf(path, "%d %d", &x, &y) == 2 && x >= 0 && x < 320 && y >= 0 && y < 240) {
+                    BottomUi::Touch(x, y);
+                    Reply(s, "200 touch %d %d", x, y);
+                }
+                else
+                    Reply(s, "501 TOUCH x y (0-319, 0-239)");
             }
             else if (!strcmp(sub, "HIDE")) {
                 char name[48] = "";

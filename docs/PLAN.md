@@ -73,6 +73,8 @@
 |---|---|
 | `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
 | `release/v0.1.3` | (was `release/v0.1.0`, renamed after each beta tag) Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). On 2026-10-24 also the session 6 work (beta `v0.1.1`) and `fix/3d-depth-bands` (#11, #12, #13). Merged topic branches deleted. |
+| `feat/ui-languages` | Off `release/v0.1.3`: the port's text in the game's language. Waiting for the owner on the console. |
+| `feat/ui-themes` | Off `feat/ui-languages`: OPTIONS > THEME (dropdown) and `SITE TOUCH x y`. Waiting for the owner; merge after the languages. |
 
 ## Tasks
 
@@ -140,6 +142,12 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   (`dev-settings.ini`), modal install dialog with % or restart countdown, FTP address. Dev-tools builds only.
 - [ ] U1.2 The real UI in the style of the owner's other ports (tabs, map, touch buttons, options), also in production
   builds. The text console menu is only a fallback.
+- [ ] U1.3 (2026-10-24, `feat/ui-languages`, `feat/ui-themes`, to check on the console) The port's text in the game's
+  language (`PortText`: EN, FR, IT, DE, ES, JA; Korean and Chinese stay English), shown in OPTIONS > LANGUAGE; and
+  OPTIONS > THEME, a dropdown of colour themes: MANIA (default: the four colours of the game's menus, one per tab and
+  cell, navy with diagonal stripes), and CLASSIC, SONIC blue, KNUCKLES red, SUPER SONIC gold, GREEN HILL green,
+  saved as `theme=` in `port-settings.ini`. To check on hardware: the accents and the Japanese with the real system
+  font (Azahar's stand-in font draws them badly), and that the text fits the cells.
 
 ## Decisions log
 

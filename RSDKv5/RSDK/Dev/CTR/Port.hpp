@@ -22,6 +22,7 @@ extern int hud;         // TOP HUD: 0 shown, 1 auto (hidden while the GAME tab i
 extern int tab;         // the bottom screen's open tab (BottomUi)
 extern bool autoUpdate; // UPDATES > AUTO UPDATE: look for a newer build at boot and offer it
 extern bool betas;      // UPDATES > BETAS: the beta channel too (pre-releases)
+extern int theme;       // OPTIONS > THEME: the bottom screen's colours (BottomUi's kThemes)
 
 void Load(); // before the engine starts
 void Save();

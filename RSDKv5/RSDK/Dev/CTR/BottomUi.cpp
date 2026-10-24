@@ -57,6 +57,76 @@ static void Text(const char *s, float x, float y, float scale, u32 color, u32 fl
         C2D_DrawText(&t, C2D_WithColor | flags, x, y, z, scale, scale, color);
 }
 
+// Bottom-screen colour themes (OPTIONS > THEME, Port::theme; values are saved: append only). MANIA (the default) mixes
+// the four colours of the game's menus, a different one for each tab and cell in turn (`multi`, kMania), over the navy
+// of the menus with their diagonal stripes; CLASSIC is the first look; the others are one colour of the game each:
+// Sonic's blue, Knuckles' red, Super Sonic's gold, Green Hill's green.
+struct Theme {
+    const char *name;
+    bool multi;
+    u32 bg, barLine, tabOnEdge, tabOnFill, tabOffEdge, tabOffFill, tabIcon;
+    u32 cellEdge, cellFill, cellLine, pressEdge, pressFill, boxEdge, boxFill, noteEdge, noteFill, popEdge, popFill;
+    u32 text, label, dim, footer, accent, clock, battery, loadBg;
+};
+static inline u32 Hex(u32 rgb) { return C2D_Color32(rgb >> 16, (rgb >> 8) & 0xFF, rgb & 0xFF, 255); }
+#define THEME(n, mu, a, b, c, d, e, f, g, h, i, j, k, l, m, o, p, q, r, s, t, u, v, w, x, y, z, aa)                                          \
+    { n, mu, Hex(a), Hex(b), Hex(c), Hex(d), Hex(e), Hex(f), Hex(g), Hex(h), Hex(i), Hex(j), Hex(k), Hex(l), Hex(m),                              \
+      Hex(o), Hex(p), Hex(q), Hex(r), Hex(s), Hex(t), Hex(u), Hex(v), Hex(w), Hex(x), Hex(y), Hex(z), Hex(aa) }
+static const Theme kThemes[] = {
+    //     name          multi  bg        barLine   tabOnE    tabOnF    tabOffE   tabOffF   tabIcon   cellE     cellF     cellLine  pressE
+    //                    pressF    boxE      boxF      noteE     noteF     popE      popF      text      label     dim       footer
+    //                    accent    clock     battery   loadBg
+    THEME("MANIA",       true,  0x0A1438, 0x2A6CF0, 0x2A6CF0, 0x1A3C8C, 0x2A3C78, 0x101C48, 0x9AAAD8, 0x2A6CF0, 0x12245C, 0x7AA8FF, 0xFFFFFF,
+                                0x3C78F0, 0xF8C820, 0x0E1A48, 0x2A6CF0, 0x070E28, 0xF8C820, 0x12245C, 0xF0F4FF, 0xC0CCF0, 0x9AAAD8, 0x7088C8,
+                                0xF8C820, 0xE0E8FF, 0x9AAAD8, 0x0A1438),
+    THEME("CLASSIC",     false,0x0E1218, 0x2C3440, 0x2D96F0, 0x124682, 0x32384B, 0x1A1E2A, 0x8C96AF, 0x325082, 0x182032, 0x5A82B4, 0xD2EBFF,
+                         0x5A96DC, 0x3A4268, 0x181C30, 0x284678, 0x0A0E18, 0x5A78AA, 0x18202E, 0xE6E8F0, 0xAAB2C8, 0x8C94AA, 0x5A7391,
+                         0xFFD700, 0xD2DCEB, 0x96A0B4, 0x0E101C),
+    THEME("SONIC",       false,0x0A1440, 0x2850B4, 0x3CA0FF, 0x1450B4, 0x28407C, 0x101E4C, 0x8CA0D2, 0x2E64D2, 0x10225C, 0x6EAAFF, 0xD2EBFF,
+                         0x468CF0, 0x2C50A8, 0x0E1C50, 0x2C50A8, 0x08102E, 0x6EAAFF, 0x10225C, 0xEBF0FF, 0xB4C3EB, 0x96AAD7, 0x6482C8,
+                         0xFFD700, 0xD2DCF5, 0x96AAD7, 0x0A1440),
+    THEME("KNUCKLES",    false,0x2C080C, 0x8C1E28, 0xF04646, 0xA0141E, 0x6E282D, 0x3C0E14, 0xD29696, 0xBE2D37, 0x4A0E16, 0xF06E6E, 0xFFDCDC,
+                         0xDC3C46, 0x962832, 0x3C0C12, 0x962832, 0x1E0608, 0xF06E6E, 0x4A0E16, 0xFAEBEB, 0xE6BEBE, 0xCD9696, 0xBE6E6E,
+                         0xFFD700, 0xF5DCDC, 0xCD9696, 0x2C080C),
+    THEME("SUPER SONIC", false,0x2A2004, 0xA08014, 0xFFDC3C, 0xB4880A, 0x786020, 0x3E2E08, 0xDCC88C, 0xDCAF1E, 0x4A3808, 0xFFE16E, 0xFFFAD2,
+                         0xEBBE28, 0xAA8214, 0x3C2C06, 0xAA8214, 0x1C1402, 0xFFE16E, 0x4A3808, 0xFFFAE6, 0xF0E1B4, 0xD7C38C, 0xC8AA5A,
+                         0xFFFFFF, 0xFFF5D2, 0xD7C38C, 0x2A2004),
+    THEME("GREEN HILL",  false,0x082A10, 0x1E8C32, 0x5ADC64, 0x1E8C32, 0x2D6437, 0x0E3216, 0x96C8A0, 0x3CAA46, 0x103C1A, 0x82E68C, 0xDCFFDC,
+                         0x46BE50, 0x328C3C, 0x0C3214, 0x328C3C, 0x06180A, 0x82E68C, 0x103C1A, 0xEBFAEB, 0xBEE6C3, 0x96C89B, 0x6EAA78,
+                         0xFFD700, 0xDCF5DC, 0x96C89B, 0x082A10),
+};
+#undef THEME
+enum { THEME_COUNT = sizeof(kThemes) / sizeof(kThemes[0]) };
+static const Theme &T() { return kThemes[Port::theme >= 0 && Port::theme < THEME_COUNT ? Port::theme : 0]; }
+
+// MANIA's four colours, in the order tabs and cells take them: blue, red, yellow, green.
+static const u32 kMania[4] = { 0x2A6CF0, 0xE8333C, 0xF8C820, 0x34B24A };
+static u32 Mix(u32 a, u32 b, float t) // 0xRRGGBB, t of the way from a to b
+{
+    u32 out = 0;
+    for (int sh = 0; sh <= 16; sh += 8)
+        out |= (u32)(((a >> sh) & 0xFF) * (1 - t) + ((b >> sh) & 0xFF) * t) << sh;
+    return out;
+}
+// Cell `i`'s colours: its own under MANIA, the theme's otherwise.
+static u32 CellEdge(int i) { return T().multi ? Hex(kMania[i & 3]) : T().cellEdge; }
+static u32 CellFill(int i) { return T().multi ? Hex(Mix(kMania[i & 3], 0x0A1438, 0.8f)) : T().cellFill; }
+static u32 CellLine(int i) { return T().multi ? Hex(Mix(kMania[i & 3], 0xFFFFFF, 0.4f)) : T().cellLine; }
+
+// MANIA's background: the diagonal stripes of the game's menus, a shade lighter than the navy.
+static void DrawBackdrop(float top)
+{
+    if (!T().multi)
+        return;
+    const u32 c = Hex(Mix(0x0A1438, 0x2A6CF0, 0.14f));
+    const float h = 240 - top;
+    for (float k = -h; k < 320; k += 44)
+    { // one band at 45 degrees, two triangles
+        C2D_DrawTriangle(k, 240, c, k + 20, 240, c, k + h, top, c, 0.05f);
+        C2D_DrawTriangle(k + 20, 240, c, k + h + 20, top, c, k + h, top, c, 0.05f);
+    }
+}
+
 static u64 sLastDraw;
 static int sPressed = -1;
 
@@ -342,15 +412,24 @@ static void DrawTabIcon(int tab, float cx, float cy, u32 col, float z)
 
 static void DrawTabBar()
 {
-    C2D_DrawRectSolid(0, 0, 0.7f, W, HEADER_H, Rgb(14, 18, 24));
-    C2D_DrawRectSolid(0, HEADER_H - 1, 0.71f, W, 1, Rgb(44, 52, 64));
+    C2D_DrawRectSolid(0, 0, 0.7f, W, HEADER_H, T().bg);
+    if (T().multi) // the four colours in a band under the tabs
+        for (int i = 0; i < 4; ++i)
+            C2D_DrawRectSolid(i * W / 4.0f, HEADER_H - 2, 0.71f, W / 4.0f, 2, Hex(kMania[i]));
+    else
+        C2D_DrawRectSolid(0, HEADER_H - 1, 0.71f, W, 1, T().barLine);
     for (int i = 0; i < TAB_SHOWN; ++i) {
         float x, y;
         TabRect(i, &x, &y);
         const bool on = kTabs[i] == Port::tab;
-        C2D_DrawRectSolid(x, y, 0.72f, TAB_W, TAB_H, on ? Rgb(45, 150, 240) : Rgb(50, 56, 75));
-        C2D_DrawRectSolid(x + 1, y + 1, 0.73f, TAB_W - 2, TAB_H - 2, on ? Rgb(18, 70, 130) : Rgb(26, 30, 42));
-        DrawTabIcon(kTabs[i], x + TAB_W / 2.0f, y + TAB_H / 2.0f, on ? Rgb(255, 255, 255) : Rgb(140, 150, 175), 0.74f);
+        u32 edge = on ? T().tabOnEdge : T().tabOffEdge, fill = on ? T().tabOnFill : T().tabOffFill;
+        if (T().multi) { // each tab its colour; the closed ones dimmed
+            edge = Hex(on ? kMania[i & 3] : Mix(kMania[i & 3], 0x0A1438, 0.55f));
+            fill = Hex(Mix(kMania[i & 3], 0x0A1438, on ? 0.45f : 0.85f));
+        }
+        C2D_DrawRectSolid(x, y, 0.72f, TAB_W, TAB_H, edge);
+        C2D_DrawRectSolid(x + 1, y + 1, 0.73f, TAB_W - 2, TAB_H - 2, fill);
+        DrawTabIcon(kTabs[i], x + TAB_W / 2.0f, y + TAB_H / 2.0f, on ? Rgb(255, 255, 255) : T().tabIcon, 0.74f);
     }
 
     // Battery, then the clock, at the right end
@@ -358,16 +437,16 @@ static void DrawTabBar()
     PTMU_GetBatteryLevel(&level);
     PTMU_GetBatteryChargeState(&charging);
     const float bx = W - 22, by = 9;
-    C2D_DrawRectSolid(bx, by, 0.72f, 15, 8, Rgb(150, 160, 180));
-    C2D_DrawRectSolid(bx + 15, by + 2, 0.72f, 2, 4, Rgb(150, 160, 180));
-    C2D_DrawRectSolid(bx + 1, by + 1, 0.73f, 13, 6, Rgb(14, 18, 24));
+    C2D_DrawRectSolid(bx, by, 0.72f, 15, 8, T().battery);
+    C2D_DrawRectSolid(bx + 15, by + 2, 0.72f, 2, 4, T().battery);
+    C2D_DrawRectSolid(bx + 1, by + 1, 0.73f, 13, 6, T().bg);
     const u32 fill = charging ? Rgb(100, 220, 255) : level <= 1 ? Rgb(240, 100, 100) : level == 2 ? Rgb(240, 200, 80) : Rgb(110, 220, 130);
     C2D_DrawRectSolid(bx + 2, by + 2, 0.74f, 11.0f * (level > 5 ? 5 : level) / 5, 4, fill);
     char clock[8];
     const time_t now = time(NULL);
     const struct tm *tm = gmtime(&now); // the 3DS clock is local time already
     snprintf(clock, sizeof(clock), "%02d:%02d", tm ? tm->tm_hour : 0, tm ? tm->tm_min : 0);
-    Text(clock, bx - 6, 6, 0.5f, Rgb(210, 220, 235), C2D_AlignRight, 0.75f);
+    Text(clock, bx - 6, 6, 0.5f, T().clock, C2D_AlignRight, 0.75f);
 }
 
 // ---------------------------------------------------------------- GAME tab
@@ -384,11 +463,11 @@ static const char *CharName(int id)
     }
 }
 
-static void StatBox(float x, float y, float w, float h, const char *label, const char *value, u32 valueCol)
+static void StatBox(int i, float x, float y, float w, float h, const char *label, const char *value, u32 valueCol)
 {
-    C2D_DrawRectSolid(x, y, 0.3f, w, h, Rgb(58, 66, 104));
-    C2D_DrawRectSolid(x + 1, y + 1, 0.31f, w - 2, h - 2, Rgb(24, 28, 48));
-    Text(Tr(label), x + 7, y + 4, 0.42f, Rgb(140, 148, 170), 0, 0.32f);
+    C2D_DrawRectSolid(x, y, 0.3f, w, h, T().multi ? CellEdge(i) : T().boxEdge);
+    C2D_DrawRectSolid(x + 1, y + 1, 0.31f, w - 2, h - 2, T().multi ? CellFill(i) : T().boxFill);
+    Text(Tr(label), x + 7, y + 4, 0.42f, T().dim, 0, 0.32f);
     Text(value, x + w - 8, y + 15, 0.85f, valueCol, C2D_AlignRight, 0.32f);
 }
 
@@ -404,9 +483,9 @@ static void DrawGameTab()
     snprintf(line, sizeof(line), "%s", scene);
     for (char *c = line; *c; ++c)
         *c = (char)toupper((unsigned char)*c);
-    Text(line, 10, y, 0.62f, Rgb(255, 215, 0));
+    Text(line, 10, y, 0.62f, T().accent);
     static const char *const kModes[] = { "MANIA MODE", "ENCORE MODE", "TIME ATTACK", "COMPETITION" };
-    Text(gi.gameMode >= 0 && gi.gameMode < 4 ? Tr(kModes[gi.gameMode]) : "", W - 10, y + 3, 0.45f, Rgb(140, 148, 170), C2D_AlignRight);
+    Text(gi.gameMode >= 0 && gi.gameMode < 4 ? Tr(kModes[gi.gameMode]) : "", W - 10, y + 3, 0.45f, T().dim, C2D_AlignRight);
     y += 20;
 
     // Who
@@ -420,31 +499,31 @@ static void DrawGameTab()
         snprintf(line, sizeof(line), "%s %d", Tr("SAVE"), gi.saveSlot + 1);
     else
         snprintf(line, sizeof(line), "%s", Tr("NO SAVE"));
-    Text(line, W - 10, y + 1, 0.45f, Rgb(140, 148, 170), C2D_AlignRight);
+    Text(line, W - 10, y + 1, 0.45f, T().dim, C2D_AlignRight);
     y += 20;
 
     // Time, rings, score, lives
     const float bw = (W - 24) / 2.0f, bh = 40;
     const bool inStage = gi.playerValid;
     snprintf(line, sizeof(line), "%d'%02d\"%02d", sceneInfo.minutes, sceneInfo.seconds, sceneInfo.milliseconds);
-    StatBox(8, y, bw, bh, "TIME", inStage ? line : "-", Rgb(230, 232, 240));
+    StatBox(0, 8, y, bw, bh, "TIME", inStage ? line : "-", T().text);
     snprintf(line, sizeof(line), "%d", gi.rings);
-    StatBox(16 + bw, y, bw, bh, "RINGS", inStage ? line : "-", inStage && !gi.rings ? Rgb(240, 100, 100) : Rgb(255, 215, 0));
+    StatBox(2, 16 + bw, y, bw, bh, "RINGS", inStage ? line : "-", inStage && !gi.rings ? Rgb(240, 100, 100) : Rgb(255, 215, 0));
     y += bh + 6;
     snprintf(line, sizeof(line), "%d", gi.score);
-    StatBox(8, y, bw, bh, "SCORE", inStage ? line : "-", Rgb(230, 232, 240));
+    StatBox(1, 8, y, bw, bh, "SCORE", inStage ? line : "-", T().text);
     snprintf(line, sizeof(line), "%d", gi.lives);
-    StatBox(16 + bw, y, bw, bh, "LIVES", inStage ? line : "-", Rgb(110, 220, 130));
+    StatBox(3, 16 + bw, y, bw, bh, "LIVES", inStage ? line : "-", Rgb(110, 220, 130));
     y += bh + 8;
 
     // Chaos emeralds of the save, in the game's order
-    Text(Tr("EMERALDS"), 10, y + 3, 0.42f, Rgb(140, 148, 170));
+    Text(Tr("EMERALDS"), 10, y + 3, 0.42f, T().dim);
     static const u32 kEmerald[7] = { Rgb(60, 200, 90),  Rgb(240, 210, 60), Rgb(70, 120, 240), Rgb(170, 90, 220),
                                      Rgb(190, 195, 205), Rgb(80, 220, 230), Rgb(235, 70, 70) };
     for (int i = 0; i < 7; ++i) {
         const float ex = 90 + i * 22, ey = y + 8;
         const bool got = gi.emeralds > 0 && (gi.emeralds & (1 << i));
-        const u32 col = got ? kEmerald[i] : Rgb(50, 56, 75);
+        const u32 col = got ? kEmerald[i] : T().tabOffEdge;
         C2D_DrawTriangle(ex, ey - 7, col, ex - 7, ey, col, ex + 7, ey, col, 0.3f);
         C2D_DrawTriangle(ex - 7, ey, col, ex + 7, ey, col, ex, ey + 7, col, 0.3f);
     }
@@ -459,12 +538,15 @@ static void DrawGameTab()
 
     // Footer: frame rate and renderer
     snprintf(line, sizeof(line), "%.0f FPS  %s", Port::Fps(), Port::GpuMode() ? "GPU" : "CPU");
-    Text(line, W / 2.0f, H - 16, 0.42f, Rgb(90, 115, 145), C2D_AlignCenter);
+    Text(line, W / 2.0f, H - 16, 0.42f, T().footer, C2D_AlignCenter);
 }
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_RENDERER, OPT_LANGUAGE, OPT_COUNT };
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_RENDERER, OPT_LANGUAGE, OPT_THEME, OPT_COUNT };
+// THEME opens a list over the page (the dropdown); its rows are hits OPT_LIST + i, a touch elsewhere OPT_LIST_OUT.
+enum { OPT_LIST = 100, OPT_LIST_OUT = 99, LIST_ROW_H = 22 };
+static bool sThemeOpen;
 
 static void OptRect(int i, float *x, float *y)
 {
@@ -474,7 +556,7 @@ static void OptRect(int i, float *x, float *y)
 
 static void OptValue(int i, char *o, unsigned cap, u32 *col)
 {
-    const u32 good = Rgb(110, 220, 130), dim = Rgb(140, 148, 170), warn = Rgb(240, 200, 80);
+    const u32 good = Rgb(110, 220, 130), dim = T().dim, warn = Rgb(240, 200, 80);
     switch (i) {
         case OPT_FRAMES:
             snprintf(o, cap, "%s", Tr(Port::lock30 ? "LOCK 30" : Port::frameSkip ? "AUTO" : "NO SKIP"));
@@ -494,7 +576,11 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
         }
         case OPT_LANGUAGE: // the game's (read only: the game's options menu changes it)
             snprintf(o, cap, "%s", Port::LanguageName());
-            *col = Rgb(230, 232, 240);
+            *col = T().text;
+            break;
+        case OPT_THEME:
+            snprintf(o, cap, "%s", Tr(T().name));
+            *col = T().accent;
             break;
         default:
             snprintf(o, cap, "%s", Port::GpuMode() ? "GPU" : "CPU");
@@ -503,18 +589,71 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "RENDERER", "LANGUAGE" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "RENDERER", "LANGUAGE", "THEME" };
 static const char *const kOptHelp[OPT_COUNT] = {
     "AUTO SKIPS A LATE PICTURE, LOCK 30 DRAWS EVERY OTHER ONE, NO SKIP SLOWS DOWN",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
     "AUTO HIDES THE GAME'S HUD WHILE THE GAME TAB SHOWS IT",
     "GPU DRAWS WHAT IT CAN (FASTER), CPU IS THE ORIGINAL SOFTWARE RENDERER",
     "FOLLOWS THE GAME'S LANGUAGE: CHANGE IT IN THE GAME'S OPTIONS",
+    "THE COLOURS OF THIS SCREEN",
 };
 static int sLastOpt = -1;
 
+// The dropdown's box: over the THEME cell, moved up when it would run off the screen.
+static void ThemeListRect(float *x, float *y, float *w, float *h)
+{
+    OptRect(OPT_THEME, x, y);
+    *w = 150;
+    *h = THEME_COUNT * LIST_ROW_H + 4;
+    if (*y + *h > H - 4)
+        *y = H - 4 - *h;
+}
+
+static int ThemeListHit(int px, int py)
+{
+    float x, y, w, h;
+    ThemeListRect(&x, &y, &w, &h);
+    if (px < x || px >= x + w || py < y + 2 || py >= y + h - 2)
+        return OPT_LIST_OUT;
+    return OPT_LIST + (int)((py - y - 2) / LIST_ROW_H);
+}
+
+static void DrawThemeList()
+{
+    float x, y, w, h;
+    ThemeListRect(&x, &y, &w, &h);
+    C2D_DrawRectSolid(0, HEADER_H, 0.6f, W, H - HEADER_H, C2D_Color32(0, 0, 0, 120));
+    C2D_DrawRectSolid(x - 1, y - 1, 0.61f, w + 2, h + 2, T().popEdge);
+    C2D_DrawRectSolid(x, y, 0.62f, w, h, T().popFill);
+    for (int i = 0; i < THEME_COUNT; ++i) {
+        const Theme &t = kThemes[i];
+        const float ry = y + 2 + i * LIST_ROW_H;
+        const bool current = i == Port::theme, pressed = sPressed == OPT_LIST + i;
+        if (pressed || current)
+            C2D_DrawRectSolid(x + 2, ry, 0.63f, w - 4, LIST_ROW_H, pressed ? T().pressFill : T().cellFill);
+        // The theme's own colours: its tab, its cells, its titles
+        if (t.multi) // its four colours
+            for (int k = 0; k < 4; ++k)
+                C2D_DrawRectSolid(x + 6 + (k & 1) * 7, ry + 4 + (k >> 1) * 7, 0.64f, 7, 7, Hex(kMania[k]));
+        else {
+            C2D_DrawRectSolid(x + 6, ry + 4, 0.64f, 14, 14, t.tabOnEdge);
+            C2D_DrawRectSolid(x + 8, ry + 6, 0.65f, 10, 10, t.cellFill);
+            C2D_DrawRectSolid(x + 10, ry + 8, 0.66f, 6, 6, t.accent);
+        }
+        Text(Tr(t.name), x + 27, ry + 4, 0.48f, current ? T().accent : T().text, 0, 0.67f);
+    }
+}
+
 static void TapOption(int i)
 {
+    if (sThemeOpen) { // a row picks its theme; any touch closes the list
+        if (i >= OPT_LIST && i < OPT_LIST + THEME_COUNT)
+            Port::theme = i - OPT_LIST;
+        sThemeOpen = false;
+        sLastOpt   = OPT_THEME;
+        return;
+    }
     switch (i) {
         case OPT_FRAMES: // AUTO -> LOCK 30 -> NO SKIP -> AUTO
             if (Port::lock30)
@@ -527,6 +666,7 @@ static void TapOption(int i)
         case OPT_FPS: Port::fps = (Port::fps + 1) % 5; break;
         case OPT_HUD: Port::hud = (Port::hud + 1) % 3; break;
         case OPT_LANGUAGE: break; // only its help
+        case OPT_THEME: sThemeOpen = true; break;
         default: Port::SetGpuMode(!Port::GpuMode()); break;
     }
     sLastOpt = i;
@@ -539,17 +679,19 @@ static void DrawOptionsTab()
         float x, y;
         OptRect(i, &x, &y);
         const bool pressed = i == sPressed;
-        C2D_DrawRectSolid(x, y, 0.3f, 150, 32, pressed ? Rgb(210, 235, 255) : Rgb(50, 80, 130));
-        C2D_DrawRectSolid(x + 1, y + 1, 0.31f, 148, 30, pressed ? Rgb(90, 150, 220) : Rgb(24, 32, 50));
-        C2D_DrawRectSolid(x + 1, y + 1, 0.32f, 148, 1, Rgb(90, 130, 180));
+        // MANIA: the colours run along the rows and shift by one each row, so no two neighbours match
+        const int tint = i + i / 2;
+        C2D_DrawRectSolid(x, y, 0.3f, 150, 32, pressed ? T().pressEdge : CellEdge(tint));
+        C2D_DrawRectSolid(x + 1, y + 1, 0.31f, 148, 30, pressed ? T().pressFill : CellFill(tint));
+        C2D_DrawRectSolid(x + 1, y + 1, 0.32f, 148, 1, CellLine(tint));
         u32 col;
         OptValue(i, val, sizeof(val), &col);
-        Text(Tr(kOptName[i]), x + 7, y + 3, 0.42f, Rgb(230, 232, 240), 0, 0.33f);
+        Text(Tr(kOptName[i]), x + 7, y + 3, 0.42f, T().text, 0, 0.33f);
         if (i == OPT_FPS && Port::fps) {
             // A little top screen with the counter's corner filled in, as sm-3ds shows it
             const float sx = x + 7, sy = y + 15, sw = 26, sh = 14;
-            C2D_DrawRectSolid(sx, sy, 0.33f, sw, sh, Rgb(140, 148, 170));
-            C2D_DrawRectSolid(sx + 1, sy + 1, 0.34f, sw - 2, sh - 2, Rgb(14, 16, 28));
+            C2D_DrawRectSolid(sx, sy, 0.33f, sw, sh, T().dim);
+            C2D_DrawRectSolid(sx + 1, sy + 1, 0.34f, sw - 2, sh - 2, T().loadBg);
             const int corner = Port::fps - 1;
             C2D_DrawRectSolid((corner & 1) ? sx + sw - 10 : sx + 2, (corner & 2) ? sy + sh - 6 : sy + 2, 0.35f, 8, 4, col);
             Text(val, sx + sw + 6, y + 15, 0.5f, col, 0, 0.33f);
@@ -560,8 +702,10 @@ static void DrawOptionsTab()
     // What the last option touched does
     if (sLastOpt >= 0)
         Text(Tr(kOptHelp[sLastOpt]), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * 38 + 6, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
-    Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, Rgb(90, 115, 145), C2D_AlignCenter);
-    Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, Rgb(90, 115, 145), C2D_AlignCenter);
+    Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, T().footer, C2D_AlignCenter);
+    Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, T().footer, C2D_AlignCenter);
+    if (sThemeOpen)
+        DrawThemeList();
 }
 
 // ---------------------------------------------------------------- UPDATES tab, the update prompt
@@ -605,8 +749,8 @@ static unsigned NotePages() { return sNoteCount ? (sNoteCount + NOTE_ROWS - 1) /
 
 static void Button(float x, float y, float w, float h, const char *label, bool pressed, u32 edge, u32 textCol, float z)
 {
-    C2D_DrawRectSolid(x, y, z, w, h, pressed ? Rgb(210, 235, 255) : edge);
-    C2D_DrawRectSolid(x + 1, y + 1, z + 0.01f, w - 2, h - 2, pressed ? Rgb(90, 150, 220) : Rgb(24, 32, 50));
+    C2D_DrawRectSolid(x, y, z, w, h, pressed ? T().pressEdge : edge);
+    C2D_DrawRectSolid(x + 1, y + 1, z + 0.01f, w - 2, h - 2, pressed ? T().pressFill : T().cellFill);
     Text(Tr(label), x + w / 2, y + h / 2 - 7, 0.5f, textCol, C2D_AlignCenter, z + 0.02f);
 }
 
@@ -622,16 +766,16 @@ static void DrawNotes(const UpdateStatus &st, float x, float y, float w, float b
     char head[80], ver[48];
     UpperCopy(ver, sizeof(ver), st.version);
     snprintf(head, sizeof(head), "%s %s   %u/%u", Tr("WHAT'S NEW"), ver, sNotePage + 1, pages);
-    Text(head, x + w / 2, y, 0.45f, Rgb(255, 215, 0), C2D_AlignCenter, z);
-    C2D_DrawRectSolid(x, y + 16, z, w, by - y - 20, Rgb(40, 70, 120));
-    C2D_DrawRectSolid(x + 1, y + 17, z + 0.01f, w - 2, by - y - 22, Rgb(10, 14, 24));
+    Text(head, x + w / 2, y, 0.45f, T().accent, C2D_AlignCenter, z);
+    C2D_DrawRectSolid(x, y + 16, z, w, by - y - 20, T().noteEdge);
+    C2D_DrawRectSolid(x + 1, y + 17, z + 0.01f, w - 2, by - y - 22, T().noteFill);
     for (unsigned i = sNotePage * NOTE_ROWS; i < sNoteCount && i < (sNotePage + 1) * NOTE_ROWS; ++i)
         Text(sNotes[i], x + 5, y + 19 + (i - sNotePage * NOTE_ROWS) * 11, 0.38f, Rgb(220, 224, 235), 0, z + 0.02f);
     const float bw = (w - 8) / 3;
-    Button(x, by, bw, 24, "PREV", sPressed == prev, Rgb(50, 80, 130), sNotePage ? Rgb(230, 232, 240) : Rgb(90, 100, 115), z);
-    Button(x + bw + 4, by, bw, 24, "CLOSE", sPressed == prev + 1, Rgb(50, 80, 130), Rgb(230, 232, 240), z);
-    Button(x + 2 * (bw + 4), by, bw, 24, "NEXT", sPressed == prev + 2, Rgb(50, 80, 130),
-           sNotePage + 1 < pages ? Rgb(230, 232, 240) : Rgb(90, 100, 115), z);
+    Button(x, by, bw, 24, "PREV", sPressed == prev, T().cellEdge, sNotePage ? T().text : Rgb(90, 100, 115), z);
+    Button(x + bw + 4, by, bw, 24, "CLOSE", sPressed == prev + 1, T().cellEdge, T().text, z);
+    Button(x + 2 * (bw + 4), by, bw, 24, "NEXT", sPressed == prev + 2, T().cellEdge,
+           sNotePage + 1 < pages ? T().text : Rgb(90, 100, 115), z);
 }
 
 static int NotesHit(int px, int py, float x, float w, float by, int prev)
@@ -684,15 +828,15 @@ static void DrawUpdatesTab()
         return;
     }
     char val[48];
-    const u32 good = Rgb(110, 220, 130), dim = Rgb(140, 148, 170), warn = Rgb(240, 200, 80), bad = Rgb(240, 100, 100);
+    const u32 good = Rgb(110, 220, 130), dim = T().dim, warn = Rgb(240, 200, 80), bad = Rgb(240, 100, 100);
     static const char *const kName[3] = { "CHANNEL", "AUTO UPDATE", "RELEASE" };
     for (int i = 0; i < 3; ++i) {
         float x, w;
         UCellRect(i, &x, &w);
         const bool pressed = i == sPressed;
-        C2D_DrawRectSolid(x, UCELL_Y, 0.3f, w, UCELL_H, pressed ? Rgb(210, 235, 255) : Rgb(50, 80, 130));
-        C2D_DrawRectSolid(x + 1, UCELL_Y + 1, 0.31f, w - 2, UCELL_H - 2, pressed ? Rgb(90, 150, 220) : Rgb(24, 32, 50));
-        u32 col = Rgb(230, 232, 240);
+        C2D_DrawRectSolid(x, UCELL_Y, 0.3f, w, UCELL_H, pressed ? T().pressEdge : CellEdge(i));
+        C2D_DrawRectSolid(x + 1, UCELL_Y + 1, 0.31f, w - 2, UCELL_H - 2, pressed ? T().pressFill : CellFill(i));
+        u32 col = T().text;
         if (i == 0)
             snprintf(val, sizeof(val), "%s", Tr(Port::betas ? "+ BETAS" : "STABLE"));
         else if (i == 1)
@@ -701,20 +845,20 @@ static void DrawUpdatesTab()
             UpperCopy(val, sizeof(val), st.version);
         else
             snprintf(val, sizeof(val), "%s", Tr("NONE")), col = dim;
-        Text(Tr(kName[i]), x + 6, UCELL_Y + 3, 0.4f, Rgb(170, 178, 200), 0, 0.33f);
+        Text(Tr(kName[i]), x + 6, UCELL_Y + 3, 0.4f, T().label, 0, 0.33f);
         Text(val, x + 6, UCELL_Y + 15, 0.45f, col, 0, 0.33f);
     }
 
     // Status: what the updater says (or the question before an install), with what is installed.
-    C2D_DrawRectSolid(8, USTATUS_Y, 0.3f, W - 16, USTATUS_H, Rgb(58, 66, 104));
-    C2D_DrawRectSolid(9, USTATUS_Y + 1, 0.31f, W - 18, USTATUS_H - 2, Rgb(24, 28, 48));
+    C2D_DrawRectSolid(8, USTATUS_Y, 0.3f, W - 16, USTATUS_H, T().boxEdge);
+    C2D_DrawRectSolid(9, USTATUS_Y + 1, 0.31f, W - 18, USTATUS_H - 2, T().boxFill);
     Text(Tr("STATUS"), 14, USTATUS_Y + 4, 0.4f, dim, 0, 0.32f);
     char msg[96];
     snprintf(msg, sizeof(msg), "%s V%s", Tr("INSTALLED"), PORT_VERSION_LABEL);
     Text(msg, W - 14, USTATUS_Y + 4, 0.38f, dim, C2D_AlignRight, 0.32f);
     UpperCopy(msg, sizeof(msg), sUpdConfirm ? "DOWNLOAD AND INSTALL THIS VERSION?" : st.message[0] ? st.message : "CHECK LOOKS FOR A NEW VERSION");
     const u32 col = st.state == UPDATE_ERROR ? bad : (st.state == UPDATE_AVAILABLE || sUpdConfirm) ? warn
-                    : (st.state == UPDATE_DONE || st.state == UPDATE_CURRENT) ? good : Rgb(230, 232, 240);
+                    : (st.state == UPDATE_DONE || st.state == UPDATE_CURRENT) ? good : T().text;
     Text(Tr(msg), 14, USTATUS_Y + 20, 0.5f, col, C2D_WordWrap, 0.32f, W - 28);
     const bool working = st.state == UPDATE_DOWNLOADING || st.state == UPDATE_VERIFYING || st.state == UPDATE_INSTALLING;
     if (working) {
@@ -723,9 +867,9 @@ static void DrawUpdatesTab()
         C2D_DrawRectSolid(bx, by, 0.34f, bw * (st.progress > 100 ? 100 : st.progress) / 100.0f, 8, Rgb(60, 160, 100));
     }
     const char *hint = sUpdConfirm ? "UNSAVED PROGRESS IS LOST" : sUpdHint ? sUpdHint : st.version[0] ? "TAP RELEASE FOR WHAT'S NEW" : "";
-    Text(Tr(hint), W / 2.0f, USTATUS_Y + USTATUS_H + 8, 0.4f, sUpdConfirm ? warn : Rgb(90, 115, 145), C2D_AlignCenter, 0.32f);
+    Text(Tr(hint), W / 2.0f, USTATUS_Y + USTATUS_H + 8, 0.4f, sUpdConfirm ? warn : T().footer, C2D_AlignCenter, 0.32f);
 
-    Button(8, UACTION_Y, W - 16, 26, UpdateAction(st), sPressed == UHIT_ACTION, sUpdConfirm ? warn : Rgb(50, 80, 130), Rgb(230, 232, 240), 0.3f);
+    Button(8, UACTION_Y, W - 16, 26, UpdateAction(st), sPressed == UHIT_ACTION, sUpdConfirm ? warn : T().cellEdge, T().text, 0.3f);
 }
 
 static int UpdatesHit(int px, int py, bool down)
@@ -821,10 +965,10 @@ static void DrawUpdatePrompt()
     sDrawnRevision = st.revision;
     const float z = 0.85f;
     C2D_DrawRectSolid(0, 0, 0.8f, W, H, C2D_Color32(0, 0, 0, 170));
-    C2D_DrawRectSolid(PBOX_X - 2, PBOX_Y - 2, 0.82f, PBOX_W + 4, PBOX_H + 4, Rgb(90, 120, 170));
-    C2D_DrawRectSolid(PBOX_X, PBOX_Y, 0.84f, PBOX_W, PBOX_H, Rgb(24, 32, 46));
+    C2D_DrawRectSolid(PBOX_X - 2, PBOX_Y - 2, 0.82f, PBOX_W + 4, PBOX_H + 4, T().popEdge);
+    C2D_DrawRectSolid(PBOX_X, PBOX_Y, 0.84f, PBOX_W, PBOX_H, T().popFill);
     const float cx = W / 2.0f, x = PBOX_X + 8, w = PBOX_W - 16, by = kPromptBy;
-    const u32 text = Rgb(230, 232, 240), dim = Rgb(140, 148, 170), warn = Rgb(240, 200, 80);
+    const u32 text = T().text, dim = T().dim, warn = Rgb(240, 200, 80);
     char line[96], ver[48];
     UpperCopy(ver, sizeof(ver), st.version);
     if (prompt == UPDATE_PROMPT_ASK && sPromptNotes) {
@@ -832,16 +976,16 @@ static void DrawUpdatePrompt()
         return;
     }
     if (prompt == UPDATE_PROMPT_ASK) {
-        Text(Tr("UPDATE AVAILABLE"), cx, PBOX_Y + 8, 0.6f, Rgb(255, 215, 0), C2D_AlignCenter, 0.95f);
+        Text(Tr("UPDATE AVAILABLE"), cx, PBOX_Y + 8, 0.6f, T().accent, C2D_AlignCenter, 0.95f);
         snprintf(line, sizeof(line), "%s: %s", Tr("NEW VERSION"), ver);
         Text(line, cx, PBOX_Y + 34, 0.5f, text, C2D_AlignCenter, 0.95f);
         Text(Tr("INSTALL IT NOW?"), cx, PBOX_Y + 52, 0.5f, text, C2D_AlignCenter, 0.95f);
         Text(Tr("UNSAVED PROGRESS IS LOST"), cx, PBOX_Y + 70, 0.42f, warn, C2D_AlignCenter, 0.95f);
         snprintf(line, sizeof(line), "(%s: %s)", Tr("UPDATES TAB"), Tr("AUTO UPDATE"));
         Text(line, cx, PBOX_Y + 86, 0.4f, dim, C2D_AlignCenter, 0.95f);
-        Button(cx - 75, PBOX_Y + 108, 150, 24, "WHAT'S NEW", sPressed == PHIT_NEWS, Rgb(50, 80, 130), Rgb(100, 220, 255), 0.9f);
+        Button(cx - 75, PBOX_Y + 108, 150, 24, "WHAT'S NEW", sPressed == PHIT_NEWS, T().cellEdge, Rgb(100, 220, 255), 0.9f);
         const float bw = (w - 8) / 2;
-        Button(x, by, bw, 24, "LATER", sPressed == PHIT_LATER, Rgb(50, 80, 130), text, 0.9f);
+        Button(x, by, bw, 24, "LATER", sPressed == PHIT_LATER, T().cellEdge, text, 0.9f);
         Button(x + bw + 8, by, bw, 24, "INSTALL", sPressed == PHIT_INSTALL, warn, text, 0.9f);
         return;
     }
@@ -850,7 +994,7 @@ static void DrawUpdatePrompt()
         UpperCopy(line, sizeof(line), st.message);
         Text(Tr(line), cx, PBOX_Y + 44, 0.5f, text, C2D_AlignCenter, 0.95f);
         Text(Tr("THE GAME KEEPS RUNNING AS IT WAS."), cx, PBOX_Y + 66, 0.42f, dim, C2D_AlignCenter, 0.95f);
-        Button(cx - 60, by, 120, 24, "OK", sPressed == PHIT_LATER, Rgb(50, 80, 130), text, 0.9f);
+        Button(cx - 60, by, 120, 24, "OK", sPressed == PHIT_LATER, T().cellEdge, text, 0.9f);
         return;
     }
     // WORKING / RESTART: one bar for the download and the install, then the 10 s before the game starts again.
@@ -867,14 +1011,14 @@ static void DrawUpdatePrompt()
         UpperCopy(msg, sizeof(msg), st.message);
         Text(Tr(msg), cx, PBOX_Y + 40, 0.5f, text, C2D_AlignCenter, 0.95f);
     }
-    Text(Tr("UPDATING"), cx, PBOX_Y + 8, 0.6f, Rgb(255, 215, 0), C2D_AlignCenter, 0.95f);
+    Text(Tr("UPDATING"), cx, PBOX_Y + 8, 0.6f, T().accent, C2D_AlignCenter, 0.95f);
     const float px = x + 6, py = PBOX_Y + 66, pw = w - 12, ph = 18;
     C2D_DrawRectSolid(px, py, 0.86f, pw, ph, Rgb(44, 54, 70));
     C2D_DrawRectSolid(px, py, 0.87f, pw * fill, ph, prompt == UPDATE_PROMPT_RESTART ? Rgb(235, 140, 50) : Rgb(60, 160, 100));
     Text(line, cx, py + 2, 0.5f, Rgb(255, 255, 255), C2D_AlignCenter, 0.95f);
     Text(Tr("DO NOT TURN THE CONSOLE OFF."), cx, PBOX_Y + 96, 0.42f, warn, C2D_AlignCenter, 0.95f);
     const bool canCancel = prompt == UPDATE_PROMPT_WORKING && st.state == UPDATE_DOWNLOADING;
-    Button(cx - 70, by, 140, 24, canCancel ? "CANCEL" : "PLEASE WAIT", canCancel && sPressed == PHIT_LATER, Rgb(50, 80, 130),
+    Button(cx - 70, by, 140, 24, canCancel ? "CANCEL" : "PLEASE WAIT", canCancel && sPressed == PHIT_LATER, T().cellEdge,
            canCancel ? text : dim, 0.9f);
 }
 
@@ -936,8 +1080,8 @@ static void DrawDebugTab()
     }
 
     // Button panel, over what scrolled under it
-    C2D_DrawRectSolid(0, BTN_TOP - BTN_GAP / 2, 0.7f, W, H - BTN_TOP + BTN_GAP / 2, Rgb(14, 18, 24));
-    C2D_DrawRectSolid(0, BTN_TOP - BTN_GAP / 2, 0.71f, W, 1, Rgb(44, 52, 64));
+    C2D_DrawRectSolid(0, BTN_TOP - BTN_GAP / 2, 0.7f, W, H - BTN_TOP + BTN_GAP / 2, T().bg);
+    C2D_DrawRectSolid(0, BTN_TOP - BTN_GAP / 2, 0.71f, W, 1, T().barLine);
     for (int i = 0; i < BTN_COUNT; ++i) {
         float bx, by;
         ButtonRect(i, &bx, &by);
@@ -966,8 +1110,9 @@ static void Draw()
     C2D_Prepare();
     // The top-screen presentation turns blending off and the state is sticky: citro2d's glyph alpha needs it.
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
-    C2D_TargetClear(sTarget, Rgb(14, 18, 24));
+    C2D_TargetClear(sTarget, T().bg);
     C2D_SceneBegin(sTarget);
+    DrawBackdrop(HEADER_H);
 
     switch (Port::tab) {
         case TAB_OPTIONS: DrawOptionsTab(); break;
@@ -991,8 +1136,8 @@ static void Draw()
     if (phase) {
         C2D_DrawRectSolid(0, 0, 0.8f, W, H, C2D_Color32(0, 0, 0, 170));
         const float bx = 30, by = 80, bw = W - 60, bh = 84;
-        C2D_DrawRectSolid(bx - 2, by - 2, 0.82f, bw + 4, bh + 4, Rgb(90, 120, 170));
-        C2D_DrawRectSolid(bx, by, 0.84f, bw, bh, Rgb(24, 32, 46));
+        C2D_DrawRectSolid(bx - 2, by - 2, 0.82f, bw + 4, bh + 4, T().popEdge);
+        C2D_DrawRectSolid(bx, by, 0.84f, bw, bh, T().popFill);
         Text(title, W / 2.0f, by + 8, 0.6f, Rgb(255, 255, 255), C2D_AlignCenter, 0.95f); // above the dimmer and the box
         const float px = bx + 14, py = by + 44, pw = bw - 28, ph = 24;
         C2D_DrawRectSolid(px, py, 0.86f, pw, ph, Rgb(44, 54, 70));
@@ -1105,15 +1250,16 @@ static void DrawLoading()
     C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
     C3D_AlphaTest(false, GPU_ALWAYS, 0);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
-    C2D_TargetClear(sTarget, Rgb(14, 16, 28));
+    C2D_TargetClear(sTarget, T().loadBg);
     C2D_SceneBegin(sTarget);
+    DrawBackdrop(0);
 
     const float bx = 20, by = 62, bw = W - 40, bh = 116;
-    C2D_DrawRectSolid(bx - 1, by - 1, 0.3f, bw + 2, bh + 2, Rgb(40, 70, 120));
-    C2D_DrawRectSolid(bx, by, 0.31f, bw, bh, Rgb(10, 14, 24));
-    Text(Tr(sLoad.title), W / 2.0f, by + 10, 0.55f, Rgb(255, 215, 0), C2D_AlignCenter, 0.4f);
-    Text(Tr(sLoad.step), W / 2.0f, by + 34, 0.5f, Rgb(230, 232, 240), C2D_AlignCenter, 0.4f);
-    Text(sLoad.file, W / 2.0f, by + 52, 0.4f, Rgb(140, 148, 170), C2D_AlignCenter, 0.4f);
+    C2D_DrawRectSolid(bx - 1, by - 1, 0.3f, bw + 2, bh + 2, T().noteEdge);
+    C2D_DrawRectSolid(bx, by, 0.31f, bw, bh, T().noteFill);
+    Text(Tr(sLoad.title), W / 2.0f, by + 10, 0.55f, T().accent, C2D_AlignCenter, 0.4f);
+    Text(Tr(sLoad.step), W / 2.0f, by + 34, 0.5f, T().text, C2D_AlignCenter, 0.4f);
+    Text(sLoad.file, W / 2.0f, by + 52, 0.4f, T().dim, C2D_AlignCenter, 0.4f);
     const float px = bx + 14, py = by + 72, pw = bw - 28, ph = 16;
     C2D_DrawRectSolid(px, py, 0.35f, pw, ph, Rgb(44, 54, 70));
     const float f = sLoad.progress < 0 ? 0 : sLoad.progress > 1 ? 1 : sLoad.progress;
@@ -1122,8 +1268,8 @@ static void DrawLoading()
     Text(line, W / 2.0f, py + 1, 0.45f, Rgb(255, 255, 255), C2D_AlignCenter, 0.4f);
     const float secs = (float)(svcGetSystemTick() - sLoad.start) / SYSCLOCK_ARM11;
     snprintf(line, sizeof(line), "%.1f S", secs);
-    Text(line, bx + bw - 8, by + bh - 14, 0.38f, Rgb(90, 115, 145), C2D_AlignRight, 0.4f);
-    Text("SONIC MANIA 3DS", W / 2.0f, H - 18, 0.42f, Rgb(90, 115, 145), C2D_AlignCenter);
+    Text(line, bx + bw - 8, by + bh - 14, 0.38f, T().footer, C2D_AlignRight, 0.4f);
+    Text("SONIC MANIA 3DS", W / 2.0f, H - 18, 0.42f, T().footer, C2D_AlignCenter);
     C3D_FrameEnd(0);
     sLoad.lastDraw = svcGetSystemTick();
 }
@@ -1252,6 +1398,14 @@ void BottomUi::Init()
 
 bool BottomUi::Ready() { return sReady; }
 
+static volatile int sTouchX = -1, sTouchY; // a tap from SITE TOUCH (the FTP thread), taken by the next Update
+
+void BottomUi::Touch(int x, int y)
+{
+    sTouchY = y;
+    sTouchX = x;
+}
+
 void BottomUi::Update()
 {
     if (!sReady)
@@ -1263,11 +1417,18 @@ void BottomUi::Update()
 #else
     const bool debugTab = false;
 #endif
-    const u32 down = hidKeysDown(), held = hidKeysHeld();
+    u32 down = hidKeysDown(), held = hidKeysHeld();
+    touchPosition t;
+    hidTouchRead(&t);
+    if (sTouchX >= 0) { // held for this one frame: the next one sees it lifted
+        t.px = (u16)sTouchX;
+        t.py = (u16)sTouchY;
+        sTouchX = -1;
+        down |= KEY_TOUCH;
+        held |= KEY_TOUCH;
+    }
     int hit = -1;
     if (held & KEY_TOUCH) {
-        touchPosition t;
-        hidTouchRead(&t);
         if (UpdatePromptShown()) {
             // The update prompt takes every touch while it is up.
             hit = PromptHit(t.px, t.py);
@@ -1278,8 +1439,9 @@ void BottomUi::Update()
                 float x, y;
                 TabRect(i, &x, &y);
                 if (t.px >= x && t.px < x + TAB_W && t.py >= y && t.py < y + TAB_H && Port::tab != kTabs[i]) {
-                    Port::tab = kTabs[i];
-                    sLastOpt  = -1;
+                    Port::tab  = kTabs[i];
+                    sLastOpt   = -1;
+                    sThemeOpen = false;
                     SaveAll();
                     sDirty = true;
                 }
@@ -1318,6 +1480,8 @@ void BottomUi::Update()
             ClampScroll();
         }
 #endif
+        else if (Port::tab == TAB_OPTIONS && sThemeOpen)
+            hit = ThemeListHit(t.px, t.py);
         else if (Port::tab == TAB_OPTIONS) {
             for (int i = 0; i < OPT_COUNT; ++i) {
                 float x, y;
@@ -1361,8 +1525,8 @@ void BottomUi::Update()
 #if MANIA_DEV_TOOLS
     float p;
     unsigned secs;
-    char t[8];
-    busy = busy || DevTools::InstallNotice(t, sizeof(t), &p, &secs) != 0;
+    char notice[8];
+    busy = busy || DevTools::InstallNotice(notice, sizeof(notice), &p, &secs) != 0;
 #endif
     if (sDirty || UpdatesChanged() || now - sLastDraw > (busy ? SYSCLOCK_ARM11 / 10 : SYSCLOCK_ARM11 / 4)) {
         Draw();

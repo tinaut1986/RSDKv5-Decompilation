@@ -107,6 +107,8 @@ tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU dre
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
 tools/site.sh "SET heapcheck 1"             # debug: walk the heap every frame and loading step, log the first broken chunk
 tools/site.sh "SET music 0"                 # debug: no music streams (tell a music fault from others); not saved
+tools/site.sh "TOUCH 230 125"               # one tap on the bottom screen (320x240): drive its tabs, options, dropdowns
+tools/site.sh "SET theme N"                 # the bottom screen's colour theme (OPTIONS > THEME: 0 Mania, 1 classic .. 5 Green Hill)
 tools/scene-sweep.sh [-i IP] name           # load every scene, log each load's storage pools; stops if the game dies
 tools/ss-tour.sh [-i IP]                    # Special Stages 4, 4+, 7, 1+, 5, 6, 7+: fps and the floor's reason every 5 s
 tools/fbi-install.py IP [file.cia]          # send a CIA to FBI's Remote Install when the game's FTP is down
