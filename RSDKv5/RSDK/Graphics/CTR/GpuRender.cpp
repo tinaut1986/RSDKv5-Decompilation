@@ -2758,11 +2758,23 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
         }
     }
     uint32 hash = 2166136261u ^ f.tileGen * 16777619u ^ (uint32)(uintptr_t)layer->layout;
+    // SITE REFUSED's "changing (...)": what changed since the last frame, the tiles or which colour of which bank.
+    static uint16 lastPal[PALETTE_BANK_COUNT][PALETTE_BANK_SIZE];
+    static uint32 lastGen;
+    static char changeWhy[48];
+    changeWhy[0] = 0;
+    if (f.tileGen != lastGen)
+        snprintf(changeWhy, sizeof(changeWhy), "tiles");
+    lastGen = f.tileGen;
     for (unsigned b = 0; b < PALETTE_BANK_COUNT; ++b) {
         const uint16 *pal = sPalShadow[sBankMap[b]];
         for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i)
-            if (f.used[i >> 5] & (1u << (i & 31)))
+            if (f.used[i >> 5] & (1u << (i & 31))) {
                 hash = (hash ^ pal[i]) * 16777619u;
+                if (pal[i] != lastPal[b][i] && !changeWhy[0])
+                    snprintf(changeWhy, sizeof(changeWhy), "bank %u colour %u %04x->%04x", b, i, lastPal[b][i], pal[i]);
+                lastPal[b][i] = pal[i];
+            }
     }
     // The levels' textures, finest first; a level that did not fit is tried again while the floor is drawn (VRAM frees
     // once the 3D models are in).
@@ -2806,7 +2818,9 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
     if (f.built != hash || !f.level[0].valid) {
         f.seenFrames = f.seen == hash ? f.seenFrames + 1 : 1;
         f.seen       = hash;
-        sFloorWhy    = "changing";
+        static char why[64];
+        snprintf(why, sizeof(why), "changing (%s)", changeWhy[0] ? changeWhy : "-");
+        sFloorWhy = why;
         if (f.seenFrames < 2)
             return true;
         f.fogOk = FloorFog(layer);
