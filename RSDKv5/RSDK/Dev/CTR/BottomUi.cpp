@@ -1928,20 +1928,11 @@ static struct {
 } sLoad;
 
 // ---------------------------------------------------------------- the top screen while the game starts
-// Drawn with code, nothing of the game's (its data is not up yet): Sonic as a spinning ball rolling over Green Hill's
+// Drawn with code, but for Sonic, who is the game's own loading icon (LoadSpinner): he runs over Green Hill's
 // chequered ground, speed lines behind, rings ahead that he collects with a sparkle, on MANIA's navy with its stripes.
 // Time-based, so it moves at the same speed however often the loading box redraws.
 
 enum { TOP_W = 400, TOP_H = 240, GROUND_Y = 196 };
-
-static void FillCircle(float cx, float cy, float r, u32 col, float z)
-{
-    enum { N = 24 };
-    for (int i = 0; i < N; ++i) {
-        const float a0 = i * 6.2831853f / N, a1 = (i + 1) * 6.2831853f / N;
-        C2D_DrawTriangle(cx, cy, col, cx + cosf(a0) * r, cy + sinf(a0) * r, col, cx + cosf(a1) * r, cy + sinf(a1) * r, col, z);
-    }
-}
 
 // A ring seen turning: an annulus squeezed to `sx` of its width.
 static void Ring(float cx, float cy, float r, float sx, u32 col, float z)
@@ -1955,6 +1946,115 @@ static void Ring(float cx, float cy, float r, float sx, u32 col, float z)
         C2D_DrawTriangle(ox0, oy0, col, ox1, oy1, col, ix0, iy0, col, z);
         C2D_DrawTriangle(ix0, iy0, col, ox1, oy1, col, ix1, iy1, col, z);
     }
+}
+
+// The game's own loading icon (UI/WaitSpinner.bin animation 0: Sonic running round), copied like the HUD art into a
+// texture of ours (RGBA5551, 256x128) through its sheet's own colours (SheetPalette), as soon as the boot has read the
+// game config; the sprite file itself goes with the first scene (stage scope).
+enum { SPIN_MAX = 32, SPIN_W = 256, SPIN_H = 128 };
+static ArtFrame sSpin[SPIN_MAX];
+static uint16 sSpinTicks[SPIN_MAX]; // each frame's length in 60ths of a second
+static int sSpinCount;
+static unsigned sSpinCycle;
+static C3D_Tex sSpinTex;
+static bool sSpinTried;
+
+// The colours a sprite file's first sheet was drawn with: the global colour table of its GIF (RGB565 out). Its frames
+// index that table as they index the game's palette, and unlike the palette it is there before any scene.
+static bool SheetPalette(const char *bin, uint16 *pal)
+{
+    char path[0x100], sheet[0x100];
+    snprintf(path, sizeof(path), "Data/Sprites/%s", bin);
+    FileInfo info;
+    InitFileInfo(&info);
+    if (!LoadFile(&info, path, FMODE_RB))
+        return false;
+    bool ok = ReadInt32(&info, false) == RSDK_SIGNATURE_SPR;
+    if (ok) {
+        ReadInt32(&info, false); // frame count
+        ok = ReadInt8(&info) > 0;
+        if (ok)
+            ReadString(&info, sheet);
+    }
+    CloseFile(&info);
+    if (!ok)
+        return false;
+    snprintf(path, sizeof(path), "Data/Sprites/%s", sheet);
+    InitFileInfo(&info);
+    if (!LoadFile(&info, path, FMODE_RB))
+        return false;
+    uint8 head[13], rgb[256 * 3];
+    ReadBytes(&info, head, sizeof(head));
+    const int n = 2 << (head[10] & 7);
+    ok = !memcmp(head, "GIF", 3) && (head[10] & 0x80);
+    if (ok)
+        ReadBytes(&info, rgb, n * 3);
+    CloseFile(&info);
+    if (!ok)
+        return false;
+    for (int i = 0; i < 256; ++i)
+        pal[i] = i < n ? (uint16)(((rgb[i * 3] >> 3) << 11) | ((rgb[i * 3 + 1] >> 2) << 5) | (rgb[i * 3 + 2] >> 3)) : 0;
+    return true;
+}
+
+static void LoadSpinner()
+{
+    sSpinTried = true;
+    const uint16 id = LoadSpriteAnimation("UI/WaitSpinner.bin", SCOPE_STAGE);
+    if (id >= SPRFILE_COUNT)
+        return;
+    const SpriteAnimation &sa = spriteAnimationList[id];
+    if (!sa.animations || !sa.frames || !sa.animCount)
+        return;
+    const SpriteAnimationEntry &anim = sa.animations[0];
+    const int n   = anim.frameCount < SPIN_MAX ? anim.frameCount : SPIN_MAX;
+    const int spd = anim.animationSpeed > 0 ? anim.animationSpeed : 1;
+    if (!n || !C3D_TexInit(&sSpinTex, SPIN_W, SPIN_H, GPU_RGBA5551))
+        return;
+    u16 *tex = (u16 *)sSpinTex.data;
+    memset(tex, 0, SPIN_W * SPIN_H * 2);
+    static uint16 sheetPal[256];
+    const bool ownColours = SheetPalette("UI/WaitSpinner.bin", sheetPal);
+    const uint16 *pal     = ownColours ? sheetPal : globalPalette[0];
+    int sx = 0, sy = 0, shelfH = 0;
+    for (int i = 0; i < n; ++i) {
+        const SpriteFrame &f   = sa.frames[anim.frameListOffset + i];
+        const GFXSurface &surf = gfxSurface[f.sheetID];
+        if (!surf.pixels || f.width <= 0 || f.height <= 0 || f.sprX + f.width > surf.width || f.sprY + f.height > surf.height)
+            break;
+        if (sx + f.width > SPIN_W)
+            sx = 0, sy += shelfH + 1, shelfH = 0;
+        if (f.width > SPIN_W || sy + f.height > SPIN_H)
+            break;
+        for (int y = 0; y < f.height; ++y)
+            for (int x = 0; x < f.width; ++x) {
+                const uint8 index = surf.pixels[(f.sprY + y) * surf.width + f.sprX + x];
+                if (!index)
+                    continue;
+                const uint16 c = pal[index];
+                const u32 tx = sx + x, ty = sy + y;
+                const u32 o  = (((ty >> 3) * (SPIN_W >> 3) + (tx >> 3)) << 6) | (tx & 1) | ((ty & 1) << 1) | ((tx & 2) << 1) | ((ty & 2) << 2)
+                              | ((tx & 4) << 2) | ((ty & 4) << 3);
+                tex[o] = (u16)(((c >> 11) << 11) | (((c >> 6) & 31) << 6) | ((c & 31) << 1) | 1);
+            }
+        ArtFrame &a = sSpin[i];
+        a.w = f.width, a.h = f.height, a.px = f.pivotX, a.py = f.pivotY;
+        a.sub        = { (u16)f.width, (u16)f.height, sx / (float)SPIN_W, 1 - sy / (float)SPIN_H, (sx + f.width) / (float)SPIN_W,
+                         1 - (sy + f.height) / (float)SPIN_H };
+        a.img.tex    = &sSpinTex;
+        a.img.subtex = &a.sub;
+        // RSDK: the animator's timer grows by the animation's speed each frame; a frame lasts until it reaches its duration
+        sSpinTicks[i] = (uint16)((f.duration + spd - 1) / spd);
+        if (!sSpinTicks[i])
+            sSpinTicks[i] = 1;
+        sSpinCycle += sSpinTicks[i];
+        sx += f.width + 1;
+        shelfH = f.height > shelfH ? f.height : shelfH;
+        sSpinCount = i + 1;
+    }
+    C3D_TexFlush(&sSpinTex);
+    C3D_TexSetFilter(&sSpinTex, GPU_NEAREST, GPU_NEAREST);
+    DEV_LOG("boot spinner: %d frames, cycle %u ticks, %s colours", sSpinCount, sSpinCycle, ownColours ? "its sheet's" : "the global");
 }
 
 static void DrawBootAnimation(float t)
@@ -1983,24 +2083,22 @@ static void DrawBootAnimation(float t)
             C2D_DrawRectSolid(x, GROUND_Y + 6 + row * 16, 0.3f, 16, 16, Hex(cell & 1 ? 0xB4642A : 0x8C4A1E));
         }
 
-    // Sonic: a spinning ball with a little hop now and then
-    const float bx = 150, hop = fmodf(t, 2.4f), r = 17;
-    const float by = GROUND_Y - r - (hop < 0.5f ? sinf(hop / 0.5f * 3.14159f) * 34 : 0);
-    // Speed lines behind
-    for (int i = 0; i < 3; ++i) {
-        const float len = 26 + 14 * sinf(t * 9 + i * 2.1f);
-        C2D_DrawRectSolid(bx - r - 8 - len, by - 8 + i * 8, 0.4f, len, 2, C2D_Color32(255, 255, 255, 150));
+    // Sonic: the game's loading icon at twice its size, on the ground, once the game config has been read (just the scene
+    // before)
+    const float bx = 150;
+    if (sSpinCount) {
+        unsigned tick = (unsigned)(t * 60) % sSpinCycle;
+        int fi = 0;
+        while (tick >= sSpinTicks[fi])
+            tick -= sSpinTicks[fi++];
+        const ArtFrame &a = sSpin[fi];
+        const float s = 2, by = GROUND_Y - a.h * s / 2;
+        C2D_DrawImageAt(a.img, bx - a.w * s / 2, by - a.h * s / 2, 0.5f, NULL, s, s);
+        for (int i = 0; i < 3; ++i) { // speed lines behind
+            const float len = 26 + 14 * sinf(t * 9 + i * 2.1f);
+            C2D_DrawRectSolid(bx - a.w * s / 2 - 8 - len, by - 10 + i * 10, 0.4f, len, 2, C2D_Color32(255, 255, 255, 150));
+        }
     }
-    FillCircle(bx, by, r + 2, Hex(0x0E1A48), 0.5f);
-    FillCircle(bx, by, r, Hex(0x2A6CF0), 0.51f);
-    const float a = t * 14; // the spin: three lighter quills going round
-    for (int i = 0; i < 3; ++i) {
-        const float q = a + i * 2.0944f;
-        const u32 c = Hex(0x6EAAFF);
-        C2D_DrawTriangle(bx, by, c, bx + cosf(q - 0.35f) * r, by + sinf(q - 0.35f) * r, c, bx + cosf(q + 0.35f) * r, by + sinf(q + 0.35f) * r, c,
-                         0.52f);
-    }
-    FillCircle(bx, by, r * 0.35f, Hex(0x1A3C8C), 0.53f);
 
     // Rings, 70 px apart along the way: ahead they turn, at Sonic a sparkle for a moment
     for (int j = (int)floorf((dist - 120) / 70); j < (int)((dist + TOP_W) / 70) + 2; ++j) {
@@ -2100,6 +2198,8 @@ void BottomUi::LoadPhase(const char *step, float lo, float hi)
         return;
     Upper(sLoad.step, sizeof(sLoad.step), step);
     sLoad.file[0] = 0;
+    if (sLoad.boot && !sSpinTried && !strcmp(step, "Sound effects")) // the game config (its palette) is read by now
+        LoadSpinner();
     sLoad.lo = sLoad.progress = lo;
     sLoad.hi                  = hi;
     MaybeDrawLoading(true);
