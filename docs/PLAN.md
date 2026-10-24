@@ -183,6 +183,10 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   a release without a drag opens one: the ring at 3x, name, description, when). The game's ring stands for Steam's
   icons (not in the data), grey (citro2d `C2D_TintLuma`) while locked; descriptions translated, names kept (titles).
   Unlock dates are ours (`achievement-dates.txt`). `SITE ACH <ACH_ID>` unlocks one for tests. Checked in Azahar.
+- [ ] U1.8 (2026-10-24, `feat/theme-mania-solid`) Theme MANIA SOLID (6): MANIA's colours on filled panels with the
+  top-right corner cut and a shadow (`Panel`, which every box of the screen now goes through; `Theme::cut`). OPTIONS
+  loses RENDERER (DEBUG keeps it) and FRAMES reads AUTO / 30 FPS / OFF (was AUTO / LOCK 30 / NO SKIP). An
+  achievement's details are centred.
 
 ## Decisions log
 

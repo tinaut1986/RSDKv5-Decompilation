@@ -24,17 +24,19 @@ their work.
 ## Features
 
 * **GPU renderer** (citro3d): tile layers, sprites, the Special Stages' 3D scenes, rotozoom layers and the masked and
-  tinted inks are drawn by the GPU; the original software renderer stays as reference and fallback (OPTIONS >
-  RENDERER).
+  tinted inks are drawn by the GPU; the original software renderer stays as reference and fallback (DEBUG >
+  RENDERER in debug builds).
 * **Stereoscopic 3D**: the layers are set in depth by their parallax, with the HUD in front; the Special Stages' models
   too. Lower the 3D slider for the flat picture.
-* **Frame pacing** for the Old 3DS: AUTO skips a late picture, LOCK 30 draws every other one, NO SKIP slows down instead.
+* **Frame pacing** for the Old 3DS: AUTO skips a late picture, 30 FPS draws every other one, OFF draws them all (the
+  game slows down instead).
 * **Bottom screen**:
   * GAME: the stage, the mode, the characters; time, score, rings and lives with the game's own HUD art (the time at
     the game's rate); the save's chaos emeralds; a row with the item boxes picked up (a shield or a power stays as long
     as it lasts).
-  * OPTIONS: frames, an FPS counter on the top screen, the game's HUD hidden while the GAME tab shows it, renderer,
-    language, and colour themes (MANIA, which mixes the game's four colours, and five more).
+  * OPTIONS: frames (AUTO, 30 FPS, OFF), an FPS counter on the top screen, the game's HUD hidden while the GAME tab
+    shows it, language, Sonic Mania Plus, and colour themes (MANIA, which mixes the game's four colours, MANIA SOLID
+    with filled, cut-corner panels, and five more).
   * ACHIEVEMENTS: the PC game's 18 achievements, kept on the SD card: a list with each one's description and unlock
     date; the unlock notice on the top screen (the game's own) or the bottom one, with a sound.
   * UPDATES: in-app updates with a STABLE and a + BETAS channel.

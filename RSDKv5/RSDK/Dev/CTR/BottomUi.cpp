@@ -63,37 +63,40 @@ static void Text(const char *s, float x, float y, float scale, u32 color, u32 fl
 // Sonic's blue, Knuckles' red, Super Sonic's gold, Green Hill's green.
 struct Theme {
     const char *name;
-    bool multi;
+    bool multi, cut; // cut: filled panels with the top-right corner cut (Panel)
     u32 bg, barLine, tabOnEdge, tabOnFill, tabOffEdge, tabOffFill, tabIcon;
     u32 cellEdge, cellFill, cellLine, pressEdge, pressFill, boxEdge, boxFill, noteEdge, noteFill, popEdge, popFill;
     u32 text, label, dim, footer, accent, clock, battery, loadBg;
 };
 static inline u32 Hex(u32 rgb) { return C2D_Color32(rgb >> 16, (rgb >> 8) & 0xFF, rgb & 0xFF, 255); }
-#define THEME(n, mu, a, b, c, d, e, f, g, h, i, j, k, l, m, o, p, q, r, s, t, u, v, w, x, y, z, aa)                                          \
-    { n, mu, Hex(a), Hex(b), Hex(c), Hex(d), Hex(e), Hex(f), Hex(g), Hex(h), Hex(i), Hex(j), Hex(k), Hex(l), Hex(m),                              \
+#define THEME(n, mu, cu, a, b, c, d, e, f, g, h, i, j, k, l, m, o, p, q, r, s, t, u, v, w, x, y, z, aa)                                          \
+    { n, mu, cu, Hex(a), Hex(b), Hex(c), Hex(d), Hex(e), Hex(f), Hex(g), Hex(h), Hex(i), Hex(j), Hex(k), Hex(l), Hex(m),                              \
       Hex(o), Hex(p), Hex(q), Hex(r), Hex(s), Hex(t), Hex(u), Hex(v), Hex(w), Hex(x), Hex(y), Hex(z), Hex(aa) }
 static const Theme kThemes[] = {
-    //     name          multi  bg        barLine   tabOnE    tabOnF    tabOffE   tabOffF   tabIcon   cellE     cellF     cellLine  pressE
+    //     name          multi  cut    bg        barLine   tabOnE    tabOnF    tabOffE   tabOffF   tabIcon   cellE     cellF     cellLine  pressE
     //                    pressF    boxE      boxF      noteE     noteF     popE      popF      text      label     dim       footer
     //                    accent    clock     battery   loadBg
-    THEME("MANIA",       true,  0x0A1438, 0x2A6CF0, 0x2A6CF0, 0x1A3C8C, 0x2A3C78, 0x101C48, 0x9AAAD8, 0x2A6CF0, 0x12245C, 0x7AA8FF, 0xFFFFFF,
+    THEME("MANIA",       true, false,  0x0A1438, 0x2A6CF0, 0x2A6CF0, 0x1A3C8C, 0x2A3C78, 0x101C48, 0x9AAAD8, 0x2A6CF0, 0x12245C, 0x7AA8FF, 0xFFFFFF,
                                 0x3C78F0, 0xF8C820, 0x0E1A48, 0x2A6CF0, 0x070E28, 0xF8C820, 0x12245C, 0xF0F4FF, 0xC0CCF0, 0x9AAAD8, 0x7088C8,
                                 0xF8C820, 0xE0E8FF, 0x9AAAD8, 0x0A1438),
-    THEME("CLASSIC",     false,0x0E1218, 0x2C3440, 0x2D96F0, 0x124682, 0x32384B, 0x1A1E2A, 0x8C96AF, 0x325082, 0x182032, 0x5A82B4, 0xD2EBFF,
+    THEME("CLASSIC",     false, false,0x0E1218, 0x2C3440, 0x2D96F0, 0x124682, 0x32384B, 0x1A1E2A, 0x8C96AF, 0x325082, 0x182032, 0x5A82B4, 0xD2EBFF,
                          0x5A96DC, 0x3A4268, 0x181C30, 0x284678, 0x0A0E18, 0x5A78AA, 0x18202E, 0xE6E8F0, 0xAAB2C8, 0x8C94AA, 0x5A7391,
                          0xFFD700, 0xD2DCEB, 0x96A0B4, 0x0E101C),
-    THEME("SONIC",       false,0x0A1440, 0x2850B4, 0x3CA0FF, 0x1450B4, 0x28407C, 0x101E4C, 0x8CA0D2, 0x2E64D2, 0x10225C, 0x6EAAFF, 0xD2EBFF,
+    THEME("SONIC",       false, false,0x0A1440, 0x2850B4, 0x3CA0FF, 0x1450B4, 0x28407C, 0x101E4C, 0x8CA0D2, 0x2E64D2, 0x10225C, 0x6EAAFF, 0xD2EBFF,
                          0x468CF0, 0x2C50A8, 0x0E1C50, 0x2C50A8, 0x08102E, 0x6EAAFF, 0x10225C, 0xEBF0FF, 0xB4C3EB, 0x96AAD7, 0x6482C8,
                          0xFFD700, 0xD2DCF5, 0x96AAD7, 0x0A1440),
-    THEME("KNUCKLES",    false,0x2C080C, 0x8C1E28, 0xF04646, 0xA0141E, 0x6E282D, 0x3C0E14, 0xD29696, 0xBE2D37, 0x4A0E16, 0xF06E6E, 0xFFDCDC,
+    THEME("KNUCKLES",    false, false,0x2C080C, 0x8C1E28, 0xF04646, 0xA0141E, 0x6E282D, 0x3C0E14, 0xD29696, 0xBE2D37, 0x4A0E16, 0xF06E6E, 0xFFDCDC,
                          0xDC3C46, 0x962832, 0x3C0C12, 0x962832, 0x1E0608, 0xF06E6E, 0x4A0E16, 0xFAEBEB, 0xE6BEBE, 0xCD9696, 0xBE6E6E,
                          0xFFD700, 0xF5DCDC, 0xCD9696, 0x2C080C),
-    THEME("SUPER SONIC", false,0x2A2004, 0xA08014, 0xFFDC3C, 0xB4880A, 0x786020, 0x3E2E08, 0xDCC88C, 0xDCAF1E, 0x4A3808, 0xFFE16E, 0xFFFAD2,
+    THEME("SUPER SONIC", false, false,0x2A2004, 0xA08014, 0xFFDC3C, 0xB4880A, 0x786020, 0x3E2E08, 0xDCC88C, 0xDCAF1E, 0x4A3808, 0xFFE16E, 0xFFFAD2,
                          0xEBBE28, 0xAA8214, 0x3C2C06, 0xAA8214, 0x1C1402, 0xFFE16E, 0x4A3808, 0xFFFAE6, 0xF0E1B4, 0xD7C38C, 0xC8AA5A,
                          0xFFFFFF, 0xFFF5D2, 0xD7C38C, 0x2A2004),
-    THEME("GREEN HILL",  false,0x082A10, 0x1E8C32, 0x5ADC64, 0x1E8C32, 0x2D6437, 0x0E3216, 0x96C8A0, 0x3CAA46, 0x103C1A, 0x82E68C, 0xDCFFDC,
+    THEME("GREEN HILL",  false, false,0x082A10, 0x1E8C32, 0x5ADC64, 0x1E8C32, 0x2D6437, 0x0E3216, 0x96C8A0, 0x3CAA46, 0x103C1A, 0x82E68C, 0xDCFFDC,
                          0x46BE50, 0x328C3C, 0x0C3214, 0x328C3C, 0x06180A, 0x82E68C, 0x103C1A, 0xEBFAEB, 0xBEE6C3, 0x96C89B, 0x6EAA78,
                          0xFFD700, 0xDCF5DC, 0x96C89B, 0x082A10),
+    THEME("MANIA SOLID", true, true, 0x0A1438, 0x2A6CF0, 0x2A6CF0, 0x1A3C8C, 0x2A3C78, 0x101C48, 0xB4C0E6, 0x2A6CF0, 0x12245C, 0x7AA8FF, 0xFFFFFF,
+                                0x3C78F0, 0xF8C820, 0x0E1A48, 0x2A6CF0, 0x070E28, 0xF8C820, 0x12245C, 0xFFFFFF, 0xE6ECFF, 0xC8D2F0, 0x8CA0D8,
+                                0xFFE45C, 0xE0E8FF, 0x9AAAD8, 0x0A1438),
 };
 #undef THEME
 enum { THEME_COUNT = sizeof(kThemes) / sizeof(kThemes[0]) };
@@ -113,10 +116,44 @@ static u32 CellEdge(int i) { return T().multi ? Hex(kMania[i & 3]) : T().cellEdg
 static u32 CellFill(int i) { return T().multi ? Hex(Mix(kMania[i & 3], 0x0A1438, 0.8f)) : T().cellFill; }
 static u32 CellLine(int i) { return T().multi ? Hex(Mix(kMania[i & 3], 0xFFFFFF, 0.4f)) : T().cellLine; }
 
+// A C2D colour t of the way to another
+static u32 MixC(u32 a, u32 b, float t)
+{
+    u32 out = 0xFF000000;
+    for (int sh = 0; sh <= 16; sh += 8)
+        out |= (u32)(((a >> sh) & 0xFF) * (1 - t) + ((b >> sh) & 0xFF) * t) << sh;
+    return out;
+}
+
+// The shape of a cut panel: a rectangle without its top-right corner (c pixels along each side), where the title of a
+// box seldom reaches.
+static void CutShape(float x, float y, float w, float h, float c, u32 col, float z)
+{
+    C2D_DrawRectSolid(x, y, z, w - c, h, col);
+    C2D_DrawRectSolid(x + w - c, y + c, z, c, h - c, col);
+    C2D_DrawTriangle(x + w - c, y, col, x + w - c, y + c, col, x + w, y + c, col, z);
+}
+
+// Every box of the screen: framed (an edge, the fill `inset` pixels in), or under a cut theme filled with a colour
+// between its edge and fill colours, its top-right corner cut and a shadow under it, after the game's notices.
+static void Panel(float x, float y, float z, float w, float h, u32 edge, u32 fill, int inset)
+{
+    if (!T().cut) {
+        C2D_DrawRectSolid(x, y, z, w, h, edge);
+        C2D_DrawRectSolid(x + inset, y + inset, z + 0.01f, w - 2 * inset, h - 2 * inset, fill);
+        return;
+    }
+    const float c = h * 0.4f < 10 ? h * 0.4f : 10;
+    const u32 solid = MixC(edge, fill, inset > 1 ? 0.75f : 0.45f); // the big boxes (inset 2: prompts, details) darker, for text
+    CutShape(x + 2, y + 2, w, h, c, C2D_Color32(0, 0, 0, 110), z - 0.005f);
+    CutShape(x, y, w, h, c, solid, z);
+    C2D_DrawRectSolid(x, y, z + 0.005f, w - c, 1, MixC(solid, 0xFFFFFFFF, 0.45f)); // a light top edge
+}
+
 // MANIA's background: the diagonal stripes of the game's menus, a shade lighter than the navy.
 static void DrawBackdrop(float top)
 {
-    if (!T().multi)
+    if (!T().multi) // the MANIA themes
         return;
     const u32 c = Hex(Mix(0x0A1438, 0x2A6CF0, 0.14f));
     const float h = 240 - top;
@@ -435,8 +472,7 @@ static void DrawTabBar()
             edge = Hex(on ? kMania[i & 3] : Mix(kMania[i & 3], 0x0A1438, 0.55f));
             fill = Hex(Mix(kMania[i & 3], 0x0A1438, on ? 0.45f : 0.85f));
         }
-        C2D_DrawRectSolid(x, y, 0.72f, TAB_W, TAB_H, edge);
-        C2D_DrawRectSolid(x + 1, y + 1, 0.73f, TAB_W - 2, TAB_H - 2, fill);
+        Panel(x, y, 0.72f, TAB_W, TAB_H, edge, fill, 1);
         DrawTabIcon(kTabs[i], x + TAB_W / 2.0f, y + TAB_H / 2.0f, on ? Rgb(255, 255, 255) : T().tabIcon, 0.74f);
     }
 
@@ -702,8 +738,7 @@ static bool Flash() { return (svcGetSystemTick() / (SYSCLOCK_ARM11 * 8 / 60)) & 
 // A stat box's frame, in its colour (MANIA: tint i).
 static void BoxFrame(int i, float x, float y, float w, float h)
 {
-    C2D_DrawRectSolid(x, y, 0.3f, w, h, T().multi ? CellEdge(i) : T().boxEdge);
-    C2D_DrawRectSolid(x + 1, y + 1, 0.31f, w - 2, h - 2, T().multi ? CellFill(i) : T().boxFill);
+    Panel(x, y, 0.3f, w, h, T().multi ? CellEdge(i) : T().boxEdge, T().multi ? CellFill(i) : T().boxFill, 1);
 }
 
 // The game's label sprite at the box's top left (1x).
@@ -737,8 +772,7 @@ static struct {
 
 static void StatBox(int i, float x, float y, float w, float h, const char *label, const char *value, u32 valueCol)
 {
-    C2D_DrawRectSolid(x, y, 0.3f, w, h, T().multi ? CellEdge(i) : T().boxEdge);
-    C2D_DrawRectSolid(x + 1, y + 1, 0.31f, w - 2, h - 2, T().multi ? CellFill(i) : T().boxFill);
+    Panel(x, y, 0.3f, w, h, T().multi ? CellEdge(i) : T().boxEdge, T().multi ? CellFill(i) : T().boxFill, 1);
     Text(Tr(label), x + 7, y + 4, 0.42f, T().dim, 0, 0.32f);
     Text(value, x + w - 8, y + 15, 0.85f, valueCol, C2D_AlignRight, 0.32f);
 }
@@ -854,7 +888,7 @@ static void DrawGameTab()
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_RENDERER, OPT_LANGUAGE, OPT_THEME, OPT_PLUS, OPT_COUNT };
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_LANGUAGE, OPT_THEME, OPT_PLUS, OPT_COUNT }; // the renderer is DEBUG's
 enum { OPT_W = 150, OPT_H = 30, OPT_PITCH = 34 };
 // THEME opens a list over the page (the dropdown); its rows are hits OPT_LIST + i, a touch elsewhere OPT_LIST_OUT.
 enum { OPT_LIST = 100, OPT_LIST_OUT = 99, LIST_ROW_H = 22 };
@@ -871,7 +905,7 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     const u32 good = Rgb(110, 220, 130), dim = T().dim, warn = Rgb(240, 200, 80);
     switch (i) {
         case OPT_FRAMES:
-            snprintf(o, cap, "%s", Tr(Port::lock30 ? "LOCK 30" : Port::frameSkip ? "AUTO" : "NO SKIP"));
+            snprintf(o, cap, "%s", Tr(Port::lock30 ? "30 FPS" : Port::frameSkip ? "AUTO" : "OFF"));
             *col = Port::lock30 ? good : Port::frameSkip ? good : warn;
             break;
         case OPT_FPS: {
@@ -894,23 +928,18 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
             snprintf(o, cap, "%s", Tr(T().name));
             *col = T().accent;
             break;
-        case OPT_PLUS: // a change counts from the next start: until then in the warning colour
+        default: // OPT_PLUS: a change counts from the next start, until then in the warning colour
             snprintf(o, cap, "%s", Tr(Port::plus ? "ON" : "OFF"));
             *col = Port::plus != Port::PlusApplied() ? warn : Port::plus ? good : dim;
-            break;
-        default:
-            snprintf(o, cap, "%s", Port::GpuMode() ? "GPU" : "CPU");
-            *col = Port::GpuMode() ? good : dim;
             break;
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "RENDERER", "LANGUAGE", "THEME", "PLUS" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "LANGUAGE", "THEME", "PLUS" };
 static const char *const kOptHelp[OPT_COUNT] = {
-    "AUTO SKIPS A LATE PICTURE, LOCK 30 DRAWS EVERY OTHER ONE, NO SKIP SLOWS DOWN",
+    "AUTO SKIPS A LATE PICTURE TO KEEP THE SPEED, 30 FPS DRAWS EVERY OTHER ONE, OFF DRAWS THEM ALL (THE GAME SLOWS DOWN IF IT CANNOT KEEP UP)",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
     "AUTO HIDES THE GAME'S HUD WHILE THE GAME TAB SHOWS IT",
-    "GPU DRAWS WHAT IT CAN (FASTER), CPU IS THE ORIGINAL SOFTWARE RENDERER",
     "FOLLOWS THE GAME'S LANGUAGE: CHANGE IT IN THE GAME'S OPTIONS",
     "THE COLOURS OF THIS SCREEN",
     "MIGHTY, RAY AND ENCORE MODE, ONLY IF YOU OWN SONIC MANIA PLUS. IT CHANGES AT THE NEXT START",
@@ -941,8 +970,7 @@ static void DrawThemeList()
     float x, y, w, h;
     ThemeListRect(&x, &y, &w, &h);
     C2D_DrawRectSolid(0, HEADER_H, 0.6f, W, H - HEADER_H, C2D_Color32(0, 0, 0, 120));
-    C2D_DrawRectSolid(x - 1, y - 1, 0.61f, w + 2, h + 2, T().popEdge);
-    C2D_DrawRectSolid(x, y, 0.62f, w, h, T().popFill);
+    Panel(x - 1, y - 1, 0.61f, w + 2, h + 2, T().popEdge, T().popFill, 1);
     for (int i = 0; i < THEME_COUNT; ++i) {
         const Theme &t = kThemes[i];
         const float ry = y + 2 + i * LIST_ROW_H;
@@ -972,7 +1000,7 @@ static void TapOption(int i)
         return;
     }
     switch (i) {
-        case OPT_FRAMES: // AUTO -> LOCK 30 -> NO SKIP -> AUTO
+        case OPT_FRAMES: // AUTO -> 30 FPS -> OFF -> AUTO
             if (Port::lock30)
                 Port::lock30 = false, Port::frameSkip = false;
             else if (Port::frameSkip)
@@ -984,8 +1012,7 @@ static void TapOption(int i)
         case OPT_HUD: Port::hud = (Port::hud + 1) % 3; break;
         case OPT_LANGUAGE: break; // only its help
         case OPT_THEME: sThemeOpen = true; break;
-        case OPT_PLUS: Port::plus = !Port::plus; break;
-        default: Port::SetGpuMode(!Port::GpuMode()); break;
+        default: Port::plus = !Port::plus; break; // OPT_PLUS
     }
     sLastOpt = i;
 }
@@ -999,9 +1026,9 @@ static void DrawOptionsTab()
         const bool pressed = i == sPressed;
         // MANIA: the colours run along the rows and shift by one each row, so no two neighbours match
         const int tint = i + i / 2;
-        C2D_DrawRectSolid(x, y, 0.3f, OPT_W, OPT_H, pressed ? T().pressEdge : CellEdge(tint));
-        C2D_DrawRectSolid(x + 1, y + 1, 0.31f, OPT_W - 2, OPT_H - 2, pressed ? T().pressFill : CellFill(tint));
-        C2D_DrawRectSolid(x + 1, y + 1, 0.32f, 148, 1, CellLine(tint));
+        Panel(x, y, 0.3f, OPT_W, OPT_H, pressed ? T().pressEdge : CellEdge(tint), pressed ? T().pressFill : CellFill(tint), 1);
+        if (!T().cut)
+            C2D_DrawRectSolid(x + 1, y + 1, 0.32f, 148, 1, CellLine(tint));
         u32 col;
         OptValue(i, val, sizeof(val), &col);
         Text(Tr(kOptName[i]), x + 7, y + 3, 0.42f, T().text, 0, 0.33f);
@@ -1067,8 +1094,7 @@ static unsigned NotePages() { return sNoteCount ? (sNoteCount + NOTE_ROWS - 1) /
 
 static void Button(float x, float y, float w, float h, const char *label, bool pressed, u32 edge, u32 textCol, float z)
 {
-    C2D_DrawRectSolid(x, y, z, w, h, pressed ? T().pressEdge : edge);
-    C2D_DrawRectSolid(x + 1, y + 1, z + 0.01f, w - 2, h - 2, pressed ? T().pressFill : T().cellFill);
+    Panel(x, y, z, w, h, pressed ? T().pressEdge : edge, pressed ? T().pressFill : T().cellFill, 1);
     Text(Tr(label), x + w / 2, y + h / 2 - 7, 0.5f, textCol, C2D_AlignCenter, z + 0.02f);
 }
 
@@ -1085,8 +1111,7 @@ static void DrawNotes(const UpdateStatus &st, float x, float y, float w, float b
     UpperCopy(ver, sizeof(ver), st.version);
     snprintf(head, sizeof(head), "%s %s   %u/%u", Tr("WHAT'S NEW"), ver, sNotePage + 1, pages);
     Text(head, x + w / 2, y, 0.45f, T().accent, C2D_AlignCenter, z);
-    C2D_DrawRectSolid(x, y + 16, z, w, by - y - 20, T().noteEdge);
-    C2D_DrawRectSolid(x + 1, y + 17, z + 0.01f, w - 2, by - y - 22, T().noteFill);
+    Panel(x, y + 16, z, w, by - y - 20, T().noteEdge, T().noteFill, 1);
     for (unsigned i = sNotePage * NOTE_ROWS; i < sNoteCount && i < (sNotePage + 1) * NOTE_ROWS; ++i) {
         // A release's heading (Update_FormatNotes) in the title colour
         const bool head = sNotes[i][0] == UPDATE_NOTES_HEADING;
@@ -1155,8 +1180,7 @@ static void DrawUpdatesTab()
         float x, w;
         UCellRect(i, &x, &w);
         const bool pressed = i == sPressed;
-        C2D_DrawRectSolid(x, UCELL_Y, 0.3f, w, UCELL_H, pressed ? T().pressEdge : CellEdge(i));
-        C2D_DrawRectSolid(x + 1, UCELL_Y + 1, 0.31f, w - 2, UCELL_H - 2, pressed ? T().pressFill : CellFill(i));
+        Panel(x, UCELL_Y, 0.3f, w, UCELL_H, pressed ? T().pressEdge : CellEdge(i), pressed ? T().pressFill : CellFill(i), 1);
         u32 col = T().text;
         if (i == 0)
             snprintf(val, sizeof(val), "%s", Tr(Port::betas ? "+ BETAS" : "STABLE"));
@@ -1171,8 +1195,7 @@ static void DrawUpdatesTab()
     }
 
     // Status: what the updater says (or the question before an install), with what is installed.
-    C2D_DrawRectSolid(8, USTATUS_Y, 0.3f, W - 16, USTATUS_H, T().boxEdge);
-    C2D_DrawRectSolid(9, USTATUS_Y + 1, 0.31f, W - 18, USTATUS_H - 2, T().boxFill);
+    Panel(8, USTATUS_Y, 0.3f, W - 16, USTATUS_H, T().boxEdge, T().boxFill, 1);
     Text(Tr("STATUS"), 14, USTATUS_Y + 4, 0.4f, dim, 0, 0.32f);
     char msg[96];
     snprintf(msg, sizeof(msg), "%s V%s", Tr("INSTALLED"), PORT_VERSION_LABEL);
@@ -1286,8 +1309,7 @@ static void DrawUpdatePrompt()
     sDrawnRevision = st.revision;
     const float z = 0.85f;
     C2D_DrawRectSolid(0, 0, 0.8f, W, H, C2D_Color32(0, 0, 0, 170));
-    C2D_DrawRectSolid(PBOX_X - 2, PBOX_Y - 2, 0.82f, PBOX_W + 4, PBOX_H + 4, T().popEdge);
-    C2D_DrawRectSolid(PBOX_X, PBOX_Y, 0.84f, PBOX_W, PBOX_H, T().popFill);
+    Panel(PBOX_X - 2, PBOX_Y - 2, 0.82f, PBOX_W + 4, PBOX_H + 4, T().popEdge, T().popFill, 2);
     const float cx = W / 2.0f, x = PBOX_X + 8, w = PBOX_W - 16, by = kPromptBy;
     const u32 text = T().text, dim = T().dim, warn = Rgb(240, 200, 80);
     char line[96], ver[48];
@@ -1514,8 +1536,7 @@ static void DrawAchievementsTab()
             continue;
         const AchievementInfo &a = achievementList[i];
         const bool got = a.achieved;
-        C2D_DrawRectSolid(6, y, 0.3f, W - 20, ACH_ROW - 3, got ? CellEdge(i) : T().tabOffEdge);
-        C2D_DrawRectSolid(7, y + 1, 0.31f, W - 22, ACH_ROW - 5, got ? CellFill(i) : T().tabOffFill);
+        Panel(6, y, 0.3f, W - 20, ACH_ROW - 3, got ? CellEdge(i) : T().tabOffEdge, got ? CellFill(i) : T().tabOffFill, 1);
         DrawAchMark(22, y + (ACH_ROW - 3) / 2.0f, 1, got, 0.32f);
         Text(a.name.c_str(), 38, y + 2, 0.45f, got ? T().accent : T().dim, 0, 0.33f);
         AchDateText(i, line, sizeof(line));
@@ -1546,8 +1567,7 @@ static void DrawAchievementsTab()
         float x;
         AchCellRect(c, &x);
         const bool pressed = sPressed == 100 + c;
-        C2D_DrawRectSolid(x, HEADER_H + 4, 0.55f, ACH_CELL_W, 26, pressed ? T().pressEdge : CellEdge(c + 1));
-        C2D_DrawRectSolid(x + 1, HEADER_H + 5, 0.56f, ACH_CELL_W - 2, 24, pressed ? T().pressFill : CellFill(c + 1));
+        Panel(x, HEADER_H + 4, 0.55f, ACH_CELL_W, 26, pressed ? T().pressEdge : CellEdge(c + 1), pressed ? T().pressFill : CellFill(c + 1), 1);
         Text(Tr(names[c]), x + 5, HEADER_H + 5, 0.34f, T().label, 0, 0.57f);
         Text(Tr(vals[c]), x + 5, HEADER_H + 15, 0.42f, T().text, 0, 0.57f);
     }
@@ -1556,11 +1576,10 @@ static void DrawAchievementsTab()
     if (sAchDetail >= 0 && sAchDetail < n) {
         const AchievementInfo &a = achievementList[sAchDetail];
         C2D_DrawRectSolid(0, HEADER_H, 0.8f, W, H - HEADER_H, C2D_Color32(0, 0, 0, 150));
-        C2D_DrawRectSolid(PBOX_X - 2, PBOX_Y - 2, 0.82f, PBOX_W + 4, PBOX_H + 4, T().popEdge);
-        C2D_DrawRectSolid(PBOX_X, PBOX_Y, 0.84f, PBOX_W, PBOX_H, T().popFill);
+        Panel(PBOX_X - 2, PBOX_Y - 2, 0.82f, PBOX_W + 4, PBOX_H + 4, T().popEdge, T().popFill, 2);
         DrawAchMark(W / 2.0f, PBOX_Y + 30, 3, a.achieved, 0.86f);
         Text(a.name.c_str(), W / 2.0f, PBOX_Y + 60, 0.55f, a.achieved ? T().accent : T().dim, C2D_AlignCenter, 0.9f);
-        Text(Tr(a.description.c_str()), PBOX_X + 12, PBOX_Y + 82, 0.45f, T().text, C2D_WordWrap, 0.9f, PBOX_W - 24);
+        Text(Tr(a.description.c_str()), W / 2.0f, PBOX_Y + 82, 0.45f, T().text, C2D_AlignCenter | C2D_WordWrap, 0.9f, PBOX_W - 24);
         AchDateText(sAchDetail, line, sizeof(line));
         char status[96];
         if (!a.achieved)
@@ -1649,8 +1668,7 @@ static void DrawAchToast()
         return;
     }
     const float x = 4, y = 2, w = W - 8, h = 40;
-    C2D_DrawRectSolid(x - 1, y - 1, 0.9f, w + 2, h + 2, T().accent);
-    C2D_DrawRectSolid(x, y, 0.91f, w, h, T().popFill);
+    Panel(x - 1, y - 1, 0.9f, w + 2, h + 2, T().accent, T().popFill, 1);
     DrawAchMark(x + 20, y + h / 2, 1.5f, true, 0.92f);
     Text(Tr("ACHIEVEMENT!"), x + 40, y + 4, 0.42f, T().accent, 0, 0.93f);
     Text(achievementList[sToastAch].name.c_str(), x + 40, y + 19, 0.55f, T().text, 0, 0.93f);
@@ -1734,8 +1752,7 @@ static void Draw()
     if (phase) {
         C2D_DrawRectSolid(0, 0, 0.8f, W, H, C2D_Color32(0, 0, 0, 170));
         const float bx = 30, by = 80, bw = W - 60, bh = 84;
-        C2D_DrawRectSolid(bx - 2, by - 2, 0.82f, bw + 4, bh + 4, T().popEdge);
-        C2D_DrawRectSolid(bx, by, 0.84f, bw, bh, T().popFill);
+        Panel(bx - 2, by - 2, 0.82f, bw + 4, bh + 4, T().popEdge, T().popFill, 2);
         Text(title, W / 2.0f, by + 8, 0.6f, Rgb(255, 255, 255), C2D_AlignCenter, 0.95f); // above the dimmer and the box
         const float px = bx + 14, py = by + 44, pw = bw - 28, ph = 24;
         C2D_DrawRectSolid(px, py, 0.86f, pw, ph, Rgb(44, 54, 70));
@@ -1883,8 +1900,7 @@ static void DrawLoading()
     DrawBackdrop(0);
 
     const float bx = 20, by = 62, bw = W - 40, bh = 116;
-    C2D_DrawRectSolid(bx - 1, by - 1, 0.3f, bw + 2, bh + 2, T().noteEdge);
-    C2D_DrawRectSolid(bx, by, 0.31f, bw, bh, T().noteFill);
+    Panel(bx - 1, by - 1, 0.3f, bw + 2, bh + 2, T().noteEdge, T().noteFill, 1);
     Text(Tr(sLoad.title), W / 2.0f, by + 10, 0.55f, T().accent, C2D_AlignCenter, 0.4f);
     Text(Tr(sLoad.step), W / 2.0f, by + 34, 0.5f, T().text, C2D_AlignCenter, 0.4f);
     Text(sLoad.file, W / 2.0f, by + 52, 0.4f, T().dim, C2D_AlignCenter, 0.4f);
@@ -2069,8 +2085,7 @@ int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, co
         C2D_TargetClear(sTarget, T().bg);
         C2D_SceneBegin(sTarget);
         DrawBackdrop(0);
-        C2D_DrawRectSolid(bx - 2, by - 2, 0.82f, bw + 4, bh + 4, T().popEdge);
-        C2D_DrawRectSolid(bx, by, 0.84f, bw, bh, T().popFill);
+        Panel(bx - 2, by - 2, 0.82f, bw + 4, bh + 4, T().popEdge, T().popFill, 2);
         Text(title, W / 2.0f, by + 10, 0.6f, T().accent, C2D_AlignCenter, 0.95f);
         for (int i = 0; i < lineCount; ++i)
             Text(lines[i], bx + 12, by + 38 + i * 34, 0.45f, i == lineCount - 1 && lineCount > 1 ? T().dim : T().text, C2D_WordWrap, 0.95f, bw - 24);
