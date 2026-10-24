@@ -1827,6 +1827,25 @@ static bool HeapWalk(const char *where)
     }
     return true;
 }
+void DevTools::ShotFromFile()
+{
+    static u64 last;
+    const u64 now = svcGetSystemTick();
+    if (now - last < SYSCLOCK_ARM11 / 2)
+        return;
+    last = now;
+    char path[160];
+    snprintf(path, sizeof(path), "%s/shot.txt", kDir);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+    const int c = fgetc(f);
+    fclose(f);
+    remove(path);
+    snprintf(path, sizeof(path), "%s/shot-%s.raw", kDir, c == 'b' ? "bottom" : "top");
+    WriteShot(c == 'b' ? 2 : 1, path);
+}
+
 int DevTools::AskFromFile()
 {
     char path[160];
