@@ -686,6 +686,98 @@ static bool LoadArt(const uint16 *pal = NULL)
     return true;
 }
 
+// The colours a sprite file's first sheet was drawn with: the global colour table of its GIF (RGB565 out). Its frames
+// index that table as they index the game's palette, and unlike the palette it does not depend on the scene (the
+// menus' sprites use rows the game config does not hold).
+static bool SheetPalette(const char *bin, uint16 *pal)
+{
+    char path[0x100], sheet[0x100];
+    snprintf(path, sizeof(path), "Data/Sprites/%s", bin);
+    FileInfo info;
+    InitFileInfo(&info);
+    if (!LoadFile(&info, path, FMODE_RB))
+        return false;
+    bool ok = ReadInt32(&info, false) == RSDK_SIGNATURE_SPR;
+    if (ok) {
+        ReadInt32(&info, false); // frame count
+        ok = ReadInt8(&info) > 0;
+        if (ok)
+            ReadString(&info, sheet);
+    }
+    CloseFile(&info);
+    if (!ok)
+        return false;
+    snprintf(path, sizeof(path), "Data/Sprites/%s", sheet);
+    InitFileInfo(&info);
+    if (!LoadFile(&info, path, FMODE_RB))
+        return false;
+    uint8 head[13], rgb[256 * 3];
+    ReadBytes(&info, head, sizeof(head));
+    const int n = 2 << (head[10] & 7);
+    ok = !memcmp(head, "GIF", 3) && (head[10] & 0x80);
+    if (ok)
+        ReadBytes(&info, rgb, n * 3);
+    CloseFile(&info);
+    if (!ok)
+        return false;
+    for (int i = 0; i < 256; ++i)
+        pal[i] = i < n ? (uint16)(((rgb[i * 3] >> 3) << 11) | ((rgb[i * 3 + 1] >> 2) << 5) | (rgb[i * 3 + 2] >> 3)) : 0;
+    return true;
+}
+
+// The chaos emeralds as the save select draws them (UI/SaveSelect.bin animation 4: the seven, then the empty slot),
+// copied at boot through their sheet's colours into a texture of ours; the big menu sheet itself goes with the first
+// scene (stage scope).
+enum { EMERALD_FRAMES = 8, EM_TEX_W = 128, EM_TEX_H = 32 };
+static ArtFrame sEmerald[EMERALD_FRAMES];
+static C3D_Tex sEmeraldTex;
+static bool sEmeraldReady;
+
+static void LoadEmeraldArt()
+{
+    const uint16 id = LoadSpriteAnimation("UI/SaveSelect.bin", SCOPE_STAGE);
+    static uint16 pal[256];
+    if (id >= SPRFILE_COUNT || !SheetPalette("UI/SaveSelect.bin", pal))
+        return;
+    const SpriteAnimation &sa = spriteAnimationList[id];
+    if (!sa.animations || !sa.frames || sa.animCount <= 4 || sa.animations[4].frameCount < EMERALD_FRAMES)
+        return;
+    if (!C3D_TexInit(&sEmeraldTex, EM_TEX_W, EM_TEX_H, GPU_RGBA5551))
+        return;
+    u16 *tex = (u16 *)sEmeraldTex.data;
+    memset(tex, 0, EM_TEX_W * EM_TEX_H * 2);
+    int sx = 0;
+    for (int i = 0; i < EMERALD_FRAMES; ++i) {
+        const SpriteFrame &f   = sa.frames[sa.animations[4].frameListOffset + i];
+        const GFXSurface &surf = gfxSurface[f.sheetID];
+        if (!surf.pixels || f.width <= 0 || f.height <= 0 || f.height > EM_TEX_H || sx + f.width > EM_TEX_W ||
+            f.sprX + f.width > surf.width || f.sprY + f.height > surf.height) {
+            C3D_TexDelete(&sEmeraldTex);
+            return;
+        }
+        for (int y = 0; y < f.height; ++y)
+            for (int x = 0; x < f.width; ++x) {
+                const uint8 index = surf.pixels[(f.sprY + y) * surf.width + f.sprX + x];
+                if (!index)
+                    continue;
+                const uint16 c = pal[index];
+                const u32 tx = sx + x, ty = y;
+                const u32 o  = (((ty >> 3) * (EM_TEX_W >> 3) + (tx >> 3)) << 6) | (tx & 1) | ((ty & 1) << 1) | ((tx & 2) << 1) | ((ty & 2) << 2)
+                              | ((tx & 4) << 2) | ((ty & 4) << 3);
+                tex[o] = (u16)(((c >> 11) << 11) | (((c >> 6) & 31) << 6) | ((c & 31) << 1) | 1);
+            }
+        ArtFrame &a  = sEmerald[i];
+        a.w = f.width, a.h = f.height, a.px = f.pivotX, a.py = f.pivotY;
+        a.sub        = { (u16)f.width, (u16)f.height, sx / (float)EM_TEX_W, 1, (sx + f.width) / (float)EM_TEX_W, 1 - f.height / (float)EM_TEX_H };
+        a.img.tex    = &sEmeraldTex;
+        a.img.subtex = &a.sub;
+        sx += f.width + 1;
+    }
+    C3D_TexFlush(&sEmeraldTex);
+    C3D_TexSetFilter(&sEmeraldTex, GPU_NEAREST, GPU_NEAREST);
+    sEmeraldReady = true;
+}
+
 void BottomUi::LoadArtAtBoot()
 {
     // Once the game config (and with it the global palette rows the HUD uses) is loaded and before the first scene:
@@ -695,7 +787,8 @@ void BottomUi::LoadArtAtBoot()
     LoadSpriteAnimation("Global/Ring.bin", SCOPE_GLOBAL);
     LoadSpriteAnimation("Global/ItemBox.bin", SCOPE_GLOBAL);
     LoadArt(globalPalette[0]); // no scene has set the palette yet: the game config's global rows, where the HUD's are
-    DEV_LOG("hud art at boot: %s", sArtReady ? "ready" : "NOT READY");
+    LoadEmeraldArt();
+    DEV_LOG("hud art at boot: %s, emeralds %s", sArtReady ? "ready" : "NOT READY", sEmeraldReady ? "ready" : "NOT READY");
 }
 
 // Frame `id` drawn as the game does at (x, y): its pivot from there, `s` times its size.
@@ -942,8 +1035,13 @@ static void DrawGameTab()
     static const u32 kEmerald[7] = { Rgb(60, 200, 90),  Rgb(240, 210, 60), Rgb(70, 120, 240), Rgb(170, 90, 220),
                                      Rgb(190, 195, 205), Rgb(80, 220, 230), Rgb(235, 70, 70) };
     for (int i = 0; i < 7; ++i) {
-        const float ex = 90 + i * 22, ey = y + 8;
+        const float ex = 84 + i * 26, ey = y + 8; // the save select's icons are 24 px wide at twice their size
         const bool got = gi.emeralds > 0 && (gi.emeralds & (1 << i));
+        if (sEmeraldReady) { // the save select's: each one, or the empty slot, centred on its place
+            const ArtFrame &a = sEmerald[got ? i : 7];
+            C2D_DrawImageAt(a.img, ex - a.w, ey - a.h, 0.3f, NULL, 2, 2);
+            continue;
+        }
         const u32 col = got ? kEmerald[i] : T().tabOffEdge;
         C2D_DrawTriangle(ex, ey - 7, col, ex - 7, ey, col, ex + 7, ey, col, 0.3f);
         C2D_DrawTriangle(ex - 7, ey, col, ex + 7, ey, col, ex, ey + 7, col, 0.3f);
