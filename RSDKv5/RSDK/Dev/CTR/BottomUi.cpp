@@ -247,9 +247,9 @@ static const Button kButtons[] = {
 // order they show in; DEBUG only with the dev tools.
 enum Tab { TAB_GAME, TAB_OPTIONS, TAB_DEBUG, TAB_UPDATES, TAB_ACH };
 #if MANIA_DEV_TOOLS
-static const int kTabs[] = { TAB_GAME, TAB_UPDATES, TAB_ACH, TAB_OPTIONS, TAB_DEBUG };
+static const int kTabs[] = { TAB_GAME, TAB_ACH, TAB_OPTIONS, TAB_UPDATES, TAB_DEBUG };
 #else
-static const int kTabs[] = { TAB_GAME, TAB_UPDATES, TAB_ACH, TAB_OPTIONS };
+static const int kTabs[] = { TAB_GAME, TAB_ACH, TAB_OPTIONS, TAB_UPDATES };
 #endif
 enum { TAB_SHOWN = sizeof(kTabs) / sizeof(kTabs[0]) };
 
