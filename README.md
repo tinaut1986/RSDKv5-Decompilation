@@ -56,6 +56,10 @@ If that folder has no `Data.rsdk`, the game reads the one of the original 3DS po
 in place, and at the first start it offers once to copy that folder's saves. Both applications can be installed side
 by side.
 
+**Sonic Mania Plus** (Mighty, Ray, Encore mode) is off by default, as the decompilation's license asks of every build
+given to anyone. When the game data has the Plus content, the first start asks whether to turn it on; do so only if
+you own Sonic Mania Plus. It can be changed later in OPTIONS > PLUS (from the next start).
+
 ## Updates
 
 Open **UPDATES**, pick the **STABLE** or **+ BETAS** channel and install. The notes show every release between the

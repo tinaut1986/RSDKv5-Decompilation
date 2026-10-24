@@ -169,6 +169,14 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   folder's saves (SaveData, Options, TimeAttackDB, ReplayDB, Replay_*.bin) when ours has no SaveData.bin; an existing
   file of ours is never overwritten. Checked in Azahar with the pack and a test file moved there. The CIA's publisher is
   now "tinaut1986, SaturnSH2x2, Rubberduckycooly" and README lists this fork next to SaturnSH2x2's.
+- [ ] U1.6 (2026-10-24, `feat/plus-option`) Sonic Mania Plus off by default (LICENSE.md: every build given to anyone
+  must start with the DLC off; an option off by default is allowed). The betas v0.1.0-v0.1.2 were built with it on
+  (no AUTOBUILD). Now `DummyCore` leaves it off on the 3DS, `Port::ApplyPlus` hands OPTIONS > PLUS (`plus=` in
+  port-settings.ini) to the engine at boot, and `Port::OfferPlus` asks once (`plusasked=`) when the data has
+  `Data/Sprites/Players/Mighty.bin` (the owner's Steam Data.rsdk has it; the data cannot tell whether the DLC was
+  bought, so the question says to turn it on only with Plus). OPTIONS cells are 30 px now (seven of them).
+  Achievements: the decompilation's dummy core already keeps the 18 PC achievements locally (Achievements.bin, a
+  popup "Achievement!" in the game's font); not checked on the console yet.
 
 ## Decisions log
 

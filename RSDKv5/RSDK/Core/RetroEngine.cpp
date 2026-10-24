@@ -105,6 +105,8 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         DEV_LOG("RenderDevice::Init (early) done, ok=%d", (int)renderOk);
         BottomUi::Init();
         Port::OfferSaveImport(); // before the game reads its saves (Upstream.hpp)
+        Port::OfferPlus();       // once, when the data has the Plus content
+        Port::ApplyPlus();       // OPTIONS > PLUS (off by default), before the game starts
         BottomUi::LoadBegin("Starting Sonic Mania");
 #endif
         InitEngine();

@@ -846,7 +846,8 @@ static void DrawGameTab()
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_RENDERER, OPT_LANGUAGE, OPT_THEME, OPT_COUNT };
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_RENDERER, OPT_LANGUAGE, OPT_THEME, OPT_PLUS, OPT_COUNT };
+enum { OPT_W = 150, OPT_H = 30, OPT_PITCH = 34 };
 // THEME opens a list over the page (the dropdown); its rows are hits OPT_LIST + i, a touch elsewhere OPT_LIST_OUT.
 enum { OPT_LIST = 100, OPT_LIST_OUT = 99, LIST_ROW_H = 22 };
 static bool sThemeOpen;
@@ -854,7 +855,7 @@ static bool sThemeOpen;
 static void OptRect(int i, float *x, float *y)
 {
     *x = 8 + (i % 2) * 154;
-    *y = HEADER_H + 8 + (i / 2) * 38;
+    *y = HEADER_H + 8 + (i / 2) * OPT_PITCH;
 }
 
 static void OptValue(int i, char *o, unsigned cap, u32 *col)
@@ -885,6 +886,10 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
             snprintf(o, cap, "%s", Tr(T().name));
             *col = T().accent;
             break;
+        case OPT_PLUS: // a change counts from the next start: until then in the warning colour
+            snprintf(o, cap, "%s", Tr(Port::plus ? "ON" : "OFF"));
+            *col = Port::plus != Port::PlusApplied() ? warn : Port::plus ? good : dim;
+            break;
         default:
             snprintf(o, cap, "%s", Port::GpuMode() ? "GPU" : "CPU");
             *col = Port::GpuMode() ? good : dim;
@@ -892,7 +897,7 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "RENDERER", "LANGUAGE", "THEME" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "RENDERER", "LANGUAGE", "THEME", "PLUS" };
 static const char *const kOptHelp[OPT_COUNT] = {
     "AUTO SKIPS A LATE PICTURE, LOCK 30 DRAWS EVERY OTHER ONE, NO SKIP SLOWS DOWN",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
@@ -900,6 +905,7 @@ static const char *const kOptHelp[OPT_COUNT] = {
     "GPU DRAWS WHAT IT CAN (FASTER), CPU IS THE ORIGINAL SOFTWARE RENDERER",
     "FOLLOWS THE GAME'S LANGUAGE: CHANGE IT IN THE GAME'S OPTIONS",
     "THE COLOURS OF THIS SCREEN",
+    "MIGHTY, RAY AND ENCORE MODE, ONLY IF YOU OWN SONIC MANIA PLUS. IT CHANGES AT THE NEXT START",
 };
 static int sLastOpt = -1;
 
@@ -970,6 +976,7 @@ static void TapOption(int i)
         case OPT_HUD: Port::hud = (Port::hud + 1) % 3; break;
         case OPT_LANGUAGE: break; // only its help
         case OPT_THEME: sThemeOpen = true; break;
+        case OPT_PLUS: Port::plus = !Port::plus; break;
         default: Port::SetGpuMode(!Port::GpuMode()); break;
     }
     sLastOpt = i;
@@ -984,8 +991,8 @@ static void DrawOptionsTab()
         const bool pressed = i == sPressed;
         // MANIA: the colours run along the rows and shift by one each row, so no two neighbours match
         const int tint = i + i / 2;
-        C2D_DrawRectSolid(x, y, 0.3f, 150, 32, pressed ? T().pressEdge : CellEdge(tint));
-        C2D_DrawRectSolid(x + 1, y + 1, 0.31f, 148, 30, pressed ? T().pressFill : CellFill(tint));
+        C2D_DrawRectSolid(x, y, 0.3f, OPT_W, OPT_H, pressed ? T().pressEdge : CellEdge(tint));
+        C2D_DrawRectSolid(x + 1, y + 1, 0.31f, OPT_W - 2, OPT_H - 2, pressed ? T().pressFill : CellFill(tint));
         C2D_DrawRectSolid(x + 1, y + 1, 0.32f, 148, 1, CellLine(tint));
         u32 col;
         OptValue(i, val, sizeof(val), &col);
@@ -1004,7 +1011,7 @@ static void DrawOptionsTab()
     }
     // What the last option touched does
     if (sLastOpt >= 0)
-        Text(Tr(kOptHelp[sLastOpt]), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * 38 + 6, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
+        Text(Tr(kOptHelp[sLastOpt]), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * OPT_PITCH + 4, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
     Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, T().footer, C2D_AlignCenter);
     Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, T().footer, C2D_AlignCenter);
     if (sThemeOpen)
@@ -1879,7 +1886,7 @@ void BottomUi::Update()
             for (int i = 0; i < OPT_COUNT; ++i) {
                 float x, y;
                 OptRect(i, &x, &y);
-                if (t.px >= x && t.px < x + 150 && t.py >= y && t.py < y + 32)
+                if (t.px >= x && t.px < x + OPT_W && t.py >= y && t.py < y + OPT_H)
                     hit = i;
             }
         }
