@@ -112,6 +112,7 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         InitEngine();
         DEV_LOG("InitEngine done, initialized=%d", (int)engine.initialized);
 #if RETRO_PLATFORM == RETRO_3DS && !RETRO_USE_MOD_LOADER
+        BottomUi::LoadArtAtBoot(); // the GAME tab's art from the game's own sprites, before the first scene
         BottomUi::LoadEnd();
 #endif
 #if RETRO_USE_MOD_LOADER

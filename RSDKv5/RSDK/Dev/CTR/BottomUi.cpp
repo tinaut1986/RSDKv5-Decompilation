@@ -561,8 +561,9 @@ static const SpriteFrame *FindFrame(const char *file, int anim, int frame)
     return NULL;
 }
 
-// Once, when the stage has the sheets: false until then (and for good if the texture cannot be made).
-static bool LoadArt()
+// Once, when the sheets are loaded: false until then (and for good if the texture cannot be made). `pal`: the colours
+// to copy through (default: the top lines' bank of the scene on screen).
+static bool LoadArt(const uint16 *pal = NULL)
 {
     if (sArtReady || sArtFailed)
         return sArtReady;
@@ -611,7 +612,8 @@ static bool LoadArt()
     }
     u16 *tex = (u16 *)sArtTex.data;
     memset(tex, 0, ART_W * ART_H * 2);
-    const uint16 *pal = fullPalette[gfxLineBuffer[0]]; // the top lines' bank: the HUD's colours
+    if (!pal)
+        pal = fullPalette[gfxLineBuffer[0]]; // the top lines' bank: the HUD's colours
     for (int i = 0; i < ART_COUNT; ++i) {
         if (!frames[i])
             continue;
@@ -645,6 +647,18 @@ static bool LoadArt()
     C3D_TexSetFilter(&sArtTex, GPU_NEAREST, GPU_NEAREST);
     sArtReady = true;
     return true;
+}
+
+void BottomUi::LoadArtAtBoot()
+{
+    // Once the game config (and with it the global palette rows the HUD uses) is loaded and before the first scene:
+    // the three sprite files, kept for the whole game (global scope; the stages that load them get the same entry),
+    // so the GAME tab has the game's art on the title screen and in the menus too. A few hundred KB of the STG pool.
+    LoadSpriteAnimation("Global/HUD.bin", SCOPE_GLOBAL);
+    LoadSpriteAnimation("Global/Ring.bin", SCOPE_GLOBAL);
+    LoadSpriteAnimation("Global/ItemBox.bin", SCOPE_GLOBAL);
+    LoadArt(globalPalette[0]); // no scene has set the palette yet: the game config's global rows, where the HUD's are
+    DEV_LOG("hud art at boot: %s", sArtReady ? "ready" : "NOT READY");
 }
 
 // Frame `id` drawn as the game does at (x, y): its pivot from there, `s` times its size.
@@ -838,19 +852,21 @@ static void DrawGameTab()
         NumberAnchor(8 + bw - 8, y + bh - 5, s, &nx, &ny);
         if (inStage)
             DrawNumber(gi.score, 0, nx, ny, s, 0.33f);
-        // LIVES: the head, the "x" and the count as the HUD places them (the count 48 px on, 40 under ten)
+        // LIVES: the head (Sonic's until a character is known) and the "x" as the HUD places them; the count right-aligned
+        // like the rings above it
         BoxFrame(3, rx, y, bw, bh);
         int head = -1;
         for (int c = gi.character; c > 0; c >>= 1)
             ++head;
-        if (head >= 0 && head < 5) {
-            const ArtFrame &hf = sArt[ART_LIFE + head];
-            const float lx = rx + 10 - hf.px * s, ly = y + (bh - hf.h * s) / 2 - hf.py * s;
-            DrawArt(ART_LIFE + head, lx, ly, s, 0.33f);
-            DrawArt(ART_X, lx, ly, s, 0.33f);
-            if (inStage)
-                DrawNumber(gi.lives, 0, lx + (gi.lives < 10 ? 40 : 48) * s, ly, s, 0.33f);
-        }
+        if (head < 0 || head >= 5)
+            head = 0;
+        const ArtFrame &hf = sArt[ART_LIFE + head];
+        const float lx = rx + 10 - hf.px * s, ly = y + (bh - hf.h * s) / 2 - hf.py * s;
+        DrawArt(ART_LIFE + head, lx, ly, s, 0.33f);
+        DrawArt(ART_X, lx, ly, s, 0.33f);
+        NumberAnchor(rx + bw - 8, y + bh - 5, s, &nx, &ny);
+        if (inStage)
+            DrawNumber(gi.lives, 0, nx, ny, s, 0.33f);
         y += bh + 8;
     }
     else {

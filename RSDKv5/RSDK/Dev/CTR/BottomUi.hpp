@@ -32,6 +32,9 @@ void Update();
 // A question over the whole bottom screen, before the game runs (the save import): a title, lines of text and one or
 // two buttons (A / B or a touch), in its own loop. 1: the first button, 0: the second, -1: the app is closing.
 int Ask(const char *title, const char *const *lines, int lineCount, const char *yes, const char *no);
+// After the engine's init: loads the game's HUD, ring and item box sprites for the whole game and copies them into
+// the bottom screen's art, so the GAME tab draws the game's labels and icons from the start.
+void LoadArtAtBoot();
 // The dev tools' SITE TOUCH: one tap at (x, y) on the next Update, as if the screen had been touched there.
 void Touch(int x, int y);
 // The FPS counter of OPTIONS > SHOW FPS on the top screen: drawn with citro2d into the top target at the end of a
@@ -62,6 +65,7 @@ inline void LoadPhase(const char *, float, float) {}
 inline void LoadItem(int, int) {}
 inline void LoadDetail(const char *) {}
 inline void LoadEnd() {}
+inline void LoadArtAtBoot() {}
 } // namespace BottomUi
 } // namespace RSDK
 

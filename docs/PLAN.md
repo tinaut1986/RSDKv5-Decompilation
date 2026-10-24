@@ -157,7 +157,10 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   frame when the time changes (`BottomUi::DrawInTopFrame`), so the hundredths run at the game's rate without a bottom
   frame of its own (which waits for the GPU). To check: the cost in `TIMES`/`STATE` on the 2DS, and that it never tears.
   Lesson: citro3d textures written by hand go top row first (row 0 of the tiles is the image's top, with citro2d's
-  `top = 1 - y / h` subtexture); flipping the rows drew nothing.
+  `top = 1 - y / h` subtexture); flipping the rows drew nothing. Since 2026-10-24 the art is made at boot
+  (`BottomUi::LoadArtAtBoot`: the three sprite files loaded with global scope, copied through `globalPalette[0]`, the
+  game config's rows, since no scene has set `fullPalette` yet: it was all black), so the GAME tab never falls back to
+  text; the lives count is right-aligned like the rings.
   Under the emeralds (the SHIELD line and the FPS footer are gone): a row of the item boxes picked, with the game's
   contents icons (Global/ItemBox.bin animation 2, in the same texture, now 256x128 RGBA5551). `PortGame_PollItems`
   (GameInfo.c) reports each box that reaches ItemBox_State_IconFinish once; an icon stays 2 s, a lasting power (shield,
