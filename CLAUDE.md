@@ -105,6 +105,11 @@ tools/site.sh "SET ufonofall 1"             # debug: the Special Stage's holes a
 tools/site.sh EMIT                          # pcopy split by command type (layers, sprites, 3D, lines...)
 tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU drew too; right = right eye in 3D)
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
+tools/site.sh "SET heapcheck 1"             # debug: walk the heap every frame and loading step, log the first broken chunk
+tools/site.sh "SET music 0"                 # debug: no music streams (tell a music fault from others); not saved
+tools/scene-sweep.sh [-i IP] name           # load every scene, log each load's storage pools; stops if the game dies
+tools/ss-tour.sh [-i IP]                    # Special Stages 4, 4+, 7, 1+, 5, 6, 7+: fps and the floor's reason every 5 s
+tools/fbi-install.py IP [file.cia]          # send a CIA to FBI's Remote Install when the game's FTP is down
 ```
 
 Files on the SD (`sdmc:/3ds/Sonic Mania 3DS/`): `Data.rsdk`, `debug/log.txt` (boot steps), `debug/perf-NNNN.csv` (one row a
@@ -113,8 +118,8 @@ name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/lu
 `arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
 `crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).
 
-- The owner's consoles: an **Old 2DS** (Old 3DS CPU, 192.168.1.141) and a **New 3DS** (192.168.1.133, 3D screen: check
-  stereo there). IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
+- The owner's consoles: an **Old 2DS** (Old 3DS CPU; 192.168.1.141, on 2026-10-24 it had .133) and a **New 3DS**
+  (it had .133 before; 3D screen: check stereo there): the bottom screen's DEBUG tab shows the IP. IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
 - **FRAME SKIP is on by default** (`Port::frameSkip = true` in the code; `port-settings.ini` overrides it): with it on, the
   `fps` of `SITE STATE` counts logic passes, not drawn frames. Turn it off (`SET frameskip 0`) before any measurement,
   or use a recorded run (`RUNPLAY`), whose result counts drawn frames.
