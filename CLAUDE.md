@@ -69,7 +69,7 @@ goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`). Without
   history and we do not use it.
 - Releases: `tools/version.sh` gives the version from git; a tag `vX.Y.Z` runs `.github/workflows/build-release.yml`, which
   builds the CIA and publishes it (beta = pre-release, built with the dev tools, off a `release/*` branch; stable on
-  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.2.3` since 2026-10-24, after the `v0.2.2` stable) and the open feature branches are on `origin`.
+  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.2.4` since 2026-10-24, after the `v0.2.3` stable) and the open feature branches are on `origin`.
 - Commit only when the owner asks; the owner asked for commits at the end of each long task.
 - **Issues** are enabled on `origin` (2026-10-22): pending work, bugs and the owner's requests go there (English, label
   `bug`/`enhancement`, sections Seen / Likely cause / To try / To check, as in sm-3ds); docs keep the technical record.
@@ -125,8 +125,9 @@ name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/lu
 `arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
 `crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).
 
-- The owner's consoles: an **Old 2DS** (Old 3DS CPU; 192.168.1.141, on 2026-10-24 it had .133) and a **New 3DS**
-  (it had .133 before; 3D screen: check stereo there): the bottom screen's DEBUG tab shows the IP. IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
+- The owner's consoles: an **Old 2DS** (Old 3DS CPU; 192.168.1.133 on 2026-10-24, .141 before) and a **New 3DS**
+  (192.168.1.139 on 2026-10-24; 3D screen: check stereo there). Both got the v0.2.2 stable that day (no FTP: FBI to
+  put a dev build back): the bottom screen's DEBUG tab shows the IP. IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
 - **FRAME SKIP is on by default** (`Port::frameSkip = true` in the code; `port-settings.ini` overrides it): with it on, the
   `fps` of `SITE STATE` counts logic passes, not drawn frames. Turn it off (`SET frameskip 0`) before any measurement,
   or use a recorded run (`RUNPLAY`), whose result counts drawn frames.

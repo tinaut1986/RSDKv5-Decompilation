@@ -2,11 +2,66 @@
 #include "main.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS 
-// Heap size 0: libctru gives the application heap everything the process may commit minus the
-// linear heap, so the same build starts on the Old 3DS (64 MB mode, where a fixed 52 MB heap plus
-// the code did not fit and __system_allocateHeaps panicked) and on the New 3DS (124 MB mode).
-__attribute__((weak)) u32 __ctru_heap_size        = 0;
-__attribute__((weak)) u32 __ctru_linear_heap_size = 0x500000; // 5 MB: the screens, the GPU presentation and the bottom-screen UI live here
+// The heaps, sized from what the process may commit (as ../legend-of-doom-3ds memory.cpp): the application heap gets
+// all of it but 5 MB of linear heap (the screens, the GPU presentation, the bottom-screen UI), up to 92 MB: its address
+// window is 96 MB (OS_HEAP_AREA), and in the New 3DS's 124 MB mode libctru's own split asked ~105 MB and panicked
+// before main (v0.2.2; the dev builds' larger code had kept it just under). What the cap leaves goes to the linear
+// heap, up to 32 MB. The Old 3DS / 2DS (80 MB mode) gets the same split as before.
+extern "C" {
+extern u32 __ctru_heap, __ctru_linear_heap;
+extern char *fake_heap_start, *fake_heap_end;
+u32 __ctru_heap_size        = 0;
+u32 __ctru_linear_heap_size = 0x500000;
+
+void __system_allocateHeaps(void)
+{
+    const u32 pageMask = 0xFFF, linearMin = 0x500000, linearMax = 32 << 20, step = 4 << 20;
+    const u32 heapMax = (OS_HEAP_AREA_END - OS_HEAP_AREA_BEGIN) - (4 << 20);
+    Handle limit = 0;
+    if (R_FAILED(svcGetResourceLimit(&limit, CUR_PROCESS_HANDLE)))
+        svcBreak(USERBREAK_PANIC);
+    s64 maxCommit = 0, curCommit = 0;
+    ResourceLimitType type = RESLIMIT_COMMIT;
+    svcGetResourceLimitLimitValues(&maxCommit, limit, &type, 1);
+    svcGetResourceLimitCurrentValues(&curCommit, limit, &type, 1);
+    svcCloseHandle(limit);
+    const u32 remaining = (u32)(maxCommit - curCommit) & ~pageMask;
+    if (remaining <= linearMin + (24 << 20))
+        svcBreak(USERBREAK_PANIC);
+
+    u32 heap = remaining - linearMin;
+    if (heap > heapMax)
+        heap = heapMax;
+    heap &= ~pageMask;
+    for (;;) { // a smaller heap rather than a panic if the window will not take it
+        __ctru_heap = 0;
+        if (R_SUCCEEDED(svcControlMemory(&__ctru_heap, OS_HEAP_AREA_BEGIN, 0, heap, MEMOP_ALLOC, (MemPerm)(MEMPERM_READ | MEMPERM_WRITE))))
+            break;
+        if (heap < (24 << 20) + step)
+            svcBreak(USERBREAK_PANIC);
+        heap -= step;
+    }
+    __ctru_heap_size = heap;
+
+    u32 linear = remaining - heap;
+    if (linear > linearMax)
+        linear = linearMax;
+    linear &= ~pageMask;
+    for (;;) { // contiguous linear memory can be scarcer than the commit count says
+        __ctru_linear_heap = 0;
+        if (R_SUCCEEDED(svcControlMemory(&__ctru_linear_heap, 0, 0, linear, MEMOP_ALLOC_LINEAR, (MemPerm)(MEMPERM_READ | MEMPERM_WRITE))))
+            break;
+        if (linear <= linearMin)
+            svcBreak(USERBREAK_PANIC);
+        linear = linear > linearMin + step ? linear - step : linearMin;
+    }
+    __ctru_linear_heap_size = linear;
+
+    mappableInit(OS_MAP_AREA_BEGIN, OS_MAP_AREA_END);
+    fake_heap_start = (char *)__ctru_heap;
+    fake_heap_end   = fake_heap_start + __ctru_heap_size;
+}
+}
 
 bool RSDK::printToConsole;
 #endif

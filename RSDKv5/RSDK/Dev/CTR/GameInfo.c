@@ -13,12 +13,11 @@ void PortGame_GetInfo(PortGameInfo *out)
     out->gameMode  = globals->gameMode;
     out->character = globals->playerID & 0xFF;
     out->sidekick  = (globals->playerID >> 8) & 0xFF;
-    if (globals->saveSlotID != NO_SAVE_SLOT) {
+    if (globals->saveSlotID != NO_SAVE_SLOT)
         out->saveSlot = globals->saveSlotID;
-        SaveRAM *save = SaveGame_GetSaveRAM();
-        if (save)
-            out->emeralds = save->collectedEmeralds;
-    }
+    // The run's save RAM: the slot's, or with no save globals->noSaveSlot, which keeps the emeralds of that run too
+    if (SaveGame && SaveGame->saveRAM)
+        out->emeralds = SaveGame_GetSaveRAM()->collectedEmeralds;
     if (Player && Player->classID) {
         EntityPlayer *p = RSDK_GET_ENTITY(SLOT_PLAYER1, Player);
         if (p && p->classID == Player->classID) {
