@@ -20,6 +20,7 @@
 #include "RSDK/Dev/CTR/Updater.hpp"
 #include "RSDK/Dev/CTR/PortText.hpp"
 #include <time.h>
+#include <math.h>
 
 using namespace RSDK;
 using Port::Tr;
@@ -969,6 +970,16 @@ static const char *const kOptHelp[OPT_COUNT] = {
 };
 static int sLastOpt = -1;
 
+// What the option does; FRAMES says what its current mode does.
+static const char *OptHelp(int i)
+{
+    if (i != OPT_FRAMES)
+        return kOptHelp[i];
+    if (Port::lock30)
+        return "DRAWS EVERY OTHER PICTURE; THE GAME STAYS AT FULL SPEED";
+    return Port::frameSkip ? "SKIPS A LATE PICTURE SO THE GAME KEEPS ITS SPEED" : "DRAWS EVERY PICTURE; THE GAME MAY RUN SLOW IN SOME PLACES";
+}
+
 // The dropdown's box: over the THEME cell, moved up when it would run off the screen.
 static void ThemeListRect(float *x, float *y, float *w, float *h)
 {
@@ -1066,13 +1077,14 @@ static void DrawOptionsTab()
         else
             Text(val, x + 7, y + 15, 0.5f, col, 0, 0.33f);
     }
-    // FRAMES OFF: the game slows down where it cannot keep up; said as long as it stays so
-    if (!Port::lock30 && !Port::frameSkip)
+    // FRAMES OFF: the game slows down where it cannot keep up; said as long as it stays so (FRAMES' own help says it
+    // while it is up)
+    if (!Port::lock30 && !Port::frameSkip && sLastOpt != OPT_FRAMES)
         Text(Tr("FRAMES OFF: THE GAME MAY RUN SLOW IN SOME PLACES"), W / 2.0f, H - 60, 0.4f, Rgb(240, 200, 80), C2D_AlignCenter | C2D_WordWrap,
              0.33f, W - 24);
     // What the last option touched does
     if (sLastOpt >= 0)
-        Text(Tr(kOptHelp[sLastOpt]), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * OPT_PITCH + 4, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
+        Text(Tr(OptHelp(sLastOpt)), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * OPT_PITCH + 4, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
     Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, T().footer, C2D_AlignCenter);
     Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, T().footer, C2D_AlignCenter);
     if (sThemeOpen)
@@ -1909,11 +1921,103 @@ void BottomUi::DrawTopOverlaySoft(unsigned short *fb, int pitch)
 // ---------------------------------------------------------------- loading box
 
 static struct {
-    bool active;
+    bool active, boot; // boot: the start of the game (the top screen has the animation)
     char title[64], step[48], file[64];
     float lo, hi, progress;
     u64 start, lastDraw;
 } sLoad;
+
+// ---------------------------------------------------------------- the top screen while the game starts
+// Drawn with code, nothing of the game's (its data is not up yet): Sonic as a spinning ball rolling over Green Hill's
+// chequered ground, speed lines behind, rings ahead that he collects with a sparkle, on MANIA's navy with its stripes.
+// Time-based, so it moves at the same speed however often the loading box redraws.
+
+enum { TOP_W = 400, TOP_H = 240, GROUND_Y = 196 };
+
+static void FillCircle(float cx, float cy, float r, u32 col, float z)
+{
+    enum { N = 24 };
+    for (int i = 0; i < N; ++i) {
+        const float a0 = i * 6.2831853f / N, a1 = (i + 1) * 6.2831853f / N;
+        C2D_DrawTriangle(cx, cy, col, cx + cosf(a0) * r, cy + sinf(a0) * r, col, cx + cosf(a1) * r, cy + sinf(a1) * r, col, z);
+    }
+}
+
+// A ring seen turning: an annulus squeezed to `sx` of its width.
+static void Ring(float cx, float cy, float r, float sx, u32 col, float z)
+{
+    enum { N = 20 };
+    const float in = r * 0.6f;
+    for (int i = 0; i < N; ++i) {
+        const float a0 = i * 6.2831853f / N, a1 = (i + 1) * 6.2831853f / N;
+        const float ox0 = cx + cosf(a0) * r * sx, oy0 = cy + sinf(a0) * r, ox1 = cx + cosf(a1) * r * sx, oy1 = cy + sinf(a1) * r;
+        const float ix0 = cx + cosf(a0) * in * sx, iy0 = cy + sinf(a0) * in, ix1 = cx + cosf(a1) * in * sx, iy1 = cy + sinf(a1) * in;
+        C2D_DrawTriangle(ox0, oy0, col, ox1, oy1, col, ix0, iy0, col, z);
+        C2D_DrawTriangle(ix0, iy0, col, ox1, oy1, col, ix1, iy1, col, z);
+    }
+}
+
+static void DrawBootAnimation(float t)
+{
+    const float speed = 180, dist = t * speed; // px a second the world goes by
+    // MANIA's stripes
+    const u32 stripe = Hex(Mix(0x0A1438, 0x2A6CF0, 0.14f));
+    for (float k = -TOP_H - fmodf(dist * 0.25f, 44); k < TOP_W; k += 44) {
+        C2D_DrawTriangle(k, TOP_H, stripe, k + 20, TOP_H, stripe, k + TOP_H, 0, stripe, 0.05f);
+        C2D_DrawTriangle(k + 20, TOP_H, stripe, k + TOP_H + 20, 0, stripe, k + TOP_H, 0, stripe, 0.05f);
+    }
+    Text("SONIC MANIA 3DS", TOP_W / 2.0f + 2, 34, 0.9f, Hex(0x1A3C8C), C2D_AlignCenter, 0.2f);
+    Text("SONIC MANIA 3DS", TOP_W / 2.0f, 32, 0.9f, Hex(0xF8C820), C2D_AlignCenter, 0.21f);
+    // The four colours under the title, as the tab bar's band
+    for (int i = 0; i < 4; ++i)
+        C2D_DrawRectSolid(TOP_W / 2.0f - 80 + i * 40, 62, 0.2f, 40, 3, Hex(kMania[i]));
+
+    // Ground: grass, then Green Hill's checkers, scrolling
+    C2D_DrawRectSolid(0, GROUND_Y, 0.3f, TOP_W, 6, Hex(0x34B24A));
+    for (float x = -fmodf(dist, 16); x < TOP_W; x += 16)
+        C2D_DrawRectSolid(x, GROUND_Y + 4, 0.31f, 8, 3, Hex(0x1E8C32)); // the grass's edge
+    const float off = fmodf(dist, 32);
+    for (int row = 0; GROUND_Y + 6 + row * 16 < TOP_H; ++row)
+        for (float x = -off - 32; x < TOP_W; x += 16) {
+            const int cell = (int)floorf((x + off) / 16) + row;
+            C2D_DrawRectSolid(x, GROUND_Y + 6 + row * 16, 0.3f, 16, 16, Hex(cell & 1 ? 0xB4642A : 0x8C4A1E));
+        }
+
+    // Sonic: a spinning ball with a little hop now and then
+    const float bx = 150, hop = fmodf(t, 2.4f), r = 17;
+    const float by = GROUND_Y - r - (hop < 0.5f ? sinf(hop / 0.5f * 3.14159f) * 34 : 0);
+    // Speed lines behind
+    for (int i = 0; i < 3; ++i) {
+        const float len = 26 + 14 * sinf(t * 9 + i * 2.1f);
+        C2D_DrawRectSolid(bx - r - 8 - len, by - 8 + i * 8, 0.4f, len, 2, C2D_Color32(255, 255, 255, 150));
+    }
+    FillCircle(bx, by, r + 2, Hex(0x0E1A48), 0.5f);
+    FillCircle(bx, by, r, Hex(0x2A6CF0), 0.51f);
+    const float a = t * 14; // the spin: three lighter quills going round
+    for (int i = 0; i < 3; ++i) {
+        const float q = a + i * 2.0944f;
+        const u32 c = Hex(0x6EAAFF);
+        C2D_DrawTriangle(bx, by, c, bx + cosf(q - 0.35f) * r, by + sinf(q - 0.35f) * r, c, bx + cosf(q + 0.35f) * r, by + sinf(q + 0.35f) * r, c,
+                         0.52f);
+    }
+    FillCircle(bx, by, r * 0.35f, Hex(0x1A3C8C), 0.53f);
+
+    // Rings, 70 px apart along the way: ahead they turn, at Sonic a sparkle for a moment
+    for (int j = (int)floorf((dist - 120) / 70); j < (int)((dist + TOP_W) / 70) + 2; ++j) {
+        const float x = j * 70 - dist + 260, y = 150 + 10 * sinf(j * 1.7f);
+        if (x > bx + 10) {
+            if (x < TOP_W + 10)
+                Ring(x, y, 8, fabsf(cosf(t * 4 + j)) * 0.8f + 0.2f, Hex(0xF8C820), 0.45f);
+        }
+        else if (x > bx - 40) { // just collected: a four-point sparkle, growing and fading
+            const float k = (bx + 10 - x) / 50;
+            const u32 c = C2D_Color32(255, 250, 200, (u8)(255 * (1 - k)));
+            const float s = 4 + 10 * k;
+            C2D_DrawRectSolid(x - s, y - 1, 0.46f, 2 * s, 2, c);
+            C2D_DrawRectSolid(x - 1, y - s, 0.46f, 2, 2 * s, c);
+        }
+    }
+}
 
 static void DrawLoading()
 {
@@ -1946,8 +2050,18 @@ static void DrawLoading()
     snprintf(line, sizeof(line), "%.1f S", secs);
     Text(line, bx + bw - 8, by + bh - 14, 0.38f, T().footer, C2D_AlignRight, 0.4f);
     Text("SONIC MANIA 3DS", W / 2.0f, H - 18, 0.42f, T().footer, C2D_AlignCenter);
+    // The top screen's GPU target is made by the first frame the game presents, after this load: made here if not yet
+    if (sLoad.boot && DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init())) {
+        C3D_RenderTarget *top = (C3D_RenderTarget *)C3DPresent::Target();
+        C2D_SceneBegin(top);
+        C2D_DrawRectSolid(0, 0, 0.01f, 400, 240, Hex(0x0A1438)); // not C2D_TargetClear: its colour came out wrong on this RGB565 target
+        DrawBootAnimation((float)(svcGetSystemTick() - sLoad.start) / SYSCLOCK_ARM11);
+    }
     C3D_FrameEnd(0);
     sLoad.lastDraw = svcGetSystemTick();
+#if MANIA_DEV_TOOLS
+    DevTools::ShotFromFile(); // the emulator's way to a picture of the boot
+#endif
 }
 
 static void MaybeDrawLoading(bool now)
@@ -1968,6 +2082,7 @@ void BottomUi::LoadBegin(const char *title)
 {
     Init(); // at boot this runs before the dev tools start
     Upper(sLoad.title, sizeof(sLoad.title), title);
+    sLoad.boot = !strcmp(title, "Starting Sonic Mania"); // RetroEngine.cpp's boot load
     sLoad.step[0] = sLoad.file[0] = 0;
     sLoad.lo = sLoad.progress = 0;
     sLoad.hi                  = 1;
