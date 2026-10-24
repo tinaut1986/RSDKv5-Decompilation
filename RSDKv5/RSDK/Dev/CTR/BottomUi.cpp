@@ -18,9 +18,11 @@
 #include "RSDK/Dev/CTR/UiFont.hpp"
 #include "RSDK/Dev/CTR/PortVersion.h"
 #include "RSDK/Dev/CTR/Updater.hpp"
+#include "RSDK/Dev/CTR/PortText.hpp"
 #include <time.h>
 
 using namespace RSDK;
+using Port::Tr;
 
 enum { W = 320, H = 240 };
 
@@ -386,7 +388,7 @@ static void StatBox(float x, float y, float w, float h, const char *label, const
 {
     C2D_DrawRectSolid(x, y, 0.3f, w, h, Rgb(58, 66, 104));
     C2D_DrawRectSolid(x + 1, y + 1, 0.31f, w - 2, h - 2, Rgb(24, 28, 48));
-    Text(label, x + 7, y + 4, 0.42f, Rgb(140, 148, 170), 0, 0.32f);
+    Text(Tr(label), x + 7, y + 4, 0.42f, Rgb(140, 148, 170), 0, 0.32f);
     Text(value, x + w - 8, y + 15, 0.85f, valueCol, C2D_AlignRight, 0.32f);
 }
 
@@ -404,7 +406,7 @@ static void DrawGameTab()
         *c = (char)toupper((unsigned char)*c);
     Text(line, 10, y, 0.62f, Rgb(255, 215, 0));
     static const char *const kModes[] = { "MANIA MODE", "ENCORE MODE", "TIME ATTACK", "COMPETITION" };
-    Text(gi.gameMode >= 0 && gi.gameMode < 4 ? kModes[gi.gameMode] : "", W - 10, y + 3, 0.45f, Rgb(140, 148, 170), C2D_AlignRight);
+    Text(gi.gameMode >= 0 && gi.gameMode < 4 ? Tr(kModes[gi.gameMode]) : "", W - 10, y + 3, 0.45f, Rgb(140, 148, 170), C2D_AlignRight);
     y += 20;
 
     // Who
@@ -415,9 +417,9 @@ static void DrawGameTab()
         snprintf(line, sizeof(line), "%s", lead ? lead : "-");
     Text(line, 10, y, 0.5f, Rgb(100, 220, 255));
     if (gi.saveSlot >= 0)
-        snprintf(line, sizeof(line), "SAVE %d", gi.saveSlot + 1);
+        snprintf(line, sizeof(line), "%s %d", Tr("SAVE"), gi.saveSlot + 1);
     else
-        snprintf(line, sizeof(line), "NO SAVE");
+        snprintf(line, sizeof(line), "%s", Tr("NO SAVE"));
     Text(line, W - 10, y + 1, 0.45f, Rgb(140, 148, 170), C2D_AlignRight);
     y += 20;
 
@@ -436,7 +438,7 @@ static void DrawGameTab()
     y += bh + 8;
 
     // Chaos emeralds of the save, in the game's order
-    Text("EMERALDS", 10, y + 3, 0.42f, Rgb(140, 148, 170));
+    Text(Tr("EMERALDS"), 10, y + 3, 0.42f, Rgb(140, 148, 170));
     static const u32 kEmerald[7] = { Rgb(60, 200, 90),  Rgb(240, 210, 60), Rgb(70, 120, 240), Rgb(170, 90, 220),
                                      Rgb(190, 195, 205), Rgb(80, 220, 230), Rgb(235, 70, 70) };
     for (int i = 0; i < 7; ++i) {
@@ -450,7 +452,8 @@ static void DrawGameTab()
 
     static const char *const kShields[] = { "NONE", "SHIELD", "BUBBLE", "FIRE", "LIGHTNING" };
     if (inStage) {
-        snprintf(line, sizeof(line), "SHIELD %s%s", gi.shield >= 0 && gi.shield < 5 ? kShields[gi.shield] : "?", gi.super ? "     SUPER" : "");
+        snprintf(line, sizeof(line), "%s %s%s%s", Tr("SHIELD"), gi.shield >= 0 && gi.shield < 5 ? Tr(kShields[gi.shield]) : "?", gi.super ? "     " : "",
+                 gi.super ? Tr("SUPER") : "");
         Text(line, 10, y, 0.42f, Rgb(200, 205, 210));
     }
 
@@ -461,7 +464,7 @@ static void DrawGameTab()
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_RENDERER, OPT_COUNT };
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_RENDERER, OPT_LANGUAGE, OPT_COUNT };
 
 static void OptRect(int i, float *x, float *y)
 {
@@ -474,21 +477,25 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     const u32 good = Rgb(110, 220, 130), dim = Rgb(140, 148, 170), warn = Rgb(240, 200, 80);
     switch (i) {
         case OPT_FRAMES:
-            snprintf(o, cap, "%s", Port::lock30 ? "LOCK 30" : Port::frameSkip ? "AUTO" : "NO SKIP");
+            snprintf(o, cap, "%s", Tr(Port::lock30 ? "LOCK 30" : Port::frameSkip ? "AUTO" : "NO SKIP"));
             *col = Port::lock30 ? good : Port::frameSkip ? good : warn;
             break;
         case OPT_FPS: {
             static const char *const k[] = { "OFF", "TOP LEFT", "TOP RIGHT", "BOTTOM LEFT", "BOTTOM RIGHT" };
-            snprintf(o, cap, "%s", k[Port::fps]);
+            snprintf(o, cap, "%s", Tr(k[Port::fps]));
             *col = Port::fps ? good : dim;
             break;
         }
         case OPT_HUD: {
             static const char *const k[] = { "SHOWN", "AUTO", "HIDDEN" };
-            snprintf(o, cap, "%s", k[Port::hud]);
+            snprintf(o, cap, "%s", Tr(k[Port::hud]));
             *col = Port::hud == 2 ? warn : good;
             break;
         }
+        case OPT_LANGUAGE: // the game's (read only: the game's options menu changes it)
+            snprintf(o, cap, "%s", Port::LanguageName());
+            *col = Rgb(230, 232, 240);
+            break;
         default:
             snprintf(o, cap, "%s", Port::GpuMode() ? "GPU" : "CPU");
             *col = Port::GpuMode() ? good : dim;
@@ -496,12 +503,13 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "RENDERER" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "RENDERER", "LANGUAGE" };
 static const char *const kOptHelp[OPT_COUNT] = {
     "AUTO SKIPS A LATE PICTURE, LOCK 30 DRAWS EVERY OTHER ONE, NO SKIP SLOWS DOWN",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
     "AUTO HIDES THE GAME'S HUD WHILE THE GAME TAB SHOWS IT",
     "GPU DRAWS WHAT IT CAN (FASTER), CPU IS THE ORIGINAL SOFTWARE RENDERER",
+    "FOLLOWS THE GAME'S LANGUAGE: CHANGE IT IN THE GAME'S OPTIONS",
 };
 static int sLastOpt = -1;
 
@@ -518,6 +526,7 @@ static void TapOption(int i)
             break;
         case OPT_FPS: Port::fps = (Port::fps + 1) % 5; break;
         case OPT_HUD: Port::hud = (Port::hud + 1) % 3; break;
+        case OPT_LANGUAGE: break; // only its help
         default: Port::SetGpuMode(!Port::GpuMode()); break;
     }
     sLastOpt = i;
@@ -535,7 +544,7 @@ static void DrawOptionsTab()
         C2D_DrawRectSolid(x + 1, y + 1, 0.32f, 148, 1, Rgb(90, 130, 180));
         u32 col;
         OptValue(i, val, sizeof(val), &col);
-        Text(kOptName[i], x + 7, y + 3, 0.42f, Rgb(230, 232, 240), 0, 0.33f);
+        Text(Tr(kOptName[i]), x + 7, y + 3, 0.42f, Rgb(230, 232, 240), 0, 0.33f);
         if (i == OPT_FPS && Port::fps) {
             // A little top screen with the counter's corner filled in, as sm-3ds shows it
             const float sx = x + 7, sy = y + 15, sw = 26, sh = 14;
@@ -550,7 +559,7 @@ static void DrawOptionsTab()
     }
     // What the last option touched does
     if (sLastOpt >= 0)
-        Text(kOptHelp[sLastOpt], 12, HEADER_H + 8 + 2 * 38 + 6, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
+        Text(Tr(kOptHelp[sLastOpt]), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * 38 + 6, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
     Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, Rgb(90, 115, 145), C2D_AlignCenter);
     Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, Rgb(90, 115, 145), C2D_AlignCenter);
 }
@@ -598,7 +607,7 @@ static void Button(float x, float y, float w, float h, const char *label, bool p
 {
     C2D_DrawRectSolid(x, y, z, w, h, pressed ? Rgb(210, 235, 255) : edge);
     C2D_DrawRectSolid(x + 1, y + 1, z + 0.01f, w - 2, h - 2, pressed ? Rgb(90, 150, 220) : Rgb(24, 32, 50));
-    Text(label, x + w / 2, y + h / 2 - 7, 0.5f, textCol, C2D_AlignCenter, z + 0.02f);
+    Text(Tr(label), x + w / 2, y + h / 2 - 7, 0.5f, textCol, C2D_AlignCenter, z + 0.02f);
 }
 
 static bool Inside(int px, int py, float x, float y, float w, float h) { return px >= x && px < x + w && py >= y && py < y + h; }
@@ -612,7 +621,7 @@ static void DrawNotes(const UpdateStatus &st, float x, float y, float w, float b
         sNotePage = pages - 1;
     char head[80], ver[48];
     UpperCopy(ver, sizeof(ver), st.version);
-    snprintf(head, sizeof(head), "WHAT'S NEW %s   %u/%u", ver, sNotePage + 1, pages);
+    snprintf(head, sizeof(head), "%s %s   %u/%u", Tr("WHAT'S NEW"), ver, sNotePage + 1, pages);
     Text(head, x + w / 2, y, 0.45f, Rgb(255, 215, 0), C2D_AlignCenter, z);
     C2D_DrawRectSolid(x, y + 16, z, w, by - y - 20, Rgb(40, 70, 120));
     C2D_DrawRectSolid(x + 1, y + 17, z + 0.01f, w - 2, by - y - 22, Rgb(10, 14, 24));
@@ -685,27 +694,28 @@ static void DrawUpdatesTab()
         C2D_DrawRectSolid(x + 1, UCELL_Y + 1, 0.31f, w - 2, UCELL_H - 2, pressed ? Rgb(90, 150, 220) : Rgb(24, 32, 50));
         u32 col = Rgb(230, 232, 240);
         if (i == 0)
-            snprintf(val, sizeof(val), "%s", Port::betas ? "+ BETAS" : "STABLE");
+            snprintf(val, sizeof(val), "%s", Tr(Port::betas ? "+ BETAS" : "STABLE"));
         else if (i == 1)
-            snprintf(val, sizeof(val), "%s", Port::autoUpdate ? "ON" : "OFF"), col = Port::autoUpdate ? good : dim;
+            snprintf(val, sizeof(val), "%s", Tr(Port::autoUpdate ? "ON" : "OFF")), col = Port::autoUpdate ? good : dim;
         else if (st.version[0])
             UpperCopy(val, sizeof(val), st.version);
         else
-            snprintf(val, sizeof(val), "NONE"), col = dim;
-        Text(kName[i], x + 6, UCELL_Y + 3, 0.4f, Rgb(170, 178, 200), 0, 0.33f);
+            snprintf(val, sizeof(val), "%s", Tr("NONE")), col = dim;
+        Text(Tr(kName[i]), x + 6, UCELL_Y + 3, 0.4f, Rgb(170, 178, 200), 0, 0.33f);
         Text(val, x + 6, UCELL_Y + 15, 0.45f, col, 0, 0.33f);
     }
 
     // Status: what the updater says (or the question before an install), with what is installed.
     C2D_DrawRectSolid(8, USTATUS_Y, 0.3f, W - 16, USTATUS_H, Rgb(58, 66, 104));
     C2D_DrawRectSolid(9, USTATUS_Y + 1, 0.31f, W - 18, USTATUS_H - 2, Rgb(24, 28, 48));
-    Text("STATUS", 14, USTATUS_Y + 4, 0.4f, dim, 0, 0.32f);
-    Text("INSTALLED V" PORT_VERSION_LABEL, W - 14, USTATUS_Y + 4, 0.38f, dim, C2D_AlignRight, 0.32f);
+    Text(Tr("STATUS"), 14, USTATUS_Y + 4, 0.4f, dim, 0, 0.32f);
     char msg[96];
-    UpperCopy(msg, sizeof(msg), sUpdConfirm ? "Download and install this version?" : st.message[0] ? st.message : "Check looks for a new version");
+    snprintf(msg, sizeof(msg), "%s V%s", Tr("INSTALLED"), PORT_VERSION_LABEL);
+    Text(msg, W - 14, USTATUS_Y + 4, 0.38f, dim, C2D_AlignRight, 0.32f);
+    UpperCopy(msg, sizeof(msg), sUpdConfirm ? "DOWNLOAD AND INSTALL THIS VERSION?" : st.message[0] ? st.message : "CHECK LOOKS FOR A NEW VERSION");
     const u32 col = st.state == UPDATE_ERROR ? bad : (st.state == UPDATE_AVAILABLE || sUpdConfirm) ? warn
                     : (st.state == UPDATE_DONE || st.state == UPDATE_CURRENT) ? good : Rgb(230, 232, 240);
-    Text(msg, 14, USTATUS_Y + 20, 0.5f, col, C2D_WordWrap, 0.32f, W - 28);
+    Text(Tr(msg), 14, USTATUS_Y + 20, 0.5f, col, C2D_WordWrap, 0.32f, W - 28);
     const bool working = st.state == UPDATE_DOWNLOADING || st.state == UPDATE_VERIFYING || st.state == UPDATE_INSTALLING;
     if (working) {
         const float bx = 14, by = USTATUS_Y + USTATUS_H - 14, bw = W - 28;
@@ -713,7 +723,7 @@ static void DrawUpdatesTab()
         C2D_DrawRectSolid(bx, by, 0.34f, bw * (st.progress > 100 ? 100 : st.progress) / 100.0f, 8, Rgb(60, 160, 100));
     }
     const char *hint = sUpdConfirm ? "UNSAVED PROGRESS IS LOST" : sUpdHint ? sUpdHint : st.version[0] ? "TAP RELEASE FOR WHAT'S NEW" : "";
-    Text(hint, W / 2.0f, USTATUS_Y + USTATUS_H + 8, 0.4f, sUpdConfirm ? warn : Rgb(90, 115, 145), C2D_AlignCenter, 0.32f);
+    Text(Tr(hint), W / 2.0f, USTATUS_Y + USTATUS_H + 8, 0.4f, sUpdConfirm ? warn : Rgb(90, 115, 145), C2D_AlignCenter, 0.32f);
 
     Button(8, UACTION_Y, W - 16, 26, UpdateAction(st), sPressed == UHIT_ACTION, sUpdConfirm ? warn : Rgb(50, 80, 130), Rgb(230, 232, 240), 0.3f);
 }
@@ -822,12 +832,13 @@ static void DrawUpdatePrompt()
         return;
     }
     if (prompt == UPDATE_PROMPT_ASK) {
-        Text("UPDATE AVAILABLE", cx, PBOX_Y + 8, 0.6f, Rgb(255, 215, 0), C2D_AlignCenter, 0.95f);
-        snprintf(line, sizeof(line), "NEW VERSION: %s", ver);
+        Text(Tr("UPDATE AVAILABLE"), cx, PBOX_Y + 8, 0.6f, Rgb(255, 215, 0), C2D_AlignCenter, 0.95f);
+        snprintf(line, sizeof(line), "%s: %s", Tr("NEW VERSION"), ver);
         Text(line, cx, PBOX_Y + 34, 0.5f, text, C2D_AlignCenter, 0.95f);
-        Text("INSTALL IT NOW?", cx, PBOX_Y + 52, 0.5f, text, C2D_AlignCenter, 0.95f);
-        Text("UNSAVED PROGRESS IS LOST", cx, PBOX_Y + 70, 0.42f, warn, C2D_AlignCenter, 0.95f);
-        Text("(UPDATES TAB: AUTO UPDATE)", cx, PBOX_Y + 86, 0.4f, dim, C2D_AlignCenter, 0.95f);
+        Text(Tr("INSTALL IT NOW?"), cx, PBOX_Y + 52, 0.5f, text, C2D_AlignCenter, 0.95f);
+        Text(Tr("UNSAVED PROGRESS IS LOST"), cx, PBOX_Y + 70, 0.42f, warn, C2D_AlignCenter, 0.95f);
+        snprintf(line, sizeof(line), "(%s: %s)", Tr("UPDATES TAB"), Tr("AUTO UPDATE"));
+        Text(line, cx, PBOX_Y + 86, 0.4f, dim, C2D_AlignCenter, 0.95f);
         Button(cx - 75, PBOX_Y + 108, 150, 24, "WHAT'S NEW", sPressed == PHIT_NEWS, Rgb(50, 80, 130), Rgb(100, 220, 255), 0.9f);
         const float bw = (w - 8) / 2;
         Button(x, by, bw, 24, "LATER", sPressed == PHIT_LATER, Rgb(50, 80, 130), text, 0.9f);
@@ -835,10 +846,10 @@ static void DrawUpdatePrompt()
         return;
     }
     if (prompt == UPDATE_PROMPT_ERROR) {
-        Text("UPDATE FAILED", cx, PBOX_Y + 8, 0.6f, Rgb(240, 100, 100), C2D_AlignCenter, 0.95f);
+        Text(Tr("UPDATE FAILED"), cx, PBOX_Y + 8, 0.6f, Rgb(240, 100, 100), C2D_AlignCenter, 0.95f);
         UpperCopy(line, sizeof(line), st.message);
-        Text(line, cx, PBOX_Y + 44, 0.5f, text, C2D_AlignCenter, 0.95f);
-        Text("THE GAME KEEPS RUNNING AS IT WAS.", cx, PBOX_Y + 66, 0.42f, dim, C2D_AlignCenter, 0.95f);
+        Text(Tr(line), cx, PBOX_Y + 44, 0.5f, text, C2D_AlignCenter, 0.95f);
+        Text(Tr("THE GAME KEEPS RUNNING AS IT WAS."), cx, PBOX_Y + 66, 0.42f, dim, C2D_AlignCenter, 0.95f);
         Button(cx - 60, by, 120, 24, "OK", sPressed == PHIT_LATER, Rgb(50, 80, 130), text, 0.9f);
         return;
     }
@@ -847,21 +858,21 @@ static void DrawUpdatePrompt()
     if (prompt == UPDATE_PROMPT_RESTART) {
         const unsigned secs = Port::RelaunchSecondsLeft(&fill);
         snprintf(line, sizeof(line), "%u S", secs);
-        Text("RESTARTING THE GAME", cx, PBOX_Y + 40, 0.5f, text, C2D_AlignCenter, 0.95f);
+        Text(Tr("RESTARTING THE GAME"), cx, PBOX_Y + 40, 0.5f, text, C2D_AlignCenter, 0.95f);
     }
     else {
         fill = (st.progress > 100 ? 100 : st.progress) / 100.0f;
         snprintf(line, sizeof(line), "%u%%", st.progress > 100 ? 100 : st.progress);
         char msg[96];
         UpperCopy(msg, sizeof(msg), st.message);
-        Text(msg, cx, PBOX_Y + 40, 0.5f, text, C2D_AlignCenter, 0.95f);
+        Text(Tr(msg), cx, PBOX_Y + 40, 0.5f, text, C2D_AlignCenter, 0.95f);
     }
-    Text("UPDATING", cx, PBOX_Y + 8, 0.6f, Rgb(255, 215, 0), C2D_AlignCenter, 0.95f);
+    Text(Tr("UPDATING"), cx, PBOX_Y + 8, 0.6f, Rgb(255, 215, 0), C2D_AlignCenter, 0.95f);
     const float px = x + 6, py = PBOX_Y + 66, pw = w - 12, ph = 18;
     C2D_DrawRectSolid(px, py, 0.86f, pw, ph, Rgb(44, 54, 70));
     C2D_DrawRectSolid(px, py, 0.87f, pw * fill, ph, prompt == UPDATE_PROMPT_RESTART ? Rgb(235, 140, 50) : Rgb(60, 160, 100));
     Text(line, cx, py + 2, 0.5f, Rgb(255, 255, 255), C2D_AlignCenter, 0.95f);
-    Text("DO NOT TURN THE CONSOLE OFF.", cx, PBOX_Y + 96, 0.42f, warn, C2D_AlignCenter, 0.95f);
+    Text(Tr("DO NOT TURN THE CONSOLE OFF."), cx, PBOX_Y + 96, 0.42f, warn, C2D_AlignCenter, 0.95f);
     const bool canCancel = prompt == UPDATE_PROMPT_WORKING && st.state == UPDATE_DOWNLOADING;
     Button(cx - 70, by, 140, 24, canCancel ? "CANCEL" : "PLEASE WAIT", canCancel && sPressed == PHIT_LATER, Rgb(50, 80, 130),
            canCancel ? text : dim, 0.9f);
@@ -1100,8 +1111,8 @@ static void DrawLoading()
     const float bx = 20, by = 62, bw = W - 40, bh = 116;
     C2D_DrawRectSolid(bx - 1, by - 1, 0.3f, bw + 2, bh + 2, Rgb(40, 70, 120));
     C2D_DrawRectSolid(bx, by, 0.31f, bw, bh, Rgb(10, 14, 24));
-    Text(sLoad.title, W / 2.0f, by + 10, 0.55f, Rgb(255, 215, 0), C2D_AlignCenter, 0.4f);
-    Text(sLoad.step, W / 2.0f, by + 34, 0.5f, Rgb(230, 232, 240), C2D_AlignCenter, 0.4f);
+    Text(Tr(sLoad.title), W / 2.0f, by + 10, 0.55f, Rgb(255, 215, 0), C2D_AlignCenter, 0.4f);
+    Text(Tr(sLoad.step), W / 2.0f, by + 34, 0.5f, Rgb(230, 232, 240), C2D_AlignCenter, 0.4f);
     Text(sLoad.file, W / 2.0f, by + 52, 0.4f, Rgb(140, 148, 170), C2D_AlignCenter, 0.4f);
     const float px = bx + 14, py = by + 72, pw = bw - 28, ph = 16;
     C2D_DrawRectSolid(px, py, 0.35f, pw, ph, Rgb(44, 54, 70));
