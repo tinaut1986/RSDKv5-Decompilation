@@ -62,6 +62,9 @@ void SetFtp(bool on);
 // SET heapcheck 1 (debug): walk the heap every frame (and wherever HeapCheck is called) and log the first broken chunk.
 extern bool heapCheck;
 void HeapCheck(const char *where);
+// A question of BottomUi::Ask (before the FTP server runs) driven from a file, for the emulator: debug/ask.txt holding
+// "s" saves the bottom screen as debug/shot-bottom.raw (tools/shot.sh's format), "1" / "0" answers. -1: nothing asked.
+int AskFromFile();
 void Mark();             // writes a mark into log.txt and the perf CSV
 // The switches survive between sessions, in the port's file with the player's options (Port::Save,
 // port-settings.ini), written on every change and read at start. DRAW LISTS is not saved: off it leaves a blank

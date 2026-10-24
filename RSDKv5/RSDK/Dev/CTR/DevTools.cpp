@@ -1818,6 +1818,24 @@ static bool HeapWalk(const char *where)
     }
     return true;
 }
+int DevTools::AskFromFile()
+{
+    char path[160];
+    snprintf(path, sizeof(path), "%s/ask.txt", kDir);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return -1;
+    const int c = fgetc(f);
+    fclose(f);
+    remove(path);
+    if (c == 's') {
+        snprintf(path, sizeof(path), "%s/shot-bottom.raw", kDir);
+        WriteShot(2, path);
+        return -1;
+    }
+    return c == '1' ? 1 : c == '0' ? 0 : -1;
+}
+
 void DevTools::HeapCheck(const char *where)
 {
     if (heapCheck)

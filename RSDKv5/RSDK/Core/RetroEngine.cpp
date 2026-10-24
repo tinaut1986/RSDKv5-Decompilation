@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/Upstream.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #if RETRO_PLATFORM == RETRO_3DS
@@ -102,6 +103,8 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         // The screens first (as the mod loader's path does), so the boot can show what it is loading.
         const bool renderOk = RenderDevice::Init();
         DEV_LOG("RenderDevice::Init (early) done, ok=%d", (int)renderOk);
+        BottomUi::Init();
+        Port::OfferSaveImport(); // before the game reads its saves (Upstream.hpp)
         BottomUi::LoadBegin("Starting Sonic Mania");
 #endif
         InitEngine();

@@ -76,6 +76,7 @@
 | `feat/ui-languages` | Off `release/v0.1.3`: the port's text in the game's language. Waiting for the owner on the console. |
 | `feat/ui-themes` | Off `feat/ui-languages`: OPTIONS > THEME (dropdown) and `SITE TOUCH x y`. Waiting for the owner; merge after the languages. |
 | `feat/game-tab-hud-art` | Off `feat/ui-themes`: the GAME tab with the game's HUD art, the time at the game's rate. Waiting for the owner. |
+| `feat/upstream-folder` | Off `feat/game-tab-hud-art`: data and saves from the original port's folder, the owner's credit. Waiting for the owner. |
 
 ## Tasks
 
@@ -162,6 +163,12 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   (GameInfo.c) reports each box that reaches ItemBox_State_IconFinish once; an icon stays 2 s, a lasting power (shield,
   invincibility, speed shoes, hyper ring, super) as long as the player has it. Checked in Azahar with a lightning
   shield (`GOTO ItemBox 120` then `INPUT 11` breaks Green Hill 1's first box).
+- [ ] U1.5 (2026-10-24, `feat/upstream-folder`, off `feat/game-tab-hud-art`) As in ../zelda-tmc-3ds: `Data.rsdk` is read
+  from the original port's `/3ds/SonicMania/` when our folder has none (`LoadDataPack` -> `Port::UpstreamFallback`), and
+  at boot, before the game reads its saves, a question on the bottom screen (`BottomUi::Ask`) offers once to copy that
+  folder's saves (SaveData, Options, TimeAttackDB, ReplayDB, Replay_*.bin) when ours has no SaveData.bin; an existing
+  file of ours is never overwritten. Checked in Azahar with the pack and a test file moved there. The CIA's publisher is
+  now "tinaut1986, SaturnSH2x2, Rubberduckycooly" and README lists this fork next to SaturnSH2x2's.
 
 ## Decisions log
 

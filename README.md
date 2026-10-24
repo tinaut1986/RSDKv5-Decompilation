@@ -89,6 +89,7 @@ Currently, the only officially supported platforms are the ones listed above.
 **However,** since release, there have been a multitude of forks made by the community (keep in mind that many of these ports are still a WIP, and some may be out of date): 
 * ### [WebASM](https://github.com/heyjoeway/RSDKv5-Decompilation/tree/emscripten) by heyjoeway 
 * ### [New 3DS](https://github.com/SaturnSH2x2/RSDKv5-Decompilation/tree/3ds-main) by SaturnSH2x2
+* ### [Old & New 3DS (GPU renderer)](https://github.com/tinaut1986/RSDKv5-Decompilation) by tinaut1986, based on SaturnSH2x2's
 * ### [Wii U](https://github.com/Radfordhound/RSDKv5-Decompilation) by Radfordhound
 * ### [Wii U](https://github.com/Clownacy/Sonic-Mania-Decompilation) by Clownacy
 * ### [Wii](https://github.com/Mefiresu/RSDKv5-Decompilation/tree/dev/wii-port) by Mefiresu

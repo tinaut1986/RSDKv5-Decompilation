@@ -1732,6 +1732,61 @@ void BottomUi::Init()
 
 bool BottomUi::Ready() { return sReady; }
 
+int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, const char *yes, const char *no)
+{
+    if (!sReady)
+        return -1;
+    const float bx = PBOX_X, by = PBOX_Y, bw = PBOX_W, bh = PBOX_H, cy = by + bh - 32;
+    const float btnW = no ? (bw - 24) / 2 : 120, yesX = no ? bx + 8 : W / 2.0f - 60, noX = bx + 16 + btnW;
+    int pressed = -1;
+    while (aptMainLoop()) {
+        hidScanInput();
+        const u32 down = hidKeysDown(), held = hidKeysHeld();
+        int hit = -1;
+        if (held & KEY_TOUCH) {
+            touchPosition t;
+            hidTouchRead(&t);
+            if (Inside(t.px, t.py, yesX, cy, btnW, 24))
+                hit = 1;
+            else if (no && Inside(t.px, t.py, noX, cy, btnW, 24))
+                hit = 0;
+        }
+        if (down & KEY_A)
+            return 1;
+        if (no && (down & KEY_B))
+            return 0;
+        if (!(held & KEY_TOUCH) && pressed >= 0)
+            return pressed; // released on a button
+        pressed = hit;
+#if MANIA_DEV_TOOLS
+        static unsigned polls;
+        if (++polls % 30 == 0) { // the emulator's way in (no FTP yet)
+            const int fromFile = DevTools::AskFromFile();
+            if (fromFile >= 0 && (fromFile || no))
+                return fromFile;
+        }
+#endif
+
+        C2D_TextBufClear(sTextBuf);
+        C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+        C2D_Prepare();
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+        C2D_TargetClear(sTarget, T().bg);
+        C2D_SceneBegin(sTarget);
+        DrawBackdrop(0);
+        C2D_DrawRectSolid(bx - 2, by - 2, 0.82f, bw + 4, bh + 4, T().popEdge);
+        C2D_DrawRectSolid(bx, by, 0.84f, bw, bh, T().popFill);
+        Text(title, W / 2.0f, by + 10, 0.6f, T().accent, C2D_AlignCenter, 0.95f);
+        for (int i = 0; i < lineCount; ++i)
+            Text(lines[i], bx + 12, by + 38 + i * 34, 0.45f, i == lineCount - 1 && lineCount > 1 ? T().dim : T().text, C2D_WordWrap, 0.95f, bw - 24);
+        Button(yesX, cy, btnW, 24, yes, pressed == 1, T().cellEdge, T().text, 0.9f);
+        if (no)
+            Button(noX, cy, btnW, 24, no, pressed == 0, T().cellEdge, T().text, 0.9f);
+        C3D_FrameEnd(0);
+    }
+    return -1;
+}
+
 static volatile int sTouchX = -1, sTouchY; // a tap from SITE TOUCH (the FTP thread), taken by the next Update
 
 void BottomUi::Touch(int x, int y)

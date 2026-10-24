@@ -30,7 +30,10 @@ with palette handling, bottom-screen UI and Old 3DS pacing.
 
 Game data is **never committed**: `Data.rsdk` from the owner's Steam copy
 (Flatpak Steam: `~/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/Sonic Mania/`)
-goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`).
+goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`). Without it there, the engine reads the original port's
+`/3ds/SonicMania/Data.rsdk` in place, and at the first boot it offers to copy that folder's saves (`*.bin`) into ours
+(`Dev/CTR/Upstream.cpp`; the answer is kept in `save-import.txt`). In the emulator the question is answered from a file:
+`debug/ask.txt` with `s` (bottom screen to `debug/shot-bottom.raw`), `1` or `0` (`DevTools::AskFromFile`).
 
 ## Build
 
