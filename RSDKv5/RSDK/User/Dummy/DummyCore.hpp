@@ -9,8 +9,9 @@ struct DummyCore : UserCore {
         values[0]  = false;
         valueCount = 1;
 
-#if !RSDK_AUTOBUILD
-        // enable dlc
+#if !RSDK_AUTOBUILD && RETRO_PLATFORM != RETRO_3DS
+        // enable dlc (3DS: off by default, as the license asks of builds given to anyone; the player's OPTIONS > PLUS
+        // turns it on at boot, Port::ApplyPlus)
         for (int32 v = 0; v < valueCount; ++v) values[v] = true;
 #endif
     }

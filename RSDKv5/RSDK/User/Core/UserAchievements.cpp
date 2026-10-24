@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/Port.hpp"
 
 // ====================
 // API Cores
@@ -153,6 +154,14 @@ void RSDK::SKU::DrawAchievements()
 {
     if (achievementsEnabled && achievements && achievements->CheckAchievementsEnabled()) {
         if (achievementsLoaded && achievementDrawReady && achievementID) {
+#if RETRO_PLATFORM == RETRO_3DS
+            // ACHIEVEMENTS > NOTICE: this popup is TOP; BOTTOM is the bottom screen's own, OFF none. Counted as drawn so
+            // the queue moves on.
+            if (Port::achNotice != 1) {
+                achievementsDrawn = true;
+                return;
+            }
+#endif
             Vector2 drawPos;
 
             InitString(&achievementStrings[0], achievementText.c_str(), 0);

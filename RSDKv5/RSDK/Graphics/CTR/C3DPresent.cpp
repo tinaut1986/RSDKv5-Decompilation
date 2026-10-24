@@ -261,6 +261,7 @@ void C3DPresent::Present(const unsigned short *src, int pitch)
         C3D_DrawArrays(GPU_TRIANGLE_STRIP, 0, 4);
         BottomUi::DrawTopOverlayGpu(sTargetRight);
     }
+    BottomUi::DrawInTopFrame(); // the GAME tab's time, at the game's rate
     C3D_FrameEnd(0);
 }
 

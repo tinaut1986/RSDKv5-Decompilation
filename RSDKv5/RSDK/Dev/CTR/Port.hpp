@@ -22,9 +22,22 @@ extern int hud;         // TOP HUD: 0 shown, 1 auto (hidden while the GAME tab i
 extern int tab;         // the bottom screen's open tab (BottomUi)
 extern bool autoUpdate; // UPDATES > AUTO UPDATE: look for a newer build at boot and offer it
 extern bool betas;      // UPDATES > BETAS: the beta channel too (pre-releases)
+extern int theme;       // OPTIONS > THEME: the bottom screen's colours (BottomUi's kThemes)
+extern bool plus;       // OPTIONS > PLUS: Sonic Mania Plus content (Mighty, Ray, Encore); off by default, read at boot
+extern bool plusAsked;  // the one-time question (OfferPlus) was answered
+extern int achNotice;   // ACHIEVEMENTS > NOTICE: 0 off, 1 top (the game's own), 2 bottom (over the tab bar)
+extern bool achSound;   // ACHIEVEMENTS > SOUND: a sparkle when one unlocks
 
 void Load(); // before the engine starts
 void Save();
+
+// Sonic Mania Plus. The decompilation's license wants every build given to anyone to start with it off; an option
+// off by default is allowed. OfferPlus asks once, at boot, when the data has the Plus content; ApplyPlus hands the
+// option to the engine (the DLC check) before the game starts, so a change counts from the next start.
+void OfferPlus();
+void ApplyPlus();
+bool PlusApplied();
+bool DataHasPlus();
 
 // The renderer: GPU draws what it can, CPU is the original software renderer.
 bool GpuMode();

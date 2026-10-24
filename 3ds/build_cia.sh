@@ -7,7 +7,7 @@ if [ -z "$1" ]; then
 fi
 
 APP_NAME="Sonic Mania"
-APP_AUTH="SaturnSH2x2, Rubberduckycooly"
+APP_AUTH="tinaut1986, SaturnSH2x2, Rubberduckycooly"
 
 mkdir -p out
 rm -rf out/*

@@ -120,13 +120,20 @@ int Update_ParseRelease(const char *data, size_t size, bool pre, bool homebrew, 
 }
 
 
-// The player-facing part of one release body: its <!-- mania-notes --> block, or all of it.
+// The player-facing part of one release body: its <!-- mania-notes --> block, or all of it; without the block's own
+// "## What's new" heading (the version's heading replaces it).
 static void notes_block(const char *body, const char **start, size_t *len) {
   static const char open[] = "<!-- mania-notes -->", close[] = "<!-- /mania-notes -->";
   const char *a = strstr(body, open);
   if (!a) { *start = body; *len = strlen(body); return; }
   a += sizeof(open) - 1;
   const char *b = strstr(a, close);
+  while (*a == '\n' || *a == '\r' || *a == ' ') a++;
+  if (!strncmp(a, "## What's new", 13)) {
+    const char *eol = strchr(a, '\n');
+    if (eol && (!b || eol < b)) a = eol + 1;
+    while (*a == '\n' || *a == '\r') a++;
+  }
   *start = a; *len = b ? (size_t)(b - a) : strlen(a);
 }
 int Update_ParseReleases(const char *data, size_t size, bool betas, bool homebrew,
@@ -168,8 +175,8 @@ int Update_ParseReleases(const char *data, size_t size, bool betas, bool homebre
       memcpy(acc + used, block, len); used += len; acc[used] = 0;
       count++;
     }
-    // One release: its own body stays as it is. Several: one block, newest first.
-    if (count > 1) snprintf(out->notes, sizeof(out->notes), "<!-- mania-notes -->\n%s\n<!-- /mania-notes -->\n", acc);
+    // One block, newest first, each release under its version's heading (Update_FormatNotes marks those lines).
+    if (count) snprintf(out->notes, sizeof(out->notes), "<!-- mania-notes -->\n%s\n<!-- /mania-notes -->\n", acc);
   }
   json_decref(root); return result;
 }
@@ -196,7 +203,16 @@ unsigned Update_FormatNotes(const char *md, char lines[][43], unsigned capacity)
     if (section) md = section;
   }
 
+  bool line_start = true;
   for (size_t i = 0; md && md[i] && n < sizeof(clean)-1;) {
+    // A Markdown heading ("## v0.1.2 BETA"): its line starts with UPDATE_NOTES_HEADING for the display to colour it.
+    if (line_start && md[i] == '#') {
+      while (md[i] == '#' || md[i] == ' ') i++;
+      clean[n++] = UPDATE_NOTES_HEADING;
+      line_start = false;
+      continue;
+    }
+    line_start = md[i] == '\n';
     if (md[i] == '<') {
       const char *end = strchr(md+i, '>');
       if (end) { i = end-md+1; continue; }

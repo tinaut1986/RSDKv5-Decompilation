@@ -2,6 +2,7 @@
 #include "RSDK/Dev/CTR/Port.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/Updater.hpp"
+#include "RSDK/Dev/CTR/PortText.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS
 
@@ -22,6 +23,11 @@ int Port::hud         = 1;
 int Port::tab         = 0;
 bool Port::autoUpdate = true;
 bool Port::betas      = false;
+int Port::theme       = 0;
+bool Port::plus       = false;
+bool Port::plusAsked  = false;
+int Port::achNotice   = 1;
+bool Port::achSound   = true;
 
 // One file for the port, the dev tools' switches in it too (DevTools::SaveSwitches). The game's own Settings.ini
 // (language, video, sound) is the engine's and stays apart; dev-settings.ini is where these lived before: read once.
@@ -52,6 +58,16 @@ static bool ReadSettings(const char *path)
             Port::autoUpdate = v != 0;
         else if (!strcmp(key, "betas"))
             Port::betas = v != 0;
+        else if (!strcmp(key, "theme"))
+            Port::theme = v < 0 || v > 15 ? 0 : v;
+        else if (!strcmp(key, "plus"))
+            Port::plus = v != 0;
+        else if (!strcmp(key, "plusasked"))
+            Port::plusAsked = v != 0;
+        else if (!strcmp(key, "achnotice"))
+            Port::achNotice = v < 0 || v > 2 ? 1 : v;
+        else if (!strcmp(key, "achsound"))
+            Port::achSound = v != 0;
     }
     fclose(f);
     return true;
@@ -70,12 +86,59 @@ void Port::Save()
     FILE *f = fopen(kSettings, "w");
     if (!f)
         return;
-    fprintf(f, "frameskip=%d\nlock30=%d\ngpumode=%d\nfps=%d\nhud=%d\ntab=%d\nautoupdate=%d\nbetas=%d\n", (int)frameSkip, (int)lock30,
-            (int)GpuMode(), fps, hud, tab, (int)autoUpdate, (int)betas);
+    fprintf(f, "frameskip=%d\nlock30=%d\ngpumode=%d\nfps=%d\nhud=%d\ntab=%d\nautoupdate=%d\nbetas=%d\ntheme=%d\nplus=%d\nplusasked=%d\n"
+               "achnotice=%d\nachsound=%d\n",
+            (int)frameSkip, (int)lock30, (int)GpuMode(), fps, hud, tab, (int)autoUpdate, (int)betas, theme, (int)plus, (int)plusAsked,
+            achNotice, (int)achSound);
 #if MANIA_DEV_TOOLS
     DevTools::SaveSwitches(f);
 #endif
     fclose(f);
+}
+
+// ---------------------------------------------------------------- Sonic Mania Plus
+
+bool Port::DataHasPlus()
+{
+    // Mighty's sprites are only in the data of the Plus version (1.06), which the PC versions all get; owning the DLC
+    // is another matter, which the data cannot tell: the question says so.
+    FileInfo info;
+    InitFileInfo(&info);
+    if (!LoadFile(&info, "Data/Sprites/Players/Mighty.bin", FMODE_RB))
+        return false;
+    CloseFile(&info);
+    return true;
+}
+
+void Port::OfferPlus()
+{
+    if (plusAsked || plus || !BottomUi::Ready() || !DataHasPlus())
+        return;
+    const char *lines[] = { Tr("THE GAME DATA HAS THE PLUS CONTENT: MIGHTY, RAY AND ENCORE MODE."),
+                            Tr("TURN IT ON ONLY IF YOU OWN SONIC MANIA PLUS."), Tr("YOU CAN CHANGE IT IN OPTIONS > PLUS.") };
+    const int answer = BottomUi::Ask(Tr("SONIC MANIA PLUS"), lines, 3, Tr("TURN ON"), Tr("LEAVE OFF"));
+    if (answer < 0)
+        return; // closed from HOME: ask again next time
+    plus      = answer == 1;
+    plusAsked = true;
+    Save();
+}
+
+void Port::ApplyPlus()
+{
+#if RETRO_REV02
+    if (SKU::userCore)
+        SKU::userCore->values[0] = plus;
+#endif
+}
+
+bool Port::PlusApplied()
+{
+#if RETRO_REV02
+    return SKU::userCore && SKU::userCore->values[0];
+#else
+    return false;
+#endif
 }
 
 bool Port::GpuMode()

@@ -30,7 +30,10 @@ with palette handling, bottom-screen UI and Old 3DS pacing.
 
 Game data is **never committed**: `Data.rsdk` from the owner's Steam copy
 (Flatpak Steam: `~/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/Sonic Mania/`)
-goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`).
+goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`). Without it there, the engine reads the original port's
+`/3ds/SonicMania/Data.rsdk` in place, and at the first boot it offers to copy that folder's saves (`*.bin`) into ours
+(`Dev/CTR/Upstream.cpp`; the answer is kept in `save-import.txt`). In the emulator the question is answered from a file:
+`debug/ask.txt` with `s` (bottom screen to `debug/shot-bottom.raw`), `1` or `0` (`DevTools::AskFromFile`).
 
 ## Build
 
@@ -107,13 +110,16 @@ tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU dre
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
 tools/site.sh "SET heapcheck 1"             # debug: walk the heap every frame and loading step, log the first broken chunk
 tools/site.sh "SET music 0"                 # debug: no music streams (tell a music fault from others); not saved
+tools/site.sh "TOUCH 230 125"               # one tap on the bottom screen (320x240): drive its tabs, options, dropdowns
+tools/site.sh "ACH ACH_GHZ"                 # unlock one achievement (test the notice, the sound, the ACHIEVEMENTS tab; it stays unlocked)
+tools/site.sh "SET theme N"                 # the bottom screen's colour theme (OPTIONS > THEME: 0 Mania, 1 Mania outline, 2 classic .. 6 Green Hill)
 tools/scene-sweep.sh [-i IP] name           # load every scene, log each load's storage pools; stops if the game dies
 tools/ss-tour.sh [-i IP]                    # Special Stages 4, 4+, 7, 1+, 5, 6, 7+: fps and the floor's reason every 5 s
 tools/fbi-install.py IP [file.cia]          # send a CIA to FBI's Remote Install when the game's FTP is down
 ```
 
 Files on the SD (`sdmc:/3ds/Sonic Mania 3DS/`): `Data.rsdk`, `debug/log.txt` (boot steps), `debug/perf-NNNN.csv` (one row a
-second), `port-settings.ini` (the bottom-screen options and, in dev builds, the switches; `dev-settings.ini` is the old
+second), `port-settings.ini` (the bottom-screen options, `plus`/`plusasked` for Sonic Mania Plus, and, in dev builds, the switches; `dev-settings.ini` is the old
 name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/luma/dumps/arm11/`; resolve the PC/LR with
 `arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
 `crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).

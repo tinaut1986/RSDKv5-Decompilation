@@ -25,4 +25,6 @@ bool Update_IsNewer(const char *candidate, const char *installed);
 bool Update_ValidVersion(const char *version);
 bool Update_AllowedDownloadUrl(const char *url);
 
+// First character of a heading line in Update_FormatNotes' output (a release's version when several are listed).
+#define UPDATE_NOTES_HEADING '\x01'
 unsigned Update_FormatNotes(const char *markdown, char lines[][43], unsigned capacity);

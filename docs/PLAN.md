@@ -73,6 +73,10 @@
 |---|---|
 | `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
 | `release/v0.1.3` | (was `release/v0.1.0`, renamed after each beta tag) Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). On 2026-10-24 also the session 6 work (beta `v0.1.1`) and `fix/3d-depth-bands` (#11, #12, #13). Merged topic branches deleted. |
+| `feat/ui-languages` | Off `release/v0.1.3`: the port's text in the game's language. Waiting for the owner on the console. |
+| `feat/ui-themes` | Off `feat/ui-languages`: OPTIONS > THEME (dropdown) and `SITE TOUCH x y`. Waiting for the owner; merge after the languages. |
+| `feat/game-tab-hud-art` | Off `feat/ui-themes`: the GAME tab with the game's HUD art, the time at the game's rate. Waiting for the owner. |
+| `feat/upstream-folder` | Off `feat/game-tab-hud-art`: data and saves from the original port's folder, the owner's credit. Waiting for the owner. |
 
 ## Tasks
 
@@ -140,6 +144,52 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   (`dev-settings.ini`), modal install dialog with % or restart countdown, FTP address. Dev-tools builds only.
 - [ ] U1.2 The real UI in the style of the owner's other ports (tabs, map, touch buttons, options), also in production
   builds. The text console menu is only a fallback.
+- [ ] U1.3 (2026-10-24, `feat/ui-languages`, `feat/ui-themes`, to check on the console; OPTIONS > LANGUAGE later dropped: the game alone can switch it) The port's text in the game's
+  language (`PortText`: EN, FR, IT, DE, ES, JA; Korean and Chinese stay English), shown in OPTIONS > LANGUAGE; and
+  OPTIONS > THEME, a dropdown of colour themes: MANIA (default: the four colours of the game's menus, one per tab and
+  cell, navy with diagonal stripes), and CLASSIC, SONIC blue, KNUCKLES red, SUPER SONIC gold, GREEN HILL green,
+  saved as `theme=` in `port-settings.ini`. To check on hardware: the accents and the Japanese with the real system
+  font (Azahar's stand-in font draws them badly), and that the text fits the cells.
+- [ ] U1.4 (2026-10-24, `feat/game-tab-hud-art`, off `feat/ui-themes`, to check on the console) The GAME tab's TIME,
+  SCORE, RINGS and LIVES with the game's own HUD sprites (Global/HUD.bin labels, digits, "x", heads; a ring from
+  Global/Ring.bin), copied through the palette into a 128x128 RGBA8 texture the first time a stage has them (64 KB of
+  linear memory); the labels blink red as on the HUD. The TIME box is redrawn alone inside the top screen's citro3d
+  frame when the time changes (`BottomUi::DrawInTopFrame`), so the hundredths run at the game's rate without a bottom
+  frame of its own (which waits for the GPU). To check: the cost in `TIMES`/`STATE` on the 2DS, and that it never tears.
+  Lesson: citro3d textures written by hand go top row first (row 0 of the tiles is the image's top, with citro2d's
+  `top = 1 - y / h` subtexture); flipping the rows drew nothing. Since 2026-10-24 the art is made at boot
+  (`BottomUi::LoadArtAtBoot`: the three sprite files loaded with global scope, copied through `globalPalette[0]`, the
+  game config's rows, since no scene has set `fullPalette` yet: it was all black), so the GAME tab never falls back to
+  text; the lives count is right-aligned like the rings.
+  Under the emeralds (the SHIELD line and the FPS footer are gone): a row of the item boxes picked, with the game's
+  contents icons (Global/ItemBox.bin animation 2, in the same texture, now 256x128 RGBA5551). `PortGame_PollItems`
+  (GameInfo.c) reports each box that reaches ItemBox_State_IconFinish once; an icon stays 2 s, a lasting power (shield,
+  invincibility, speed shoes, hyper ring, super) as long as the player has it. Checked in Azahar with a lightning
+  shield (`GOTO ItemBox 120` then `INPUT 11` breaks Green Hill 1's first box).
+- [ ] U1.5 (2026-10-24, `feat/upstream-folder`, off `feat/game-tab-hud-art`) As in ../zelda-tmc-3ds: `Data.rsdk` is read
+  from the original port's `/3ds/SonicMania/` when our folder has none (`LoadDataPack` -> `Port::UpstreamFallback`), and
+  at boot, before the game reads its saves, a question on the bottom screen (`BottomUi::Ask`) offers once to copy that
+  folder's saves (SaveData, Options, TimeAttackDB, ReplayDB, Replay_*.bin) when ours has no SaveData.bin; an existing
+  file of ours is never overwritten. Checked in Azahar with the pack and a test file moved there. The CIA's publisher is
+  now "tinaut1986, SaturnSH2x2, Rubberduckycooly" and README lists this fork next to SaturnSH2x2's.
+- [ ] U1.6 (2026-10-24, `feat/plus-option`) Sonic Mania Plus off by default (LICENSE.md: every build given to anyone
+  must start with the DLC off; an option off by default is allowed). The betas v0.1.0-v0.1.2 were built with it on
+  (no AUTOBUILD). Now `DummyCore` leaves it off on the 3DS, `Port::ApplyPlus` hands OPTIONS > PLUS (`plus=` in
+  port-settings.ini) to the engine at boot, and `Port::OfferPlus` asks once (`plusasked=`) when the data has
+  `Data/Sprites/Players/Mighty.bin` (the owner's Steam Data.rsdk has it; the data cannot tell whether the DLC was
+  bought, so the question says to turn it on only with Plus). OPTIONS cells are 30 px now (seven of them).
+  Achievements: the decompilation's dummy core already keeps the 18 PC achievements locally (Achievements.bin, a
+  popup "Achievement!" in the game's font); not checked on the console yet.
+- [ ] U1.7 (2026-10-24, `feat/achievements-tab`) ACHIEVEMENTS tab (the cup, second): the count, NOTICE (TOP: the
+  engine's own popup, drawn by the GPU path; BOTTOM: ours over the tab bar, 3 s; OFF) and SOUND (the game's
+  `Global/Twinkle.wav`, loaded for the whole game), then the 18 achievements in a list that scrolls (drag, or the bar;
+  a release without a drag opens one: the ring at 3x, name, description, when). The game's ring stands for Steam's
+  icons (not in the data), grey (citro2d `C2D_TintLuma`) while locked; descriptions translated, names kept (titles).
+  Unlock dates are ours (`achievement-dates.txt`). `SITE ACH <ACH_ID>` unlocks one for tests. Checked in Azahar.
+- [ ] U1.8 (2026-10-24, `feat/theme-mania-solid`; later MANIA (0, default) is this one and the outlined one MANIA OUTLINE (1); tabs GAME, ACHIEVEMENTS, OPTIONS, UPDATES, DEBUG; Wi-Fi bars by the battery; a warning while FRAMES is OFF) Theme MANIA SOLID (6): MANIA's colours on filled panels with the
+  top-right corner cut and a shadow (`Panel`, which every box of the screen now goes through; `Theme::cut`). OPTIONS
+  loses RENDERER (DEBUG keeps it) and FRAMES reads AUTO / 30 FPS / OFF (was AUTO / LOCK 30 / NO SKIP). An
+  achievement's details are centred.
 
 ## Decisions log
 

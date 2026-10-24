@@ -4030,6 +4030,7 @@ bool GpuRender::Render(const Stream &stream)
         const unsigned pct = csize ? (unsigned)((u64)coffset * 100 / csize) : 0;
         sStats.cmdBufPct = pct > sStats.cmdBufPct ? pct : sStats.cmdBufPct;
     }
+    BottomUi::DrawInTopFrame(); // the GAME tab's time, at the game's rate
     const u64 tEnd = svcGetSystemTick();
     C3D_FrameEnd(0);
     sStats.endMs = (svcGetSystemTick() - tEnd) * tickMs;
