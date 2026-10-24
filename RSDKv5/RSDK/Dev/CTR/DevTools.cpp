@@ -788,7 +788,7 @@ static void HandleSession(int ctrl)
                 else if (!strncmp(path, "vblank", 6))
                     DevTools::swVblankWait = v != 0;
                 else if (!strncmp(path, "tab", 3))
-                    Port::tab = v < 0 || v > 3 ? 0 : v;
+                    Port::tab = v < 0 || v > 4 ? 0 : v;
                 else if (!strncmp(path, "theme", 5)) // the bottom screen's colours (OPTIONS > THEME)
                     Port::theme = v < 0 || v > 15 ? 0 : v;
                 else if (!strncmp(path, "fps", 3))
@@ -896,6 +896,15 @@ static void HandleSession(int ctrl)
                 }
                 else
                     Reply(s, "550 cannot write debug/layers.bin");
+            }
+            else if (!strcmp(sub, "ACH") && path) {
+                // SITE ACH <ACH_ID>: unlock one achievement, as the game does (test the notice, the sound, the tab)
+                static char id[48];
+                sscanf(path, "%47s", id);
+                static SKU::AchievementID ach;
+                ach.identifier = id;
+                SKU::TryUnlockAchievement(&ach);
+                Reply(s, "200 achievement %s", id);
             }
             else if (!strcmp(sub, "TOUCH") && path) {
                 // SITE TOUCH <x> <y>: one tap on the bottom screen (320x240), to drive its tabs and options remotely.

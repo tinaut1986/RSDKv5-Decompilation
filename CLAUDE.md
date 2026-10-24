@@ -111,6 +111,7 @@ tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE 
 tools/site.sh "SET heapcheck 1"             # debug: walk the heap every frame and loading step, log the first broken chunk
 tools/site.sh "SET music 0"                 # debug: no music streams (tell a music fault from others); not saved
 tools/site.sh "TOUCH 230 125"               # one tap on the bottom screen (320x240): drive its tabs, options, dropdowns
+tools/site.sh "ACH ACH_GHZ"                 # unlock one achievement (test the notice, the sound, the ACHIEVEMENTS tab; it stays unlocked)
 tools/site.sh "SET theme N"                 # the bottom screen's colour theme (OPTIONS > THEME: 0 Mania, 1 classic .. 5 Green Hill)
 tools/scene-sweep.sh [-i IP] name           # load every scene, log each load's storage pools; stops if the game dies
 tools/ss-tour.sh [-i IP]                    # Special Stages 4, 4+, 7, 1+, 5, 6, 7+: fps and the floor's reason every 5 s

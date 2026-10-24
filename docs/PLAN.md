@@ -177,6 +177,12 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   bought, so the question says to turn it on only with Plus). OPTIONS cells are 30 px now (seven of them).
   Achievements: the decompilation's dummy core already keeps the 18 PC achievements locally (Achievements.bin, a
   popup "Achievement!" in the game's font); not checked on the console yet.
+- [ ] U1.7 (2026-10-24, `feat/achievements-tab`) ACHIEVEMENTS tab (the cup, second): the count, NOTICE (TOP: the
+  engine's own popup, drawn by the GPU path; BOTTOM: ours over the tab bar, 3 s; OFF) and SOUND (the game's
+  `Global/Twinkle.wav`, loaded for the whole game), then the 18 achievements in a list that scrolls (drag, or the bar;
+  a release without a drag opens one: the ring at 3x, name, description, when). The game's ring stands for Steam's
+  icons (not in the data), grey (citro2d `C2D_TintLuma`) while locked; descriptions translated, names kept (titles).
+  Unlock dates are ours (`achievement-dates.txt`). `SITE ACH <ACH_ID>` unlocks one for tests. Checked in Azahar.
 
 ## Decisions log
 

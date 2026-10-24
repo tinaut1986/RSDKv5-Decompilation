@@ -208,11 +208,11 @@ static const Button kButtons[] = {
 
 // Tabs, in the bar at the top (icons as in the owner's other ports). Values are saved: append only. kTabs is the
 // order they show in; DEBUG only with the dev tools.
-enum Tab { TAB_GAME, TAB_OPTIONS, TAB_DEBUG, TAB_UPDATES };
+enum Tab { TAB_GAME, TAB_OPTIONS, TAB_DEBUG, TAB_UPDATES, TAB_ACH };
 #if MANIA_DEV_TOOLS
-static const int kTabs[] = { TAB_GAME, TAB_OPTIONS, TAB_UPDATES, TAB_DEBUG };
+static const int kTabs[] = { TAB_GAME, TAB_ACH, TAB_OPTIONS, TAB_UPDATES, TAB_DEBUG };
 #else
-static const int kTabs[] = { TAB_GAME, TAB_OPTIONS, TAB_UPDATES };
+static const int kTabs[] = { TAB_GAME, TAB_ACH, TAB_OPTIONS, TAB_UPDATES };
 #endif
 enum { TAB_SHOWN = sizeof(kTabs) / sizeof(kTabs[0]) };
 
@@ -390,6 +390,14 @@ static void DrawTabIcon(int tab, float cx, float cy, u32 col, float z)
                 C2D_DrawRectSolid(cx - 7, cy - 5 + i * 5, z, 14, 1, col);
                 C2D_DrawRectSolid(cx - 5 + ((i * 5) % 9), cy - 6 + i * 5, z, 3, 3, col);
             }
+            break;
+        case TAB_ACH: // a cup: bowl, handles, stem, base
+            C2D_DrawRectSolid(cx - 4, cy - 7, z, 9, 7, col);
+            C2D_DrawRectSolid(cx - 3, cy, z, 7, 1, col);
+            C2D_DrawRectSolid(cx - 7, cy - 6, z, 2, 4, col);
+            C2D_DrawRectSolid(cx + 6, cy - 6, z, 2, 4, col);
+            C2D_DrawRectSolid(cx - 1, cy + 1, z, 3, 3, col);
+            C2D_DrawRectSolid(cx - 4, cy + 4, z, 9, 2, col);
             break;
         case TAB_UPDATES:
             C2D_DrawRectSolid(cx - 1, cy - 7, z, 3, 7, col); // the arrow's shaft
@@ -1373,6 +1381,281 @@ static void PromptTap(int i)
     Updater_AutoAnswer(i == PHIT_INSTALL);
 }
 
+// ---------------------------------------------------------------- ACHIEVEMENTS tab
+// The PC game's 18 achievements, which the decompilation's dummy core keeps on the SD card (UserCore.cpp registers them
+// with their names and descriptions, Achievements.bin holds which are unlocked; the game unlocks them through the API).
+// The tab: the count, where the unlock notice shows (Port::achNotice: the game's own on the top screen, ours over the
+// tab bar, none) and its sound, then the list, which scrolls (drag it, or the bar on the right); a tap opens one.
+// Steam's icons are not in the game's data: the game's ring stands for each, grey while locked. Unlock times are ours
+// (achievement-dates.txt): the dummy core keeps no date.
+
+enum { ACH_MAX = 32, ACH_ROW = 32, ACH_TOP = HEADER_H + 34, ACH_CELL_W = 92 };
+static bool sAchSeen[ACH_MAX], sAchSeeded;
+static time_t sAchDate[ACH_MAX]; // 0: unknown (unlocked before this build, or imported)
+static float sAchScroll;
+static int sAchTouchY = -1, sAchTouchStart;
+static bool sAchDragging, sAchBar;
+static int sAchDetail = -1;            // the one opened, -1: the list
+static int sToastAch = -1;             // OPTIONS NOTICE BOTTOM: the one being announced
+static u64 sToastUntil;
+static const char *kAchDates = "sdmc:/3ds/Sonic Mania 3DS/achievement-dates.txt";
+
+static int AchCount() { return (int)achievementList.size() < ACH_MAX ? (int)achievementList.size() : ACH_MAX; }
+
+static void LoadAchDates()
+{
+    FILE *f = fopen(kAchDates, "r");
+    if (!f)
+        return;
+    char id[48];
+    long long when;
+    while (fscanf(f, " %47s %lld", id, &when) == 2)
+        for (int i = 0; i < AchCount(); ++i)
+            if (achievementList[i].identifier == id)
+                sAchDate[i] = (time_t)when;
+    fclose(f);
+}
+
+static void SaveAchDates()
+{
+    FILE *f = fopen(kAchDates, "w");
+    if (!f)
+        return;
+    for (int i = 0; i < AchCount(); ++i)
+        if (sAchDate[i])
+            fprintf(f, "%s %lld\n", achievementList[i].identifier.c_str(), (long long)sAchDate[i]);
+    fclose(f);
+}
+
+// Every frame: an achievement unlocked since the last one gets its date, the sound and (NOTICE BOTTOM) our notice.
+static void PollAchievements()
+{
+    const int n = AchCount();
+    if (!n)
+        return;
+    if (!sAchSeeded) { // the ones unlocked before this start are not news
+        LoadAchDates();
+        for (int i = 0; i < n; ++i)
+            sAchSeen[i] = achievementList[i].achieved;
+        sAchSeeded = true;
+        return;
+    }
+    for (int i = 0; i < n; ++i) {
+        if (!achievementList[i].achieved || sAchSeen[i])
+            continue;
+        sAchSeen[i] = true;
+        sAchDate[i] = time(NULL);
+        SaveAchDates();
+        const uint16 sfx = GetSfx("Global/Twinkle.wav"); // a sparkle of the game's own (loaded for the whole game)
+        DEV_LOG("achievement: %s (sound %d)", achievementList[i].identifier.c_str(), sfx < SFX_COUNT ? (int)sfx : -1);
+        if (Port::achSound && sfx < SFX_COUNT)
+            PlaySfx(sfx, 0, 0xFF);
+        if (Port::achNotice == 2) {
+            sToastAch   = i;
+            sToastUntil = svcGetSystemTick() + 3 * (u64)SYSCLOCK_ARM11;
+        }
+        sDirty = true;
+    }
+}
+
+// The achievement's mark: the game's ring (grey while locked) once a stage has loaded it, else the tab's ring.
+static void DrawAchMark(float cx, float cy, float s, bool unlocked, float z)
+{
+    if (sArtReady) {
+        const ArtFrame &a = sArt[ART_RING];
+        if (unlocked)
+            C2D_DrawImageAt(a.img, cx - a.w * s / 2, cy - a.h * s / 2, z, NULL, s, s);
+        else { // its own shading in grey: the texture's luminance times a mid grey
+            C2D_ImageTint tint;
+            C2D_PlainImageTint(&tint, C2D_Color32(210, 215, 225, 255), 1);
+            C2D_SetTintMode(C2D_TintLuma);
+            C2D_DrawImageAt(a.img, cx - a.w * s / 2, cy - a.h * s / 2, z, &tint, s, s);
+            C2D_SetTintMode(C2D_TintSolid);
+        }
+    }
+    else
+        DrawTabIcon(TAB_GAME, cx, cy, unlocked ? Rgb(255, 215, 0) : Rgb(90, 96, 110), z);
+}
+
+static void AchDateText(int i, char *out, unsigned cap)
+{
+    if (!sAchDate[i]) {
+        out[0] = 0;
+        return;
+    }
+    const struct tm *tm = gmtime(&sAchDate[i]); // the 3DS clock is local time already
+    if (tm)
+        snprintf(out, cap, "%02d/%02d/%04d", tm->tm_mday, tm->tm_mon + 1, tm->tm_year + 1900);
+    else
+        out[0] = 0;
+}
+
+static float AchMaxScroll()
+{
+    const float h = (float)AchCount() * ACH_ROW + 4, view = H - ACH_TOP;
+    return h > view ? h - view : 0;
+}
+
+static void AchCellRect(int c, float *x) { *x = W - 8 - (2 - c) * (ACH_CELL_W + 4) + 4; } // 0 NOTICE, 1 SOUND
+
+static void DrawAchievementsTab()
+{
+    const int n = AchCount();
+    char line[96];
+    if (sAchScroll > AchMaxScroll())
+        sAchScroll = AchMaxScroll();
+    if (sAchScroll < 0)
+        sAchScroll = 0;
+
+    // The list, under the header row (which covers what scrolls up past it)
+    for (int i = 0; i < n; ++i) {
+        const float y = ACH_TOP + 2 + i * ACH_ROW - sAchScroll;
+        if (y + ACH_ROW < ACH_TOP || y > H)
+            continue;
+        const AchievementInfo &a = achievementList[i];
+        const bool got = a.achieved;
+        C2D_DrawRectSolid(6, y, 0.3f, W - 20, ACH_ROW - 3, got ? CellEdge(i) : T().tabOffEdge);
+        C2D_DrawRectSolid(7, y + 1, 0.31f, W - 22, ACH_ROW - 5, got ? CellFill(i) : T().tabOffFill);
+        DrawAchMark(22, y + (ACH_ROW - 3) / 2.0f, 1, got, 0.32f);
+        Text(a.name.c_str(), 38, y + 2, 0.45f, got ? T().accent : T().dim, 0, 0.33f);
+        AchDateText(i, line, sizeof(line));
+        if (line[0])
+            Text(line, W - 20, y + 3, 0.36f, T().dim, C2D_AlignRight, 0.33f);
+        Text(Tr(a.description.c_str()), 38, y + 16, 0.36f, got ? T().text : T().dim, 0, 0.33f);
+    }
+    // Scroll bar
+    if (AchMaxScroll() > 0) {
+        const float view = H - ACH_TOP, total = view + AchMaxScroll(), thumb = view * view / total;
+        C2D_DrawRectSolid(W - 8, ACH_TOP, 0.4f, 4, view, T().tabOffFill);
+        C2D_DrawRectSolid(W - 8, ACH_TOP + (view - thumb) * sAchScroll / AchMaxScroll(), 0.41f, 4, thumb,
+                          sAchBar || sAchDragging ? T().pressFill : T().cellLine);
+    }
+
+    // Header row: the count, NOTICE and SOUND
+    C2D_DrawRectSolid(0, HEADER_H, 0.5f, W, ACH_TOP - HEADER_H, T().bg);
+    int got = 0;
+    for (int i = 0; i < n; ++i)
+        got += achievementList[i].achieved ? 1 : 0;
+    snprintf(line, sizeof(line), "%d/%d", got, n);
+    Text(line, 10, HEADER_H + 5, 0.7f, T().accent, 0, 0.55f);
+    Text(Tr("UNLOCKED"), 10, HEADER_H + 22, 0.36f, T().dim, 0, 0.55f);
+    static const char *const kNotice[3] = { "OFF", "TOP", "BOTTOM" };
+    const char *names[2] = { "NOTICE", "SOUND" };
+    const char *vals[2]  = { kNotice[Port::achNotice < 0 || Port::achNotice > 2 ? 1 : Port::achNotice], Port::achSound ? "ON" : "OFF" };
+    for (int c = 0; c < 2; ++c) {
+        float x;
+        AchCellRect(c, &x);
+        const bool pressed = sPressed == 100 + c;
+        C2D_DrawRectSolid(x, HEADER_H + 4, 0.55f, ACH_CELL_W, 26, pressed ? T().pressEdge : CellEdge(c + 1));
+        C2D_DrawRectSolid(x + 1, HEADER_H + 5, 0.56f, ACH_CELL_W - 2, 24, pressed ? T().pressFill : CellFill(c + 1));
+        Text(Tr(names[c]), x + 5, HEADER_H + 5, 0.34f, T().label, 0, 0.57f);
+        Text(Tr(vals[c]), x + 5, HEADER_H + 15, 0.42f, T().text, 0, 0.57f);
+    }
+
+    // One opened: its ring at three times, name, description, when
+    if (sAchDetail >= 0 && sAchDetail < n) {
+        const AchievementInfo &a = achievementList[sAchDetail];
+        C2D_DrawRectSolid(0, HEADER_H, 0.8f, W, H - HEADER_H, C2D_Color32(0, 0, 0, 150));
+        C2D_DrawRectSolid(PBOX_X - 2, PBOX_Y - 2, 0.82f, PBOX_W + 4, PBOX_H + 4, T().popEdge);
+        C2D_DrawRectSolid(PBOX_X, PBOX_Y, 0.84f, PBOX_W, PBOX_H, T().popFill);
+        DrawAchMark(W / 2.0f, PBOX_Y + 30, 3, a.achieved, 0.86f);
+        Text(a.name.c_str(), W / 2.0f, PBOX_Y + 60, 0.55f, a.achieved ? T().accent : T().dim, C2D_AlignCenter, 0.9f);
+        Text(Tr(a.description.c_str()), PBOX_X + 12, PBOX_Y + 82, 0.45f, T().text, C2D_WordWrap, 0.9f, PBOX_W - 24);
+        AchDateText(sAchDetail, line, sizeof(line));
+        char status[96];
+        if (!a.achieved)
+            snprintf(status, sizeof(status), "%s", Tr("LOCKED"));
+        else if (line[0])
+            snprintf(status, sizeof(status), "%s %s", Tr("UNLOCKED"), line);
+        else
+            snprintf(status, sizeof(status), "%s", Tr("UNLOCKED"));
+        Text(status, W / 2.0f, PBOX_Y + PBOX_H - 58, 0.42f, a.achieved ? Rgb(110, 220, 130) : T().dim, C2D_AlignCenter, 0.9f);
+        Button(W / 2.0f - 60, PBOX_Y + PBOX_H - 32, 120, 24, "CLOSE", sPressed == 102, T().cellEdge, T().text, 0.9f);
+    }
+}
+
+// Touch on the tab: the cells act on touch, the list scrolls by dragging and opens a row on a release without a drag.
+// Returns what is pressed (100, 101 cells, 102 the detail's CLOSE) for the highlight.
+static int AchInput(u32 held, u32 down, const touchPosition &t)
+{
+    if (sAchDetail >= 0) {
+        const bool onClose = Inside(t.px, t.py, W / 2.0f - 60, PBOX_Y + PBOX_H - 32, 120, 24);
+        if (down & KEY_TOUCH) {
+            sAchDetail = -1; // CLOSE, or anywhere
+            sDirty     = true;
+        }
+        return (held & KEY_TOUCH) && onClose ? 102 : -1;
+    }
+    if (down & KEY_TOUCH) {
+        if (t.py < ACH_TOP) {
+            for (int c = 0; c < 2; ++c) {
+                float x;
+                AchCellRect(c, &x);
+                if (!Inside(t.px, t.py, x, HEADER_H + 4, ACH_CELL_W, 26))
+                    continue;
+                if (c == 0)
+                    Port::achNotice = (Port::achNotice + 1) % 3;
+                else
+                    Port::achSound = !Port::achSound;
+                SaveAll();
+                sDirty = true;
+                return 100 + c;
+            }
+            return -1;
+        }
+        sAchTouchY = sAchTouchStart = t.py;
+        sAchDragging = false;
+        sAchBar      = t.px >= W - 20 && AchMaxScroll() > 0;
+    }
+    if ((held & KEY_TOUCH) && sAchTouchY >= 0) {
+        if (sAchBar)
+            sAchScroll = (t.py - ACH_TOP) * AchMaxScroll() / (H - ACH_TOP);
+        else {
+            if (t.py - sAchTouchStart > 4 || sAchTouchStart - t.py > 4)
+                sAchDragging = true;
+            if (sAchDragging)
+                sAchScroll += sAchTouchY - t.py;
+        }
+        sAchTouchY = t.py;
+        sDirty     = true;
+    }
+    else if (!(held & KEY_TOUCH) && sAchTouchY >= 0) { // released
+        if (!sAchDragging && !sAchBar) {
+            const int row = (int)((sAchTouchStart - ACH_TOP - 2 + sAchScroll) / ACH_ROW);
+            if (row >= 0 && row < AchCount())
+                sAchDetail = row;
+        }
+        sAchTouchY   = -1;
+        sAchDragging = sAchBar = false;
+        sDirty       = true;
+    }
+    if (held & KEY_TOUCH)
+        for (int c = 0; c < 2; ++c) {
+            float x;
+            AchCellRect(c, &x);
+            if (Inside(t.px, t.py, x, HEADER_H + 4, ACH_CELL_W, 26))
+                return 100 + c;
+        }
+    return -1;
+}
+
+// NOTICE BOTTOM: the unlock over the tab bar, three seconds, on any tab.
+static void DrawAchToast()
+{
+    if (sToastAch < 0)
+        return;
+    if (svcGetSystemTick() >= sToastUntil || sToastAch >= AchCount()) {
+        sToastAch = -1;
+        return;
+    }
+    const float x = 4, y = 2, w = W - 8, h = 40;
+    C2D_DrawRectSolid(x - 1, y - 1, 0.9f, w + 2, h + 2, T().accent);
+    C2D_DrawRectSolid(x, y, 0.91f, w, h, T().popFill);
+    DrawAchMark(x + 20, y + h / 2, 1.5f, true, 0.92f);
+    Text(Tr("ACHIEVEMENT!"), x + 40, y + 4, 0.42f, T().accent, 0, 0.93f);
+    Text(achievementList[sToastAch].name.c_str(), x + 40, y + 19, 0.55f, T().text, 0, 0.93f);
+}
+
 // ---------------------------------------------------------------- DEBUG tab
 
 #if MANIA_DEV_TOOLS
@@ -1430,12 +1713,14 @@ static void Draw()
     switch (Port::tab) {
         case TAB_OPTIONS: DrawOptionsTab(); break;
         case TAB_UPDATES: DrawUpdatesTab(); break;
+        case TAB_ACH: DrawAchievementsTab(); break;
 #if MANIA_DEV_TOOLS
         case TAB_DEBUG: DrawDebugTab(); break;
 #endif
         default: DrawGameTab(); break;
     }
     DrawTabBar();
+    DrawAchToast();
     DrawUpdatePrompt();
 
 #if MANIA_DEV_TOOLS
@@ -1810,6 +2095,7 @@ void BottomUi::Update()
     if (!sReady)
         return;
     PollItems(); // every frame, whatever the tab: a box opened while another tab is open still shows
+    PollAchievements();
 #if MANIA_DEV_TOOLS
     if (!DevTools::swBottomUi)
         return;
@@ -1827,6 +2113,9 @@ void BottomUi::Update()
         down |= KEY_TOUCH;
         held |= KEY_TOUCH;
     }
+    // ACHIEVEMENTS handles its own touches (a drag scrolls, a release opens), except on the tab bar and under a prompt
+    const bool achTab = Port::tab == TAB_ACH && !UpdatePromptShown() && !((down & KEY_TOUCH) && t.py < HEADER_H);
+    const int achHit  = achTab ? AchInput(held, down, t) : -1;
     int hit = -1;
     if (held & KEY_TOUCH) {
         if (UpdatePromptShown()) {
@@ -1903,6 +2192,8 @@ void BottomUi::Update()
     if ((down & KEY_TOUCH) && hit >= 0) {
         if (UpdatePromptShown())
             PromptTap(hit);
+        else if (achTab)
+            ; // AchInput acted already
 #if MANIA_DEV_TOOLS
         else if (debugTab)
             kButtons[hit].tap();
@@ -1914,6 +2205,8 @@ void BottomUi::Update()
         SaveAll();
         sDirty = true;
     }
+    if (achTab)
+        hit = achHit;
     if (hit != sPressed) {
         sPressed = hit;
         sDirty   = true;

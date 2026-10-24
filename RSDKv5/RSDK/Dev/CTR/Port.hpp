@@ -25,6 +25,8 @@ extern bool betas;      // UPDATES > BETAS: the beta channel too (pre-releases)
 extern int theme;       // OPTIONS > THEME: the bottom screen's colours (BottomUi's kThemes)
 extern bool plus;       // OPTIONS > PLUS: Sonic Mania Plus content (Mighty, Ray, Encore); off by default, read at boot
 extern bool plusAsked;  // the one-time question (OfferPlus) was answered
+extern int achNotice;   // ACHIEVEMENTS > NOTICE: 0 off, 1 top (the game's own), 2 bottom (over the tab bar)
+extern bool achSound;   // ACHIEVEMENTS > SOUND: a sparkle when one unlocks
 
 void Load(); // before the engine starts
 void Save();
