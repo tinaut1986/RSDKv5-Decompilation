@@ -68,7 +68,7 @@ goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`). Without
 - `master` is the fork's GitHub default branch (SaturnSH2x2's history); we do not use it.
 - Releases: `tools/version.sh` gives the version from git; a tag `vX.Y.Z` runs `.github/workflows/build-release.yml`, which
   builds the CIA and publishes it (beta = pre-release, built with the dev tools, off a `release/*` branch; stable on
-  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.2.1` since 2026-10-24, after the `v0.2.0` stable, the first one) and the open feature branches are on `origin`.
+  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.2.2` since 2026-10-24, after the `v0.2.1` stable) and the open feature branches are on `origin`.
 - Commit only when the owner asks; the owner asked for commits at the end of each long task.
 - **Issues** are enabled on `origin` (2026-10-22): pending work, bugs and the owner's requests go there (English, label
   `bug`/`enhancement`, sections Seen / Likely cause / To try / To check, as in sm-3ds); docs keep the technical record.
