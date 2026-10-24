@@ -16,9 +16,17 @@ typedef struct {
     int gameMode;         // 0 Mania, 1 Encore, 2 Time Attack, 3 Competition (Plus numbering), -1 unknown
     int saveSlot;         // -1: no save
     int emeralds;         // bit mask of the save's chaos emeralds (-1: unknown)
+    int invincible;       // frames of invincibility left (the item box's, not the hit's)
+    int speedShoes;       // frames of speed shoes left
+    int hyperRing;        // the hyper ring is on
 } PortGameInfo;
 
 void PortGame_GetInfo(PortGameInfo *out);
+
+// Item boxes opened since the last call: their contents (the game's ITEMBOX_* numbering, which is also the frame of
+// the contents icon in Global/ItemBox.bin animation 2), at most `max`; returns how many. `reset` after a scene load:
+// the boxes already open in it (reloaded from a checkpoint) are taken as known, not as news.
+int PortGame_PollItems(int *types, int max, int reset);
 
 #ifdef __cplusplus
 }

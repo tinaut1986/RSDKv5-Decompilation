@@ -464,19 +464,23 @@ static const char *CharName(int id)
 }
 
 // ---------------------------------------------------------------- the game's HUD art
+
+enum { ITEM_TYPES = 18 }; // ITEMBOX_RING .. ITEMBOX_STOCK (Plus)
 // The GAME tab draws TIME, SCORE, RINGS and LIVES with the game's own HUD sprites, as the top screen shows them:
 // Global/HUD.bin (the labels SCORE / TIME / RINGS and their red flashing frames, the time's marks, the digits, the "x"
 // and the characters' heads) and a ring from Global/Ring.bin. Those sheets are stage-scoped, 8-bit and drawn through
 // the palette: the first time a stage has them loaded, the frames are copied through the palette into a texture of
-// ours (RGBA8, 128x128, 64 KB), which then outlives the stage. Until then the boxes use the system font.
+// ours (RGBA5551, 256x128, 64 KB), which then outlives the stage. The item boxes' icons (Global/ItemBox.bin) come with
+// them, for the row of picked items. Until then the boxes use the system font.
 
 enum ArtId {
     ART_SCORE, ART_TIME, ART_TIME_RED, ART_RINGS, ART_RINGS_RED, ART_MARKS, ART_X, ART_DIGIT,
     ART_LIFE = ART_DIGIT + 10, // Sonic, Tails, Knuckles, Mighty, Ray (HUD_CharacterIndexFromID)
     ART_RING = ART_LIFE + 5,
-    ART_COUNT,
+    ART_ITEM, // the item boxes' contents icons, by ITEMBOX_* (ItemBox.bin animation 2)
+    ART_COUNT = ART_ITEM + ITEM_TYPES,
 };
-enum { ART_TEX = 128 };
+enum { ART_W = 256, ART_H = 128 };
 struct ArtFrame {
     Tex3DS_SubTexture sub;
     C2D_Image img;
@@ -523,34 +527,42 @@ static bool LoadArt()
     for (int i = 0; i < 5; ++i)
         src[ART_LIFE + i] = { "Global/HUD.bin", 2, i };
     src[ART_RING] = { "Global/Ring.bin", 0, 0 };
+    for (int i = 0; i < ITEM_TYPES; ++i)
+        src[ART_ITEM + i] = { "Global/ItemBox.bin", 2, i };
     const SpriteFrame *frames[ART_COUNT];
     for (int i = 0; i < ART_COUNT; ++i)
-        if (!(frames[i] = FindFrame(src[i].file, src[i].anim, src[i].frame)))
+        if (!(frames[i] = FindFrame(src[i].file, src[i].anim, src[i].frame)) && i < ART_ITEM)
             return false; // not in this scene (menus, the title): next time
+    if (!frames[ART_ITEM])
+        return false; // a stage without item boxes loaded: wait for one that has them
 
     // Shelves, left to right, a pixel apart
     int sx = 0, sy = 0, shelfH = 0, at[ART_COUNT][2];
     for (int i = 0; i < ART_COUNT; ++i) {
+        if (!frames[i]) // an item icon this version lacks
+            continue;
         const int w = frames[i]->width, h = frames[i]->height;
-        if (sx + w > ART_TEX)
+        if (sx + w > ART_W)
             sx = 0, sy += shelfH + 1, shelfH = 0;
-        if (w > ART_TEX || sy + h > ART_TEX) {
+        if (w > ART_W || sy + h > ART_H) {
             sArtFailed = true;
-            DEV_LOG("hud art: does not fit %dx%d", ART_TEX, ART_TEX);
+            DEV_LOG("hud art: does not fit %dx%d", ART_W, ART_H);
             return false;
         }
         at[i][0] = sx, at[i][1] = sy;
         sx += w + 1;
         shelfH = h > shelfH ? h : shelfH;
     }
-    if (!C3D_TexInit(&sArtTex, ART_TEX, ART_TEX, GPU_RGBA8)) {
+    if (!C3D_TexInit(&sArtTex, ART_W, ART_H, GPU_RGBA5551)) {
         sArtFailed = true;
         return false;
     }
-    u32 *tex = (u32 *)sArtTex.data;
-    memset(tex, 0, ART_TEX * ART_TEX * 4);
+    u16 *tex = (u16 *)sArtTex.data;
+    memset(tex, 0, ART_W * ART_H * 2);
     const uint16 *pal = fullPalette[gfxLineBuffer[0]]; // the top lines' bank: the HUD's colours
     for (int i = 0; i < ART_COUNT; ++i) {
+        if (!frames[i])
+            continue;
         const SpriteFrame &f    = *frames[i];
         const GFXSurface &surf  = gfxSurface[f.sheetID];
         for (int y = 0; y < f.height; ++y)
@@ -561,22 +573,21 @@ static bool LoadArt()
                 const uint16 c = pal[index]; // RGB565
                 // 8x8 tiles, Morton order inside
                 const u32 tx = at[i][0] + x, ty = at[i][1] + y;
-                const u32 o  = (((ty >> 3) * (ART_TEX >> 3) + (tx >> 3)) << 6) | (tx & 1) | ((ty & 1) << 1) | ((tx & 2) << 1) | ((ty & 2) << 2)
+                const u32 o  = (((ty >> 3) * (ART_W >> 3) + (tx >> 3)) << 6) | (tx & 1) | ((ty & 1) << 1) | ((tx & 2) << 1) | ((ty & 2) << 2)
                               | ((tx & 4) << 2) | ((ty & 4) << 3);
-                const u32 r5 = c >> 11, g6 = (c >> 5) & 63, b5 = c & 31;
-                tex[o] = (((r5 << 3) | (r5 >> 2)) << 24) | (((g6 << 2) | (g6 >> 4)) << 16) | (((b5 << 3) | (b5 >> 2)) << 8) | 0xFF;
+                tex[o] = (u16)(((c >> 11) << 11) | (((c >> 6) & 31) << 6) | ((c & 31) << 1) | 1);
             }
         ArtFrame &a = sArt[i];
         a.w = f.width, a.h = f.height, a.px = f.pivotX, a.py = f.pivotY;
-        a.sub     = { (u16)f.width, (u16)f.height, at[i][0] / (float)ART_TEX, 1 - at[i][1] / (float)ART_TEX,
-                      (at[i][0] + f.width) / (float)ART_TEX, 1 - (at[i][1] + f.height) / (float)ART_TEX };
+        a.sub     = { (u16)f.width, (u16)f.height, at[i][0] / (float)ART_W, 1 - at[i][1] / (float)ART_H,
+                      (at[i][0] + f.width) / (float)ART_W, 1 - (at[i][1] + f.height) / (float)ART_H };
         a.img.tex    = &sArtTex;
         a.img.subtex = &a.sub;
     }
     unsigned lit = 0;
-    for (int i = 0; i < ART_TEX * ART_TEX; ++i)
+    for (int i = 0; i < ART_W * ART_H; ++i)
         lit += tex[i] != 0;
-    DEV_LOG("hud art: %u texels, digit %dx%d pivot %d,%d, head %dx%d, ring %dx%d", lit, sArt[ART_DIGIT].w, sArt[ART_DIGIT].h,
+    DEV_LOG("hud art: %u texels, %d rows used, digit %dx%d pivot %d,%d, head %dx%d, ring %dx%d", lit, sy + shelfH, sArt[ART_DIGIT].w, sArt[ART_DIGIT].h,
             sArt[ART_DIGIT].px, sArt[ART_DIGIT].py, sArt[ART_LIFE].w, sArt[ART_LIFE].h, sArt[ART_RING].w, sArt[ART_RING].h);
     C3D_TexFlush(&sArtTex);
     C3D_TexSetFilter(&sArtTex, GPU_NEAREST, GPU_NEAREST);
@@ -609,6 +620,73 @@ static void NumberAnchor(float right, float bottom, float s, float *x, float *y)
     const ArtFrame &d = sArt[ART_DIGIT];
     *x = right - (d.px + d.w) * s;
     *y = bottom - (d.py + d.h) * s;
+}
+
+// ---- the row of picked item boxes (under the emeralds)
+// Each box opened shows its icon for ITEM_SHOW_MS; a power that lasts (a shield, invincibility, speed shoes, the hyper
+// ring, super) keeps it as long as the player has it. Oldest on the left; a full row drops its oldest.
+enum { ITEM_ROW = 8, ITEM_SHOW_MS = 2000 };
+enum { IT_RING, IT_BLUE, IT_BUBBLE, IT_FIRE, IT_LIGHTNING, IT_INVINCIBLE, IT_SNEAKERS, IT_HYPERRING = 11, IT_SUPER = 14 }; // ITEMBOX_*
+static struct {
+    int type;
+    u64 since; // osGetTime()
+} sItems[ITEM_ROW];
+static int sItemCount;
+static bool sItemsReset = true; // after a scene load: the boxes already open are not news
+
+static bool ItemIsShield(int t) { return t >= IT_BLUE && t <= IT_LIGHTNING; }
+static bool ItemLasts(int t) { return ItemIsShield(t) || t == IT_INVINCIBLE || t == IT_SNEAKERS || t == IT_HYPERRING || t == IT_SUPER; }
+
+static void ItemRemove(int i)
+{
+    for (; i + 1 < sItemCount; ++i)
+        sItems[i] = sItems[i + 1];
+    --sItemCount;
+}
+
+// Every frame: the boxes opened since the last frame join the row (a lasting power replaces its older icon).
+static void PollItems()
+{
+    int got[4];
+    const int n   = PortGame_PollItems(got, 4, sItemsReset);
+    sItemsReset   = false;
+    for (int k = 0; k < n; ++k) {
+        const int t = got[k];
+        DEV_LOG("item box: %d", t);
+        if (t < 0 || t >= ITEM_TYPES)
+            continue;
+        if (ItemLasts(t))
+            for (int i = sItemCount - 1; i >= 0; --i)
+                if (sItems[i].type == t || (ItemIsShield(t) && ItemIsShield(sItems[i].type)))
+                    ItemRemove(i);
+        if (sItemCount == ITEM_ROW)
+            ItemRemove(0);
+        sItems[sItemCount].type    = t;
+        sItems[sItemCount++].since = osGetTime();
+        sDirty                     = true;
+    }
+}
+
+// Drops the icons whose time is over: ITEM_SHOW_MS for all, longer for a power the player still has.
+static void ExpireItems(const PortGameInfo &gi)
+{
+    const u64 now = osGetTime();
+    for (int i = sItemCount - 1; i >= 0; --i) {
+        const int t     = sItems[i].type;
+        bool active     = false;
+        if (ItemIsShield(t))
+            active = gi.shield == t; // SHIELD_BLUE..SHIELD_LIGHTNING follow ITEMBOX_BLUESHIELD..LIGHTNINGSHIELD
+        else if (t == IT_INVINCIBLE)
+            active = gi.invincible > 0;
+        else if (t == IT_SNEAKERS)
+            active = gi.speedShoes > 0;
+        else if (t == IT_HYPERRING)
+            active = gi.hyperRing;
+        else if (t == IT_SUPER)
+            active = gi.super;
+        if (!gi.playerValid || (!active && now - sItems[i].since >= ITEM_SHOW_MS))
+            ItemRemove(i);
+    }
 }
 
 static bool Flash() { return (svcGetSystemTick() / (SYSCLOCK_ARM11 * 8 / 60)) & 1; } // the HUD's 8-frame blink
@@ -750,18 +828,20 @@ static void DrawGameTab()
         C2D_DrawTriangle(ex, ey - 7, col, ex - 7, ey, col, ex + 7, ey, col, 0.3f);
         C2D_DrawTriangle(ex - 7, ey, col, ex + 7, ey, col, ex, ey + 7, col, 0.3f);
     }
-    y += 22;
+    y += 20;
 
-    static const char *const kShields[] = { "NONE", "SHIELD", "BUBBLE", "FIRE", "LIGHTNING" };
-    if (inStage) {
-        snprintf(line, sizeof(line), "%s %s%s%s", Tr("SHIELD"), gi.shield >= 0 && gi.shield < 5 ? Tr(kShields[gi.shield]) : "?", gi.super ? "     " : "",
-                 gi.super ? Tr("SUPER") : "");
-        Text(line, 10, y, 0.42f, Rgb(200, 205, 210));
+    // The item boxes picked (PollItems), their icons in a row at twice their size
+    ExpireItems(gi);
+    if (sArtReady) {
+        float x = 10;
+        for (int i = 0; i < sItemCount; ++i) {
+            const ArtFrame &a = sArt[ART_ITEM + sItems[i].type];
+            if (!a.w)
+                continue;
+            DrawArt(ART_ITEM + sItems[i].type, x - a.px * ART_SCALE, y - a.py * ART_SCALE, ART_SCALE, 0.33f);
+            x += a.w * ART_SCALE + 6;
+        }
     }
-
-    // Footer: frame rate and renderer
-    snprintf(line, sizeof(line), "%.0f FPS  %s", Port::Fps(), Port::GpuMode() ? "GPU" : "CPU");
-    Text(line, W / 2.0f, H - 16, 0.42f, T().footer, C2D_AlignCenter);
 }
 
 // ---------------------------------------------------------------- OPTIONS tab
@@ -1613,6 +1693,7 @@ void BottomUi::LoadEnd()
 #endif
     sLoad.active = false;
     sDirty       = true; // the tabs again
+    sItemsReset  = true;
 }
 
 // While the graphical screen is up, stdout and stderr go nowhere: the engine's prints went to the libctru text
@@ -1663,6 +1744,7 @@ void BottomUi::Update()
 {
     if (!sReady)
         return;
+    PollItems(); // every frame, whatever the tab: a box opened while another tab is open still shows
 #if MANIA_DEV_TOOLS
     if (!DevTools::swBottomUi)
         return;

@@ -29,6 +29,41 @@ void PortGame_GetInfo(PortGameInfo *out)
             out->lives       = p->lives;
             out->shield      = p->shield;
             out->super       = p->superState == SUPERSTATE_SUPER;
+            out->invincible  = p->invincibleTimer;
+            out->speedShoes  = p->speedShoesTimer;
+            out->hyperRing   = p->hyperRing;
         }
     }
+}
+
+// One bit per entity slot: that slot's box was already reported (or found open). Cleared again when the slot holds a
+// closed box, so a box restored by a checkpoint counts anew when it is opened again.
+static uint8 sBoxKnown[ENTITY_COUNT / 8 + 1];
+
+int PortGame_PollItems(int *types, int max, int reset)
+{
+    if (reset)
+        memset(sBoxKnown, 0, sizeof(sBoxKnown));
+    if (!ItemBox || !ItemBox->classID)
+        return 0;
+    int n = 0;
+    foreach_all(ItemBox, box)
+    {
+        const int slot  = RSDK.GetEntitySlot(box);
+        const uint8 bit = 1 << (slot & 7);
+        // The contents are given at the end of ItemBox_State_Break (a random box has its type by then)
+        const bool32 opened = box->state == ItemBox_State_IconFinish || box->state == ItemBox_State_Broken;
+        if (!opened)
+            sBoxKnown[slot >> 3] &= ~bit;
+        else if (!(sBoxKnown[slot >> 3] & bit)) {
+            sBoxKnown[slot >> 3] |= bit;
+#if MANIA_USE_PLUS
+            if (box->type == ITEMBOX_STOCK) // Encore's character boxes: no contents icon
+                continue;
+#endif
+            if (!reset && n < max)
+                types[n++] = box->type;
+        }
+    }
+    return n;
 }

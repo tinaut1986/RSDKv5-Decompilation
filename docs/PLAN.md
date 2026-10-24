@@ -157,6 +157,11 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   frame of its own (which waits for the GPU). To check: the cost in `TIMES`/`STATE` on the 2DS, and that it never tears.
   Lesson: citro3d textures written by hand go top row first (row 0 of the tiles is the image's top, with citro2d's
   `top = 1 - y / h` subtexture); flipping the rows drew nothing.
+  Under the emeralds (the SHIELD line and the FPS footer are gone): a row of the item boxes picked, with the game's
+  contents icons (Global/ItemBox.bin animation 2, in the same texture, now 256x128 RGBA5551). `PortGame_PollItems`
+  (GameInfo.c) reports each box that reaches ItemBox_State_IconFinish once; an icon stays 2 s, a lasting power (shield,
+  invincibility, speed shoes, hyper ring, super) as long as the player has it. Checked in Azahar with a lightning
+  shield (`GOTO ItemBox 120` then `INPUT 11` breaks Green Hill 1's first box).
 
 ## Decisions log
 
