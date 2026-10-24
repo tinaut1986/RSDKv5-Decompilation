@@ -125,8 +125,9 @@ name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/lu
 `arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
 `crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).
 
-- The owner's consoles: an **Old 2DS** (Old 3DS CPU; 192.168.1.141, on 2026-10-24 it had .133) and a **New 3DS**
-  (it had .133 before; 3D screen: check stereo there): the bottom screen's DEBUG tab shows the IP. IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
+- The owner's consoles: an **Old 2DS** (Old 3DS CPU; 192.168.1.133 on 2026-10-24, .141 before) and a **New 3DS**
+  (192.168.1.139 on 2026-10-24; 3D screen: check stereo there). Both got the v0.2.2 stable that day (no FTP: FBI to
+  put a dev build back): the bottom screen's DEBUG tab shows the IP. IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
 - **FRAME SKIP is on by default** (`Port::frameSkip = true` in the code; `port-settings.ini` overrides it): with it on, the
   `fps` of `SITE STATE` counts logic passes, not drawn frames. Turn it off (`SET frameskip 0`) before any measurement,
   or use a recorded run (`RUNPLAY`), whose result counts drawn frames.
