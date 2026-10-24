@@ -1072,8 +1072,11 @@ static void DrawNotes(const UpdateStatus &st, float x, float y, float w, float b
     Text(head, x + w / 2, y, 0.45f, T().accent, C2D_AlignCenter, z);
     C2D_DrawRectSolid(x, y + 16, z, w, by - y - 20, T().noteEdge);
     C2D_DrawRectSolid(x + 1, y + 17, z + 0.01f, w - 2, by - y - 22, T().noteFill);
-    for (unsigned i = sNotePage * NOTE_ROWS; i < sNoteCount && i < (sNotePage + 1) * NOTE_ROWS; ++i)
-        Text(sNotes[i], x + 5, y + 19 + (i - sNotePage * NOTE_ROWS) * 11, 0.38f, Rgb(220, 224, 235), 0, z + 0.02f);
+    for (unsigned i = sNotePage * NOTE_ROWS; i < sNoteCount && i < (sNotePage + 1) * NOTE_ROWS; ++i) {
+        // A release's heading (Update_FormatNotes) in the title colour
+        const bool head = sNotes[i][0] == UPDATE_NOTES_HEADING;
+        Text(sNotes[i] + head, x + 5, y + 19 + (i - sNotePage * NOTE_ROWS) * 11, 0.38f, head ? T().accent : Rgb(220, 224, 235), 0, z + 0.02f);
+    }
     const float bw = (w - 8) / 3;
     Button(x, by, bw, 24, "PREV", sPressed == prev, T().cellEdge, sNotePage ? T().text : Rgb(90, 100, 115), z);
     Button(x + bw + 4, by, bw, 24, "CLOSE", sPressed == prev + 1, T().cellEdge, T().text, z);
