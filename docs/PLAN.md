@@ -75,6 +75,7 @@
 | `release/v0.1.3` | (was `release/v0.1.0`, renamed after each beta tag) Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). On 2026-10-24 also the session 6 work (beta `v0.1.1`) and `fix/3d-depth-bands` (#11, #12, #13). Merged topic branches deleted. |
 | `feat/ui-languages` | Off `release/v0.1.3`: the port's text in the game's language. Waiting for the owner on the console. |
 | `feat/ui-themes` | Off `feat/ui-languages`: OPTIONS > THEME (dropdown) and `SITE TOUCH x y`. Waiting for the owner; merge after the languages. |
+| `feat/game-tab-hud-art` | Off `feat/ui-themes`: the GAME tab with the game's HUD art, the time at the game's rate. Waiting for the owner. |
 
 ## Tasks
 
@@ -148,6 +149,14 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   cell, navy with diagonal stripes), and CLASSIC, SONIC blue, KNUCKLES red, SUPER SONIC gold, GREEN HILL green,
   saved as `theme=` in `port-settings.ini`. To check on hardware: the accents and the Japanese with the real system
   font (Azahar's stand-in font draws them badly), and that the text fits the cells.
+- [ ] U1.4 (2026-10-24, `feat/game-tab-hud-art`, off `feat/ui-themes`, to check on the console) The GAME tab's TIME,
+  SCORE, RINGS and LIVES with the game's own HUD sprites (Global/HUD.bin labels, digits, "x", heads; a ring from
+  Global/Ring.bin), copied through the palette into a 128x128 RGBA8 texture the first time a stage has them (64 KB of
+  linear memory); the labels blink red as on the HUD. The TIME box is redrawn alone inside the top screen's citro3d
+  frame when the time changes (`BottomUi::DrawInTopFrame`), so the hundredths run at the game's rate without a bottom
+  frame of its own (which waits for the GPU). To check: the cost in `TIMES`/`STATE` on the 2DS, and that it never tears.
+  Lesson: citro3d textures written by hand go top row first (row 0 of the tiles is the image's top, with citro2d's
+  `top = 1 - y / h` subtexture); flipping the rows drew nothing.
 
 ## Decisions log
 

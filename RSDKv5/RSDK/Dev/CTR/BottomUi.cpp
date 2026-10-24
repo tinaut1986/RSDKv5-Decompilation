@@ -463,6 +463,192 @@ static const char *CharName(int id)
     }
 }
 
+// ---------------------------------------------------------------- the game's HUD art
+// The GAME tab draws TIME, SCORE, RINGS and LIVES with the game's own HUD sprites, as the top screen shows them:
+// Global/HUD.bin (the labels SCORE / TIME / RINGS and their red flashing frames, the time's marks, the digits, the "x"
+// and the characters' heads) and a ring from Global/Ring.bin. Those sheets are stage-scoped, 8-bit and drawn through
+// the palette: the first time a stage has them loaded, the frames are copied through the palette into a texture of
+// ours (RGBA8, 128x128, 64 KB), which then outlives the stage. Until then the boxes use the system font.
+
+enum ArtId {
+    ART_SCORE, ART_TIME, ART_TIME_RED, ART_RINGS, ART_RINGS_RED, ART_MARKS, ART_X, ART_DIGIT,
+    ART_LIFE = ART_DIGIT + 10, // Sonic, Tails, Knuckles, Mighty, Ray (HUD_CharacterIndexFromID)
+    ART_RING = ART_LIFE + 5,
+    ART_COUNT,
+};
+enum { ART_TEX = 128 };
+struct ArtFrame {
+    Tex3DS_SubTexture sub;
+    C2D_Image img;
+    int16 w, h, px, py;
+};
+static ArtFrame sArt[ART_COUNT];
+static C3D_Tex sArtTex;
+static bool sArtReady, sArtFailed;
+
+static const SpriteFrame *FindFrame(const char *file, int anim, int frame)
+{
+    RETRO_HASH_MD5(hash);
+    GEN_HASH_MD5(file, hash);
+    for (int32 i = 0; i < SPRFILE_COUNT; ++i) {
+        const SpriteAnimation &sa = spriteAnimationList[i];
+        if (sa.scope == SCOPE_NONE || !HASH_MATCH_MD5(sa.hash, hash))
+            continue;
+        if (!sa.animations || !sa.frames || anim >= sa.animCount || frame >= sa.animations[anim].frameCount)
+            return NULL;
+        const SpriteFrame *f = &sa.frames[sa.animations[anim].frameListOffset + frame];
+        const GFXSurface &surf = gfxSurface[f->sheetID];
+        if (!surf.pixels || f->sprX + f->width > surf.width || f->sprY + f->height > surf.height || f->width <= 0 || f->height <= 0)
+            return NULL;
+        return f;
+    }
+    return NULL;
+}
+
+// Once, when the stage has the sheets: false until then (and for good if the texture cannot be made).
+static bool LoadArt()
+{
+    if (sArtReady || sArtFailed)
+        return sArtReady;
+    struct Src {
+        const char *file;
+        int anim, frame;
+    };
+    Src src[ART_COUNT];
+    static const int kElements[ART_DIGIT] = { 0, 1, 2, 3, 4, 12, 14 }; // HUD.bin animation 0 (HUD_Draw)
+    for (int i = 0; i < ART_DIGIT; ++i)
+        src[i] = { "Global/HUD.bin", 0, kElements[i] };
+    for (int i = 0; i < 10; ++i)
+        src[ART_DIGIT + i] = { "Global/HUD.bin", 1, i };
+    for (int i = 0; i < 5; ++i)
+        src[ART_LIFE + i] = { "Global/HUD.bin", 2, i };
+    src[ART_RING] = { "Global/Ring.bin", 0, 0 };
+    const SpriteFrame *frames[ART_COUNT];
+    for (int i = 0; i < ART_COUNT; ++i)
+        if (!(frames[i] = FindFrame(src[i].file, src[i].anim, src[i].frame)))
+            return false; // not in this scene (menus, the title): next time
+
+    // Shelves, left to right, a pixel apart
+    int sx = 0, sy = 0, shelfH = 0, at[ART_COUNT][2];
+    for (int i = 0; i < ART_COUNT; ++i) {
+        const int w = frames[i]->width, h = frames[i]->height;
+        if (sx + w > ART_TEX)
+            sx = 0, sy += shelfH + 1, shelfH = 0;
+        if (w > ART_TEX || sy + h > ART_TEX) {
+            sArtFailed = true;
+            DEV_LOG("hud art: does not fit %dx%d", ART_TEX, ART_TEX);
+            return false;
+        }
+        at[i][0] = sx, at[i][1] = sy;
+        sx += w + 1;
+        shelfH = h > shelfH ? h : shelfH;
+    }
+    if (!C3D_TexInit(&sArtTex, ART_TEX, ART_TEX, GPU_RGBA8)) {
+        sArtFailed = true;
+        return false;
+    }
+    u32 *tex = (u32 *)sArtTex.data;
+    memset(tex, 0, ART_TEX * ART_TEX * 4);
+    const uint16 *pal = fullPalette[gfxLineBuffer[0]]; // the top lines' bank: the HUD's colours
+    for (int i = 0; i < ART_COUNT; ++i) {
+        const SpriteFrame &f    = *frames[i];
+        const GFXSurface &surf  = gfxSurface[f.sheetID];
+        for (int y = 0; y < f.height; ++y)
+            for (int x = 0; x < f.width; ++x) {
+                const uint8 index = surf.pixels[(f.sprY + y) * surf.width + f.sprX + x];
+                if (!index)
+                    continue;
+                const uint16 c = pal[index]; // RGB565
+                // 8x8 tiles, Morton order inside
+                const u32 tx = at[i][0] + x, ty = at[i][1] + y;
+                const u32 o  = (((ty >> 3) * (ART_TEX >> 3) + (tx >> 3)) << 6) | (tx & 1) | ((ty & 1) << 1) | ((tx & 2) << 1) | ((ty & 2) << 2)
+                              | ((tx & 4) << 2) | ((ty & 4) << 3);
+                const u32 r5 = c >> 11, g6 = (c >> 5) & 63, b5 = c & 31;
+                tex[o] = (((r5 << 3) | (r5 >> 2)) << 24) | (((g6 << 2) | (g6 >> 4)) << 16) | (((b5 << 3) | (b5 >> 2)) << 8) | 0xFF;
+            }
+        ArtFrame &a = sArt[i];
+        a.w = f.width, a.h = f.height, a.px = f.pivotX, a.py = f.pivotY;
+        a.sub     = { (u16)f.width, (u16)f.height, at[i][0] / (float)ART_TEX, 1 - at[i][1] / (float)ART_TEX,
+                      (at[i][0] + f.width) / (float)ART_TEX, 1 - (at[i][1] + f.height) / (float)ART_TEX };
+        a.img.tex    = &sArtTex;
+        a.img.subtex = &a.sub;
+    }
+    unsigned lit = 0;
+    for (int i = 0; i < ART_TEX * ART_TEX; ++i)
+        lit += tex[i] != 0;
+    DEV_LOG("hud art: %u texels, digit %dx%d pivot %d,%d, head %dx%d, ring %dx%d", lit, sArt[ART_DIGIT].w, sArt[ART_DIGIT].h,
+            sArt[ART_DIGIT].px, sArt[ART_DIGIT].py, sArt[ART_LIFE].w, sArt[ART_LIFE].h, sArt[ART_RING].w, sArt[ART_RING].h);
+    C3D_TexFlush(&sArtTex);
+    C3D_TexSetFilter(&sArtTex, GPU_NEAREST, GPU_NEAREST);
+    sArtReady = true;
+    return true;
+}
+
+// Frame `id` drawn as the game does at (x, y): its pivot from there, `s` times its size.
+static void DrawArt(int id, float x, float y, float s, float z)
+{
+    const ArtFrame &a = sArt[id];
+    C2D_DrawImageAt(a.img, x + a.px * s, y + a.py * s, z, NULL, s, s);
+}
+
+// HUD_DrawNumbersBase10: the digits from the right, 8 px apart, the last one at (x, y); `digits` 0: as many as needed.
+static void DrawNumber(int value, int digits, float x, float y, float s, float z)
+{
+    if (value < 0)
+        value = 0;
+    if (!digits)
+        for (int v = value; v > 0 || !digits; v /= 10)
+            ++digits;
+    for (int d = 1; digits--; d *= 10, x -= 8 * s)
+        DrawArt(ART_DIGIT + value / d % 10, x, y, s, z);
+}
+
+// Where a number's last digit goes for its right edge at `right` and its bottom at `bottom`.
+static void NumberAnchor(float right, float bottom, float s, float *x, float *y)
+{
+    const ArtFrame &d = sArt[ART_DIGIT];
+    *x = right - (d.px + d.w) * s;
+    *y = bottom - (d.py + d.h) * s;
+}
+
+static bool Flash() { return (svcGetSystemTick() / (SYSCLOCK_ARM11 * 8 / 60)) & 1; } // the HUD's 8-frame blink
+
+// A stat box's frame, in its colour (MANIA: tint i).
+static void BoxFrame(int i, float x, float y, float w, float h)
+{
+    C2D_DrawRectSolid(x, y, 0.3f, w, h, T().multi ? CellEdge(i) : T().boxEdge);
+    C2D_DrawRectSolid(x + 1, y + 1, 0.31f, w - 2, h - 2, T().multi ? CellFill(i) : T().boxFill);
+}
+
+// The game's label sprite at the box's top left (1x).
+static void BoxLabel(int id, float x, float y) { DrawArt(id, x + 7 - sArt[id].px, y + 5 - sArt[id].py, 1, 0.33f); }
+
+enum { ART_SCALE = 2 };
+
+// TIME as the HUD lays it out (HUD_Draw): the marks at +52,-2 from the label, the hundredths' last digit at +97,+14,
+// the seconds 9 px left of the hundredths, the minutes 9 px left of the seconds.
+static void DrawTimeBox(int i, float x, float y, float w, float h, bool inStage)
+{
+    BoxFrame(i, x, y, w, h);
+    BoxLabel(sceneInfo.minutes == 9 && Flash() ? ART_TIME_RED : ART_TIME, x, y);
+    if (!inStage)
+        return;
+    const float s = ART_SCALE;
+    float ox, oy; // the HUD's time position
+    NumberAnchor(x + w - 8, y + h - 5, s, &ox, &oy);
+    ox -= 97 * s, oy -= 14 * s;
+    DrawArt(ART_MARKS, ox + 52 * s, oy - 2 * s, s, 0.33f);
+    DrawNumber(sceneInfo.milliseconds, 2, ox + 97 * s, oy + 14 * s, s, 0.33f);
+    DrawNumber(sceneInfo.seconds, 2, ox + (97 - 25) * s, oy + 14 * s, s, 0.33f);
+    DrawNumber(sceneInfo.minutes, sceneInfo.minutes > 9 ? 2 : 1, ox + (97 - 50) * s, oy + 14 * s, s, 0.33f);
+}
+
+static struct {
+    float x, y, w, h;
+    bool shown;
+    int8 m, sec, ms;
+} sTimeBox; // the GAME tab's TIME box as last drawn, for DrawInTopFrame
+
 static void StatBox(int i, float x, float y, float w, float h, const char *label, const char *value, u32 valueCol)
 {
     C2D_DrawRectSolid(x, y, 0.3f, w, h, T().multi ? CellEdge(i) : T().boxEdge);
@@ -502,19 +688,56 @@ static void DrawGameTab()
     Text(line, W - 10, y + 1, 0.45f, T().dim, C2D_AlignRight);
     y += 20;
 
-    // Time, rings, score, lives
-    const float bw = (W - 24) / 2.0f, bh = 40;
+    // Time, rings, score, lives: with the game's HUD art once a stage has loaded it, else in the system font
     const bool inStage = gi.playerValid;
-    snprintf(line, sizeof(line), "%d'%02d\"%02d", sceneInfo.minutes, sceneInfo.seconds, sceneInfo.milliseconds);
-    StatBox(0, 8, y, bw, bh, "TIME", inStage ? line : "-", T().text);
-    snprintf(line, sizeof(line), "%d", gi.rings);
-    StatBox(2, 16 + bw, y, bw, bh, "RINGS", inStage ? line : "-", inStage && !gi.rings ? Rgb(240, 100, 100) : Rgb(255, 215, 0));
-    y += bh + 6;
-    snprintf(line, sizeof(line), "%d", gi.score);
-    StatBox(1, 8, y, bw, bh, "SCORE", inStage ? line : "-", T().text);
-    snprintf(line, sizeof(line), "%d", gi.lives);
-    StatBox(3, 16 + bw, y, bw, bh, "LIVES", inStage ? line : "-", Rgb(110, 220, 130));
-    y += bh + 8;
+    sTimeBox.shown     = false;
+    if (LoadArt()) {
+        const float bw = (W - 24) / 2.0f, bh = 50, s = ART_SCALE;
+        float nx, ny;
+        DrawTimeBox(0, 8, y, bw, bh, inStage);
+        sTimeBox = { 8, y, bw, bh, inStage, (int8)sceneInfo.minutes, (int8)sceneInfo.seconds, (int8)sceneInfo.milliseconds };
+        // RINGS: a ring, the label (red, blinking, at none), the count
+        const float rx = 16 + bw;
+        BoxFrame(2, rx, y, bw, bh);
+        DrawArt(ART_RING, rx + 8 - sArt[ART_RING].px * s, y + (bh - sArt[ART_RING].h * s) / 2 - sArt[ART_RING].py * s, s, 0.33f);
+        DrawArt(inStage && !gi.rings && Flash() ? ART_RINGS_RED : ART_RINGS, rx + 50 - sArt[ART_RINGS].px, y + 5 - sArt[ART_RINGS].py, 1, 0.33f);
+        NumberAnchor(rx + bw - 8, y + bh - 5, s, &nx, &ny);
+        if (inStage)
+            DrawNumber(gi.rings, 0, nx, ny, s, 0.33f);
+        y += bh + 6;
+        BoxFrame(1, 8, y, bw, bh);
+        BoxLabel(ART_SCORE, 8, y);
+        NumberAnchor(8 + bw - 8, y + bh - 5, s, &nx, &ny);
+        if (inStage)
+            DrawNumber(gi.score, 0, nx, ny, s, 0.33f);
+        // LIVES: the head, the "x" and the count as the HUD places them (the count 48 px on, 40 under ten)
+        BoxFrame(3, rx, y, bw, bh);
+        int head = -1;
+        for (int c = gi.character; c > 0; c >>= 1)
+            ++head;
+        if (head >= 0 && head < 5) {
+            const ArtFrame &hf = sArt[ART_LIFE + head];
+            const float lx = rx + 10 - hf.px * s, ly = y + (bh - hf.h * s) / 2 - hf.py * s;
+            DrawArt(ART_LIFE + head, lx, ly, s, 0.33f);
+            DrawArt(ART_X, lx, ly, s, 0.33f);
+            if (inStage)
+                DrawNumber(gi.lives, 0, lx + (gi.lives < 10 ? 40 : 48) * s, ly, s, 0.33f);
+        }
+        y += bh + 8;
+    }
+    else {
+        const float bw = (W - 24) / 2.0f, bh = 40;
+        snprintf(line, sizeof(line), "%d'%02d\"%02d", sceneInfo.minutes, sceneInfo.seconds, sceneInfo.milliseconds);
+        StatBox(0, 8, y, bw, bh, "TIME", inStage ? line : "-", T().text);
+        snprintf(line, sizeof(line), "%d", gi.rings);
+        StatBox(2, 16 + bw, y, bw, bh, "RINGS", inStage ? line : "-", inStage && !gi.rings ? Rgb(240, 100, 100) : Rgb(255, 215, 0));
+        y += bh + 6;
+        snprintf(line, sizeof(line), "%d", gi.score);
+        StatBox(1, 8, y, bw, bh, "SCORE", inStage ? line : "-", T().text);
+        snprintf(line, sizeof(line), "%d", gi.lives);
+        StatBox(3, 16 + bw, y, bw, bh, "LIVES", inStage ? line : "-", Rgb(110, 220, 130));
+        y += bh + 8;
+    }
 
     // Chaos emeralds of the save, in the game's order
     Text(Tr("EMERALDS"), 10, y + 3, 0.42f, T().dim);
@@ -1204,6 +1427,36 @@ void BottomUi::DrawTopOverlayGpu(void *target)
         const u32 c = C2D_Color32((colors[i] >> 16) & 0xFF, (colors[i] >> 8) & 0xFF, colors[i] & 0xFF, 255);
         UiFont::Runs(lines[i], bx + 2, by + 2 + i * 10, [&](int x, int y, int w) { C2D_DrawRectSolid(x, y, 0.6f, w, 1, c); });
     }
+    C2D_Flush();
+}
+
+void BottomUi::DrawInTopFrame()
+{
+    // The GAME tab's TIME box again, alone, when the time has changed: the rest of the screen stays as the last full
+    // redraw left it (the target is not cleared). It rides on the top screen's frame, so it costs no frame of its own:
+    // a frame of its own waits for the GPU to finish the top picture, which the four redraws a second can afford and
+    // sixty could not.
+    if (!sReady || !sTimeBox.shown || Port::tab != TAB_GAME || UpdatePromptShown())
+        return;
+#if MANIA_DEV_TOOLS
+    float p;
+    unsigned secs;
+    char notice[8];
+    if (!DevTools::swBottomUi || DevTools::InstallNotice(notice, sizeof(notice), &p, &secs))
+        return;
+#endif
+    if (sTimeBox.m == sceneInfo.minutes && sTimeBox.sec == sceneInfo.seconds && sTimeBox.ms == sceneInfo.milliseconds)
+        return;
+    sTimeBox.m   = (int8)sceneInfo.minutes;
+    sTimeBox.sec = (int8)sceneInfo.seconds;
+    sTimeBox.ms  = (int8)sceneInfo.milliseconds;
+    C2D_Prepare();
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+    C2D_SceneBegin(sTarget);
+    DrawTimeBox(0, sTimeBox.x, sTimeBox.y, sTimeBox.w, sTimeBox.h, true);
     C2D_Flush();
 }
 
