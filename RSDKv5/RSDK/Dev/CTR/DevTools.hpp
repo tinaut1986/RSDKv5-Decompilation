@@ -65,6 +65,9 @@ void HeapCheck(const char *where);
 // A question of BottomUi::Ask (before the FTP server runs) driven from a file, for the emulator: debug/ask.txt holding
 // "s" saves the bottom screen as debug/shot-bottom.raw (tools/shot.sh's format), "1" / "0" answers. -1: nothing asked.
 int AskFromFile();
+// The same for the loading box (the boot has no FTP yet): debug/shot.txt holding "top" or "bottom" saves that screen
+// as debug/shot-<which>.raw. Checked at most twice a second.
+void ShotFromFile();
 void Mark();             // writes a mark into log.txt and the perf CSV
 // The switches survive between sessions, in the port's file with the player's options (Port::Save,
 // port-settings.ini), written on every change and read at start. DRAW LISTS is not saved: off it leaves a blank

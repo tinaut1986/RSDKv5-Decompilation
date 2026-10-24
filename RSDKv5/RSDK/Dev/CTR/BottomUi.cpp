@@ -20,6 +20,7 @@
 #include "RSDK/Dev/CTR/Updater.hpp"
 #include "RSDK/Dev/CTR/PortText.hpp"
 #include <time.h>
+#include <math.h>
 
 using namespace RSDK;
 using Port::Tr;
@@ -969,6 +970,16 @@ static const char *const kOptHelp[OPT_COUNT] = {
 };
 static int sLastOpt = -1;
 
+// What the option does; FRAMES says what its current mode does.
+static const char *OptHelp(int i)
+{
+    if (i != OPT_FRAMES)
+        return kOptHelp[i];
+    if (Port::lock30)
+        return "DRAWS EVERY OTHER PICTURE; THE GAME STAYS AT FULL SPEED";
+    return Port::frameSkip ? "SKIPS A LATE PICTURE SO THE GAME KEEPS ITS SPEED" : "DRAWS EVERY PICTURE; THE GAME MAY RUN SLOW IN SOME PLACES";
+}
+
 // The dropdown's box: over the THEME cell, moved up when it would run off the screen.
 static void ThemeListRect(float *x, float *y, float *w, float *h)
 {
@@ -1066,12 +1077,14 @@ static void DrawOptionsTab()
         else
             Text(val, x + 7, y + 15, 0.5f, col, 0, 0.33f);
     }
-    // FRAMES OFF: the game slows down where it cannot keep up; said as long as it stays so
-    if (!Port::lock30 && !Port::frameSkip)
-        Text(Tr("FRAMES OFF: THE GAME MAY RUN SLOW IN SOME PLACES"), W / 2.0f, H - 46, 0.4f, Rgb(240, 200, 80), C2D_AlignCenter, 0.33f);
+    // FRAMES OFF: the game slows down where it cannot keep up; said as long as it stays so (FRAMES' own help says it
+    // while it is up)
+    if (!Port::lock30 && !Port::frameSkip && sLastOpt != OPT_FRAMES)
+        Text(Tr("FRAMES OFF: THE GAME MAY RUN SLOW IN SOME PLACES"), W / 2.0f, H - 60, 0.4f, Rgb(240, 200, 80), C2D_AlignCenter | C2D_WordWrap,
+             0.33f, W - 24);
     // What the last option touched does
     if (sLastOpt >= 0)
-        Text(Tr(kOptHelp[sLastOpt]), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * OPT_PITCH + 4, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
+        Text(Tr(OptHelp(sLastOpt)), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * OPT_PITCH + 4, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
     Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, T().footer, C2D_AlignCenter);
     Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, T().footer, C2D_AlignCenter);
     if (sThemeOpen)
@@ -1090,7 +1103,8 @@ static bool sUpdConfirm, sUpdNotes, sPromptNotes;
 static unsigned sNotePage, sDrawnRevision = ~0u;
 static const char *sUpdHint; // what the last tap did, when it did nothing visible
 
-enum { NOTE_COLS = 42, NOTE_MAX = 256, NOTE_ROWS = 13 };
+enum { NOTE_COLS = 42, NOTE_MAX = 256, NOTE_ROW_H = 11 };
+static unsigned sNoteRows = 12; // rows a page holds: set by the box the notes are drawn in (the tab's, the prompt's)
 static char sNotes[NOTE_MAX][NOTE_COLS + 1];
 static unsigned sNoteCount, sNoteRevision = ~0u;
 
@@ -1115,7 +1129,7 @@ static void LoadNotes(const UpdateStatus &st)
         UpperCopy(sNotes[i], sizeof(sNotes[i]), sNotes[i]);
 }
 
-static unsigned NotePages() { return sNoteCount ? (sNoteCount + NOTE_ROWS - 1) / NOTE_ROWS : 1; }
+static unsigned NotePages() { return sNoteCount ? (sNoteCount + sNoteRows - 1) / sNoteRows : 1; }
 
 static void Button(float x, float y, float w, float h, const char *label, bool pressed, u32 edge, u32 textCol, float z)
 {
@@ -1129,6 +1143,10 @@ static bool Inside(int px, int py, float x, float y, float w, float h) { return 
 static void DrawNotes(const UpdateStatus &st, float x, float y, float w, float by, int prev, float z)
 {
     LoadNotes(st);
+    // As many rows as the box holds above the buttons (the prompt's box is shorter than the tab's)
+    sNoteRows = (unsigned)((by - y - 26) / NOTE_ROW_H);
+    if (sNoteRows < 1)
+        sNoteRows = 1;
     const unsigned pages = NotePages();
     if (sNotePage >= pages)
         sNotePage = pages - 1;
@@ -1137,10 +1155,11 @@ static void DrawNotes(const UpdateStatus &st, float x, float y, float w, float b
     snprintf(head, sizeof(head), "%s %s   %u/%u", Tr("WHAT'S NEW"), ver, sNotePage + 1, pages);
     Text(head, x + w / 2, y, 0.45f, T().accent, C2D_AlignCenter, z);
     Panel(x, y + 16, z, w, by - y - 20, T().noteEdge, T().noteFill, 1);
-    for (unsigned i = sNotePage * NOTE_ROWS; i < sNoteCount && i < (sNotePage + 1) * NOTE_ROWS; ++i) {
+    for (unsigned i = sNotePage * sNoteRows; i < sNoteCount && i < (sNotePage + 1) * sNoteRows; ++i) {
         // A release's heading (Update_FormatNotes) in the title colour
         const bool head = sNotes[i][0] == UPDATE_NOTES_HEADING;
-        Text(sNotes[i] + head, x + 5, y + 19 + (i - sNotePage * NOTE_ROWS) * 11, 0.38f, head ? T().accent : Rgb(220, 224, 235), 0, z + 0.02f);
+        // 0.35: 42 columns of the system font fit the prompt's box (0.38 ran past its edge on the console)
+        Text(sNotes[i] + head, x + 5, y + 19 + (i - sNotePage * sNoteRows) * NOTE_ROW_H, 0.35f, head ? T().accent : Rgb(220, 224, 235), 0, z + 0.02f);
     }
     const float bw = (w - 8) / 3;
     Button(x, by, bw, 24, "PREV", sPressed == prev, T().cellEdge, sNotePage ? T().text : Rgb(90, 100, 115), z);
@@ -1902,11 +1921,16 @@ void BottomUi::DrawTopOverlaySoft(unsigned short *fb, int pitch)
 // ---------------------------------------------------------------- loading box
 
 static struct {
-    bool active;
+    bool active, boot; // boot: the start of the game (the top screen gets a colour)
     char title[64], step[48], file[64];
     float lo, hi, progress;
     u64 start, lastDraw;
 } sLoad;
+
+// ---------------------------------------------------------------- the top screen while the game starts
+// One flat colour, MANIA's navy (the game's menus): the boot redraws only as its loaders report, too seldom for an
+// animation (one was tried: it crawled).
+static const u32 kBootTop = 0x0A1438;
 
 static void DrawLoading()
 {
@@ -1939,8 +1963,17 @@ static void DrawLoading()
     snprintf(line, sizeof(line), "%.1f S", secs);
     Text(line, bx + bw - 8, by + bh - 14, 0.38f, T().footer, C2D_AlignRight, 0.4f);
     Text("SONIC MANIA 3DS", W / 2.0f, H - 18, 0.42f, T().footer, C2D_AlignCenter);
+    // The top screen's GPU target is made by the first frame the game presents, after this load: made here if not yet
+    if (sLoad.boot && DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init())) {
+        C3D_RenderTarget *top = (C3D_RenderTarget *)C3DPresent::Target();
+        C2D_SceneBegin(top);
+        C2D_DrawRectSolid(0, 0, 0.01f, 400, 240, Hex(kBootTop)); // not C2D_TargetClear: its colour came out wrong on this RGB565 target
+    }
     C3D_FrameEnd(0);
     sLoad.lastDraw = svcGetSystemTick();
+#if MANIA_DEV_TOOLS
+    DevTools::ShotFromFile(); // the emulator's way to a picture of the boot
+#endif
 }
 
 static void MaybeDrawLoading(bool now)
@@ -1961,6 +1994,7 @@ void BottomUi::LoadBegin(const char *title)
 {
     Init(); // at boot this runs before the dev tools start
     Upper(sLoad.title, sizeof(sLoad.title), title);
+    sLoad.boot = !strcmp(title, "Starting Sonic Mania"); // RetroEngine.cpp's boot load
     sLoad.step[0] = sLoad.file[0] = 0;
     sLoad.lo = sLoad.progress = 0;
     sLoad.hi                  = 1;
