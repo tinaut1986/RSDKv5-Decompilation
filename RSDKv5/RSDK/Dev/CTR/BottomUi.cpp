@@ -1068,7 +1068,8 @@ static void DrawOptionsTab()
     }
     // FRAMES OFF: the game slows down where it cannot keep up; said as long as it stays so
     if (!Port::lock30 && !Port::frameSkip)
-        Text(Tr("FRAMES OFF: THE GAME MAY RUN SLOW IN SOME PLACES"), W / 2.0f, H - 46, 0.4f, Rgb(240, 200, 80), C2D_AlignCenter, 0.33f);
+        Text(Tr("FRAMES OFF: THE GAME MAY RUN SLOW IN SOME PLACES"), W / 2.0f, H - 60, 0.4f, Rgb(240, 200, 80), C2D_AlignCenter | C2D_WordWrap,
+             0.33f, W - 24);
     // What the last option touched does
     if (sLastOpt >= 0)
         Text(Tr(kOptHelp[sLastOpt]), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * OPT_PITCH + 4, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
@@ -1090,7 +1091,8 @@ static bool sUpdConfirm, sUpdNotes, sPromptNotes;
 static unsigned sNotePage, sDrawnRevision = ~0u;
 static const char *sUpdHint; // what the last tap did, when it did nothing visible
 
-enum { NOTE_COLS = 42, NOTE_MAX = 256, NOTE_ROWS = 13 };
+enum { NOTE_COLS = 42, NOTE_MAX = 256, NOTE_ROW_H = 11 };
+static unsigned sNoteRows = 12; // rows a page holds: set by the box the notes are drawn in (the tab's, the prompt's)
 static char sNotes[NOTE_MAX][NOTE_COLS + 1];
 static unsigned sNoteCount, sNoteRevision = ~0u;
 
@@ -1115,7 +1117,7 @@ static void LoadNotes(const UpdateStatus &st)
         UpperCopy(sNotes[i], sizeof(sNotes[i]), sNotes[i]);
 }
 
-static unsigned NotePages() { return sNoteCount ? (sNoteCount + NOTE_ROWS - 1) / NOTE_ROWS : 1; }
+static unsigned NotePages() { return sNoteCount ? (sNoteCount + sNoteRows - 1) / sNoteRows : 1; }
 
 static void Button(float x, float y, float w, float h, const char *label, bool pressed, u32 edge, u32 textCol, float z)
 {
@@ -1129,6 +1131,10 @@ static bool Inside(int px, int py, float x, float y, float w, float h) { return 
 static void DrawNotes(const UpdateStatus &st, float x, float y, float w, float by, int prev, float z)
 {
     LoadNotes(st);
+    // As many rows as the box holds above the buttons (the prompt's box is shorter than the tab's)
+    sNoteRows = (unsigned)((by - y - 26) / NOTE_ROW_H);
+    if (sNoteRows < 1)
+        sNoteRows = 1;
     const unsigned pages = NotePages();
     if (sNotePage >= pages)
         sNotePage = pages - 1;
@@ -1137,10 +1143,11 @@ static void DrawNotes(const UpdateStatus &st, float x, float y, float w, float b
     snprintf(head, sizeof(head), "%s %s   %u/%u", Tr("WHAT'S NEW"), ver, sNotePage + 1, pages);
     Text(head, x + w / 2, y, 0.45f, T().accent, C2D_AlignCenter, z);
     Panel(x, y + 16, z, w, by - y - 20, T().noteEdge, T().noteFill, 1);
-    for (unsigned i = sNotePage * NOTE_ROWS; i < sNoteCount && i < (sNotePage + 1) * NOTE_ROWS; ++i) {
+    for (unsigned i = sNotePage * sNoteRows; i < sNoteCount && i < (sNotePage + 1) * sNoteRows; ++i) {
         // A release's heading (Update_FormatNotes) in the title colour
         const bool head = sNotes[i][0] == UPDATE_NOTES_HEADING;
-        Text(sNotes[i] + head, x + 5, y + 19 + (i - sNotePage * NOTE_ROWS) * 11, 0.38f, head ? T().accent : Rgb(220, 224, 235), 0, z + 0.02f);
+        // 0.35: 42 columns of the system font fit the prompt's box (0.38 ran past its edge on the console)
+        Text(sNotes[i] + head, x + 5, y + 19 + (i - sNotePage * sNoteRows) * NOTE_ROW_H, 0.35f, head ? T().accent : Rgb(220, 224, 235), 0, z + 0.02f);
     }
     const float bw = (w - 8) / 3;
     Button(x, by, bw, 24, "PREV", sPressed == prev, T().cellEdge, sNotePage ? T().text : Rgb(90, 100, 115), z);
