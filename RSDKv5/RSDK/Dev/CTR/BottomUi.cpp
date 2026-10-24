@@ -247,9 +247,9 @@ static const Button kButtons[] = {
 // order they show in; DEBUG only with the dev tools.
 enum Tab { TAB_GAME, TAB_OPTIONS, TAB_DEBUG, TAB_UPDATES, TAB_ACH };
 #if MANIA_DEV_TOOLS
-static const int kTabs[] = { TAB_GAME, TAB_ACH, TAB_OPTIONS, TAB_UPDATES, TAB_DEBUG };
+static const int kTabs[] = { TAB_GAME, TAB_UPDATES, TAB_ACH, TAB_OPTIONS, TAB_DEBUG };
 #else
-static const int kTabs[] = { TAB_GAME, TAB_ACH, TAB_OPTIONS, TAB_UPDATES };
+static const int kTabs[] = { TAB_GAME, TAB_UPDATES, TAB_ACH, TAB_OPTIONS };
 #endif
 enum { TAB_SHOWN = sizeof(kTabs) / sizeof(kTabs[0]) };
 
@@ -490,7 +490,15 @@ static void DrawTabBar()
     const time_t now = time(NULL);
     const struct tm *tm = gmtime(&now); // the 3DS clock is local time already
     snprintf(clock, sizeof(clock), "%02d:%02d", tm ? tm->tm_hour : 0, tm ? tm->tm_min : 0);
-    Text(clock, bx - 6, 6, 0.5f, T().clock, C2D_AlignRight, 0.75f);
+    // Wi-Fi: three rising bars on the battery's baseline (as ../zelda-tmc-3ds), lit up to the signal's strength (0-3)
+    const int wifi  = osGetWifiStrength();
+    const float wx  = bx - 16;
+    const u32 faint = MixC(T().battery, T().bg, 0.65f);
+    for (int i = 0; i < 3; ++i) {
+        const float h = 3 + i * 2;
+        C2D_DrawRectSolid(wx + i * 4, by + 8 - h, 0.72f, 2, h, i < wifi ? T().battery : faint);
+    }
+    Text(clock, wx - 5, 6, 0.5f, T().clock, C2D_AlignRight, 0.75f);
 }
 
 // ---------------------------------------------------------------- GAME tab
@@ -1044,6 +1052,9 @@ static void DrawOptionsTab()
         else
             Text(val, x + 7, y + 15, 0.5f, col, 0, 0.33f);
     }
+    // FRAMES OFF: the game slows down where it cannot keep up; said as long as it stays so
+    if (!Port::lock30 && !Port::frameSkip)
+        Text(Tr("FRAMES OFF: THE GAME MAY RUN SLOW IN SOME PLACES"), W / 2.0f, H - 46, 0.4f, Rgb(240, 200, 80), C2D_AlignCenter, 0.33f);
     // What the last option touched does
     if (sLastOpt >= 0)
         Text(Tr(kOptHelp[sLastOpt]), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * OPT_PITCH + 4, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
