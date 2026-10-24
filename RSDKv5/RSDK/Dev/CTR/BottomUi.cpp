@@ -138,6 +138,8 @@ static void CutShape(float x, float y, float w, float h, float c, u32 col, float
 
 // Every box of the screen: framed (an edge, the fill `inset` pixels in), or under a cut theme filled with a colour
 // between its edge and fill colours, its top-right corner cut and a shadow under it, after the game's notices.
+static bool sNoShadow; // a box redrawn over itself (DrawInTopFrame): its shadow is there already, and a second one darkens
+
 static void Panel(float x, float y, float z, float w, float h, u32 edge, u32 fill, int inset)
 {
     if (!T().cut) {
@@ -147,7 +149,8 @@ static void Panel(float x, float y, float z, float w, float h, u32 edge, u32 fil
     }
     const float c = h * 0.4f < 10 ? h * 0.4f : 10;
     const u32 solid = MixC(edge, fill, inset > 1 ? 0.75f : 0.45f); // the big boxes (inset 2: prompts, details) darker, for text
-    CutShape(x + 2, y + 2, w, h, c, C2D_Color32(0, 0, 0, 110), z - 0.005f);
+    if (!sNoShadow)
+        CutShape(x + 2, y + 2, w, h, c, C2D_Color32(0, 0, 0, 110), z - 0.005f);
     CutShape(x, y, w, h, c, solid, z);
     C2D_DrawRectSolid(x, y, z + 0.005f, w - c, 1, MixC(solid, 0xFFFFFFFF, 0.45f)); // a light top edge
 }
@@ -164,6 +167,38 @@ static void DrawBackdrop(float top)
         C2D_DrawTriangle(k, 240, c, k + 20, 240, c, k + h, top, c, 0.05f);
         C2D_DrawTriangle(k + 20, 240, c, k + h + 20, top, c, k + h, top, c, 0.05f);
     }
+}
+
+// Text that ends with "..." where it would run past `maxW` pixels: measured once, cut to the share of it that fits (on a
+// UTF-8 character boundary), measured again until it fits.
+static void TextFit(const char *s, float x, float y, float scale, u32 color, float maxW, float z)
+{
+    C2D_Text t;
+    C2D_TextParse(&t, sTextBuf, s);
+    float w = 0, h = 0;
+    C2D_TextGetDimensions(&t, scale, scale, &w, &h);
+    if (w <= maxW) {
+        C2D_TextOptimize(&t);
+        C2D_DrawText(&t, C2D_WithColor, x, y, z, scale, scale, color);
+        return;
+    }
+    char cut[192];
+    size_t len = strlen(s) < sizeof(cut) - 4 ? strlen(s) : sizeof(cut) - 4;
+    for (int tries = 0; tries < 4 && len > 0; ++tries) {
+        len = (size_t)(len * (maxW / w)) - 1; // its share, a little less for the dots
+        if ((int)len < 1)
+            len = 1;
+        while (len > 0 && ((unsigned char)s[len] & 0xC0) == 0x80) // not inside a multi-byte character
+            --len;
+        memcpy(cut, s, len);
+        strcpy(cut + len, "...");
+        C2D_TextParse(&t, sTextBuf, cut);
+        C2D_TextGetDimensions(&t, scale, scale, &w, &h);
+        if (w <= maxW)
+            break;
+    }
+    C2D_TextOptimize(&t);
+    C2D_DrawText(&t, C2D_WithColor, x, y, z, scale, scale, color);
 }
 
 static u64 sLastDraw;
@@ -794,6 +829,24 @@ static struct {
     int8 m, sec, ms;
 } sTimeBox; // the GAME tab's TIME box as last drawn, for DrawInTopFrame
 
+// RINGS: a ring, the label (red every other 8 frames at none, as the HUD), the count.
+static void DrawRingsBox(float x, float y, float w, float h, bool inStage, int rings)
+{
+    const float s = ART_SCALE;
+    float nx, ny;
+    BoxFrame(2, x, y, w, h);
+    DrawArt(ART_RING, x + 8 - sArt[ART_RING].px * s, y + (h - sArt[ART_RING].h * s) / 2 - sArt[ART_RING].py * s, s, 0.33f);
+    DrawArt(inStage && !rings && Flash() ? ART_RINGS_RED : ART_RINGS, x + 50 - sArt[ART_RINGS].px, y + 5 - sArt[ART_RINGS].py, 1, 0.33f);
+    NumberAnchor(x + w - 8, y + h - 5, s, &nx, &ny);
+    if (inStage)
+        DrawNumber(rings, 0, nx, ny, s, 0.33f);
+}
+
+static struct {
+    float x, y, w, h;
+    bool shown, flash;
+} sRingsBox; // the RINGS box as last drawn: at none its label blinks faster than the full redraws, DrawInTopFrame keeps it
+
 static void StatBox(int i, float x, float y, float w, float h, const char *label, const char *value, u32 valueCol)
 {
     Panel(x, y, 0.3f, w, h, T().multi ? CellEdge(i) : T().boxEdge, T().multi ? CellFill(i) : T().boxFill, 1);
@@ -838,19 +891,15 @@ static void DrawGameTab()
     // Time, rings, score, lives: with the game's HUD art once a stage has loaded it, else in the system font
     const bool inStage = gi.playerValid;
     sTimeBox.shown     = false;
+    sRingsBox.shown    = false;
     if (LoadArt()) {
         const float bw = (W - 24) / 2.0f, bh = 50, s = ART_SCALE;
         float nx, ny;
         DrawTimeBox(0, 8, y, bw, bh, inStage);
         sTimeBox = { 8, y, bw, bh, inStage, (int8)sceneInfo.minutes, (int8)sceneInfo.seconds, (int8)sceneInfo.milliseconds };
-        // RINGS: a ring, the label (red, blinking, at none), the count
         const float rx = 16 + bw;
-        BoxFrame(2, rx, y, bw, bh);
-        DrawArt(ART_RING, rx + 8 - sArt[ART_RING].px * s, y + (bh - sArt[ART_RING].h * s) / 2 - sArt[ART_RING].py * s, s, 0.33f);
-        DrawArt(inStage && !gi.rings && Flash() ? ART_RINGS_RED : ART_RINGS, rx + 50 - sArt[ART_RINGS].px, y + 5 - sArt[ART_RINGS].py, 1, 0.33f);
-        NumberAnchor(rx + bw - 8, y + bh - 5, s, &nx, &ny);
-        if (inStage)
-            DrawNumber(gi.rings, 0, nx, ny, s, 0.33f);
+        DrawRingsBox(rx, y, bw, bh, inStage, gi.rings);
+        sRingsBox = { rx, y, bw, bh, inStage, Flash() };
         y += bh + 6;
         BoxFrame(1, 8, y, bw, bh);
         BoxLabel(ART_SCORE, 8, y);
@@ -1582,11 +1631,12 @@ static void DrawAchievementsTab()
         const bool got = a.achieved;
         Panel(6, y, 0.3f, W - 20, ACH_ROW - 3, got ? CellEdge(i) : T().tabOffEdge, got ? CellFill(i) : T().tabOffFill, 1);
         DrawAchMark(22, y + (ACH_ROW - 3) / 2.0f, 1, got, 0.32f);
-        Text(a.name.c_str(), 38, y + 2, 0.45f, got ? T().accent : T().dim, 0, 0.33f);
         AchDateText(i, line, sizeof(line));
+        // Within the row: the name stops short of the date, the description at the row's edge
+        TextFit(a.name.c_str(), 38, y + 2, 0.45f, got ? T().accent : T().dim, (line[0] ? W - 92 : W - 20) - 38 - 4, 0.33f);
         if (line[0])
             Text(line, W - 20, y + 3, 0.36f, T().dim, C2D_AlignRight, 0.33f);
-        Text(Tr(a.description.c_str()), 38, y + 16, 0.36f, got ? T().text : T().dim, 0, 0.33f);
+        TextFit(Tr(a.description.c_str()), 38, y + 16, 0.36f, got ? T().text : T().dim, W - 20 - 38 - 4, 0.33f);
     }
     // Scroll bar
     if (AchMaxScroll() > 0) {
@@ -1872,7 +1922,8 @@ void BottomUi::DrawInTopFrame()
     // redraw left it (the target is not cleared). It rides on the top screen's frame, so it costs no frame of its own:
     // a frame of its own waits for the GPU to finish the top picture, which the four redraws a second can afford and
     // sixty could not.
-    if (!sReady || !sTimeBox.shown || Port::tab != TAB_GAME || UpdatePromptShown())
+    // And the RINGS box while there are none, at each turn of its label's blink.
+    if (!sReady || !(sTimeBox.shown || sRingsBox.shown) || Port::tab != TAB_GAME || UpdatePromptShown())
         return;
 #if MANIA_DEV_TOOLS
     float p;
@@ -1881,7 +1932,15 @@ void BottomUi::DrawInTopFrame()
     if (!DevTools::swBottomUi || DevTools::InstallNotice(notice, sizeof(notice), &p, &secs))
         return;
 #endif
-    if (sTimeBox.m == sceneInfo.minutes && sTimeBox.sec == sceneInfo.seconds && sTimeBox.ms == sceneInfo.milliseconds)
+    const bool timeMoved = sTimeBox.shown && (sTimeBox.m != sceneInfo.minutes || sTimeBox.sec != sceneInfo.seconds || sTimeBox.ms != sceneInfo.milliseconds);
+    PortGameInfo gi;
+    bool blink = false;
+    if (sRingsBox.shown && Flash() != sRingsBox.flash) {
+        PortGame_GetInfo(&gi);
+        blink = gi.playerValid && !gi.rings;
+        sRingsBox.flash = Flash();
+    }
+    if (!timeMoved && !blink)
         return;
     sTimeBox.m   = (int8)sceneInfo.minutes;
     sTimeBox.sec = (int8)sceneInfo.seconds;
@@ -1892,7 +1951,12 @@ void BottomUi::DrawInTopFrame()
     C3D_AlphaTest(false, GPU_ALWAYS, 0);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
     C2D_SceneBegin(sTarget);
-    DrawTimeBox(0, sTimeBox.x, sTimeBox.y, sTimeBox.w, sTimeBox.h, true);
+    sNoShadow = true;
+    if (timeMoved)
+        DrawTimeBox(0, sTimeBox.x, sTimeBox.y, sTimeBox.w, sTimeBox.h, true);
+    if (blink)
+        DrawRingsBox(sRingsBox.x, sRingsBox.y, sRingsBox.w, sRingsBox.h, true, 0);
+    sNoShadow = false;
     C2D_Flush();
 }
 
