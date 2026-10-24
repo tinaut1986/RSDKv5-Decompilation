@@ -166,6 +166,38 @@ static void DrawBackdrop(float top)
     }
 }
 
+// Text that ends with "..." where it would run past `maxW` pixels: measured once, cut to the share of it that fits (on a
+// UTF-8 character boundary), measured again until it fits.
+static void TextFit(const char *s, float x, float y, float scale, u32 color, float maxW, float z)
+{
+    C2D_Text t;
+    C2D_TextParse(&t, sTextBuf, s);
+    float w = 0, h = 0;
+    C2D_TextGetDimensions(&t, scale, scale, &w, &h);
+    if (w <= maxW) {
+        C2D_TextOptimize(&t);
+        C2D_DrawText(&t, C2D_WithColor, x, y, z, scale, scale, color);
+        return;
+    }
+    char cut[192];
+    size_t len = strlen(s) < sizeof(cut) - 4 ? strlen(s) : sizeof(cut) - 4;
+    for (int tries = 0; tries < 4 && len > 0; ++tries) {
+        len = (size_t)(len * (maxW / w)) - 1; // its share, a little less for the dots
+        if ((int)len < 1)
+            len = 1;
+        while (len > 0 && ((unsigned char)s[len] & 0xC0) == 0x80) // not inside a multi-byte character
+            --len;
+        memcpy(cut, s, len);
+        strcpy(cut + len, "...");
+        C2D_TextParse(&t, sTextBuf, cut);
+        C2D_TextGetDimensions(&t, scale, scale, &w, &h);
+        if (w <= maxW)
+            break;
+    }
+    C2D_TextOptimize(&t);
+    C2D_DrawText(&t, C2D_WithColor, x, y, z, scale, scale, color);
+}
+
 static u64 sLastDraw;
 static int sPressed = -1;
 
@@ -1582,11 +1614,12 @@ static void DrawAchievementsTab()
         const bool got = a.achieved;
         Panel(6, y, 0.3f, W - 20, ACH_ROW - 3, got ? CellEdge(i) : T().tabOffEdge, got ? CellFill(i) : T().tabOffFill, 1);
         DrawAchMark(22, y + (ACH_ROW - 3) / 2.0f, 1, got, 0.32f);
-        Text(a.name.c_str(), 38, y + 2, 0.45f, got ? T().accent : T().dim, 0, 0.33f);
         AchDateText(i, line, sizeof(line));
+        // Within the row: the name stops short of the date, the description at the row's edge
+        TextFit(a.name.c_str(), 38, y + 2, 0.45f, got ? T().accent : T().dim, (line[0] ? W - 92 : W - 20) - 38 - 4, 0.33f);
         if (line[0])
             Text(line, W - 20, y + 3, 0.36f, T().dim, C2D_AlignRight, 0.33f);
-        Text(Tr(a.description.c_str()), 38, y + 16, 0.36f, got ? T().text : T().dim, 0, 0.33f);
+        TextFit(Tr(a.description.c_str()), 38, y + 16, 0.36f, got ? T().text : T().dim, W - 20 - 38 - 4, 0.33f);
     }
     // Scroll bar
     if (AchMaxScroll() > 0) {
