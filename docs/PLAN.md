@@ -54,7 +54,12 @@
   copies such layers by column. Tools: `SET heapcheck 1` (the heap walked every frame and loading step), `SET music 0`,
   the DEBUG FTP switch, `tools/fbi-install.py` (a CIA to FBI's remote install when the game's FTP is down).
   Sweep script and results: `debug/pool-sweep/` (gitignored).
-- **Active release line**: `release/v0.1.1`, on `origin` (`v0.1.0` and `v0.1.1` are beta tags on it).
+- **2026-10-24 (beta `v0.1.2`):** `fix/3d-depth-bands` merged (#11, #12, #13): on the 2DS Special Stage 4 / 4+ and
+  7 / 1+ at ~60 fps, all frames on the GPU (the owner saw 4+ at 60). A first tour after the merge showed 4 at 12-14 fps
+  for a while (floor and water rebuilt every frame) and could not be repeated; `SITE REFUSED` now says what changed in
+  the floor ("changing (tiles)" or the bank and colour) should it come back. The v5U engine no longer fits with the new
+  pools (the game quits at boot): revision 2 stays.
+- **Active release line**: `release/v0.1.3`, on `origin` (`v0.1.0`, `v0.1.1`, `v0.1.2` are beta tags on its history).
 - **Consoles**: the owner's Old 2DS at `192.168.1.141` and New 3DS at `192.168.1.133` (DHCP: ping first;
   `tools/site.sh -i IP`). Both run the latest dev build of `release/v0.1.0`; the New 3DS takes `--install` over FTP too
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS). Ask the owner before installing in a new session (each session's
@@ -67,7 +72,7 @@
 | Branch | State |
 |---|---|
 | `main` | SaturnSH2x2 `3ds-main` (dfef28d). |
-| `release/v0.1.1` | (was `release/v0.1.0`, renamed after the `v0.1.0` tag) Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). On 2026-10-24 also the session 6 work (beta `v0.1.1`) and `fix/3d-depth-bands` (#11, #12, #13). Merged topic branches deleted. |
+| `release/v0.1.3` | (was `release/v0.1.0`, renamed after each beta tag) Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). On 2026-10-24 also the session 6 work (beta `v0.1.1`) and `fix/3d-depth-bands` (#11, #12, #13). Merged topic branches deleted. |
 
 ## Tasks
 
