@@ -144,7 +144,7 @@ So the GPU order is: **tile layers** (largest everywhere), **Special Stage 3D** 
   (`dev-settings.ini`), modal install dialog with % or restart countdown, FTP address. Dev-tools builds only.
 - [ ] U1.2 The real UI in the style of the owner's other ports (tabs, map, touch buttons, options), also in production
   builds. The text console menu is only a fallback.
-- [ ] U1.3 (2026-10-24, `feat/ui-languages`, `feat/ui-themes`, to check on the console) The port's text in the game's
+- [ ] U1.3 (2026-10-24, `feat/ui-languages`, `feat/ui-themes`, to check on the console; OPTIONS > LANGUAGE later dropped: the game alone can switch it) The port's text in the game's
   language (`PortText`: EN, FR, IT, DE, ES, JA; Korean and Chinese stay English), shown in OPTIONS > LANGUAGE; and
   OPTIONS > THEME, a dropdown of colour themes: MANIA (default: the four colours of the game's menus, one per tab and
   cell, navy with diagonal stripes), and CLASSIC, SONIC blue, KNUCKLES red, SUPER SONIC gold, GREEN HILL green,

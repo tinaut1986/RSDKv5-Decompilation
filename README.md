@@ -35,7 +35,7 @@ their work.
     the game's rate); the save's chaos emeralds; a row with the item boxes picked up (a shield or a power stays as long
     as it lasts).
   * OPTIONS: frames (AUTO, 30 FPS, OFF), an FPS counter on the top screen, the game's HUD hidden while the GAME tab
-    shows it, language, Sonic Mania Plus, and colour themes (MANIA, which mixes the game's four colours on filled,
+    shows it, Sonic Mania Plus, and colour themes (MANIA, which mixes the game's four colours on filled,
     cut-corner panels, MANIA OUTLINE, and five more).
   * ACHIEVEMENTS: the PC game's 18 achievements, kept on the SD card: a list with each one's description and unlock
     date; the unlock notice on the top screen (the game's own) or the bottom one, with a sound.

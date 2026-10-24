@@ -808,7 +808,10 @@ static void DrawGameTab()
     float y = HEADER_H + 6;
 
     // Where: the scene's name from the scene list, and the mode
-    const char *scene = sceneInfo.listData ? sceneInfo.listData[sceneInfo.listPos].name : "";
+    // Only where one plays (stages, the Special Stages, the bonus games, the extras): the scene lists' categories 1-6;
+    // 0 is Presentation (logos, title, menus), 7 the cutscenes and 8 the videos.
+    const bool playing = sceneInfo.activeCategory >= 1 && sceneInfo.activeCategory <= 6;
+    const char *scene  = sceneInfo.listData && playing ? sceneInfo.listData[sceneInfo.listPos].name : "";
     snprintf(line, sizeof(line), "%s", scene);
     for (char *c = line; *c; ++c)
         *c = (char)toupper((unsigned char)*c);
@@ -913,7 +916,7 @@ static void DrawGameTab()
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_LANGUAGE, OPT_THEME, OPT_PLUS, OPT_COUNT }; // the renderer is DEBUG's
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_PLUS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
 enum { OPT_W = 150, OPT_H = 30, OPT_PITCH = 34 };
 // THEME opens a list over the page (the dropdown); its rows are hits OPT_LIST + i, a touch elsewhere OPT_LIST_OUT.
 enum { OPT_LIST = 100, OPT_LIST_OUT = 99, LIST_ROW_H = 22 };
@@ -945,10 +948,6 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
             *col = Port::hud == 2 ? warn : good;
             break;
         }
-        case OPT_LANGUAGE: // the game's (read only: the game's options menu changes it)
-            snprintf(o, cap, "%s", Port::LanguageName());
-            *col = T().text;
-            break;
         case OPT_THEME:
             snprintf(o, cap, "%s", Tr(T().name));
             *col = T().accent;
@@ -960,12 +959,11 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "LANGUAGE", "THEME", "PLUS" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "PLUS" };
 static const char *const kOptHelp[OPT_COUNT] = {
     "AUTO SKIPS A LATE PICTURE TO KEEP THE SPEED, 30 FPS DRAWS EVERY OTHER ONE, OFF DRAWS THEM ALL (THE GAME SLOWS DOWN IF IT CANNOT KEEP UP)",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
     "AUTO HIDES THE GAME'S HUD WHILE THE GAME TAB SHOWS IT",
-    "FOLLOWS THE GAME'S LANGUAGE: CHANGE IT IN THE GAME'S OPTIONS",
     "THE COLOURS OF THIS SCREEN",
     "MIGHTY, RAY AND ENCORE MODE, ONLY IF YOU OWN SONIC MANIA PLUS. IT CHANGES AT THE NEXT START",
 };
@@ -1035,7 +1033,6 @@ static void TapOption(int i)
             break;
         case OPT_FPS: Port::fps = (Port::fps + 1) % 5; break;
         case OPT_HUD: Port::hud = (Port::hud + 1) % 3; break;
-        case OPT_LANGUAGE: break; // only its help
         case OPT_THEME: sThemeOpen = true; break;
         default: Port::plus = !Port::plus; break; // OPT_PLUS
     }
