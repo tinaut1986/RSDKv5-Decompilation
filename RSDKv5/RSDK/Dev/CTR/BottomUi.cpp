@@ -57,10 +57,11 @@ static void Text(const char *s, float x, float y, float scale, u32 color, u32 fl
         C2D_DrawText(&t, C2D_WithColor | flags, x, y, z, scale, scale, color);
 }
 
-// Bottom-screen colour themes (OPTIONS > THEME, Port::theme; values are saved: append only). MANIA (the default) mixes
-// the four colours of the game's menus, a different one for each tab and cell in turn (`multi`, kMania), over the navy
-// of the menus with their diagonal stripes; CLASSIC is the first look; the others are one colour of the game each:
-// Sonic's blue, Knuckles' red, Super Sonic's gold, Green Hill's green.
+// Bottom-screen colour themes (OPTIONS > THEME, Port::theme, saved by position: append new ones; on 2026-10-24, before
+// any release had themes, the order changed once). MANIA (the default) mixes the four colours of the game's menus, a
+// different one for each tab and cell in turn (`multi`, kMania), over the navy of the menus with their diagonal stripes,
+// on filled panels with a cut corner (`cut`); MANIA OUTLINE is the same in framed boxes; CLASSIC is the first look; the
+// others are one colour of the game each: Sonic's blue, Knuckles' red, Super Sonic's gold, Green Hill's green.
 struct Theme {
     const char *name;
     bool multi, cut; // cut: filled panels with the top-right corner cut (Panel)
@@ -76,7 +77,10 @@ static const Theme kThemes[] = {
     //     name          multi  cut    bg        barLine   tabOnE    tabOnF    tabOffE   tabOffF   tabIcon   cellE     cellF     cellLine  pressE
     //                    pressF    boxE      boxF      noteE     noteF     popE      popF      text      label     dim       footer
     //                    accent    clock     battery   loadBg
-    THEME("MANIA",       true, false,  0x0A1438, 0x2A6CF0, 0x2A6CF0, 0x1A3C8C, 0x2A3C78, 0x101C48, 0x9AAAD8, 0x2A6CF0, 0x12245C, 0x7AA8FF, 0xFFFFFF,
+    THEME("MANIA",       true, true, 0x0A1438, 0x2A6CF0, 0x2A6CF0, 0x1A3C8C, 0x2A3C78, 0x101C48, 0xB4C0E6, 0x2A6CF0, 0x12245C, 0x7AA8FF, 0xFFFFFF,
+                                0x3C78F0, 0xF8C820, 0x0E1A48, 0x2A6CF0, 0x070E28, 0xF8C820, 0x12245C, 0xFFFFFF, 0xE6ECFF, 0xC8D2F0, 0x8CA0D8,
+                                0xFFE45C, 0xE0E8FF, 0x9AAAD8, 0x0A1438),
+    THEME("MANIA OUTLINE", true, false, 0x0A1438, 0x2A6CF0, 0x2A6CF0, 0x1A3C8C, 0x2A3C78, 0x101C48, 0x9AAAD8, 0x2A6CF0, 0x12245C, 0x7AA8FF, 0xFFFFFF,
                                 0x3C78F0, 0xF8C820, 0x0E1A48, 0x2A6CF0, 0x070E28, 0xF8C820, 0x12245C, 0xF0F4FF, 0xC0CCF0, 0x9AAAD8, 0x7088C8,
                                 0xF8C820, 0xE0E8FF, 0x9AAAD8, 0x0A1438),
     THEME("CLASSIC",     false, false,0x0E1218, 0x2C3440, 0x2D96F0, 0x124682, 0x32384B, 0x1A1E2A, 0x8C96AF, 0x325082, 0x182032, 0x5A82B4, 0xD2EBFF,
@@ -94,9 +98,6 @@ static const Theme kThemes[] = {
     THEME("GREEN HILL",  false, false,0x082A10, 0x1E8C32, 0x5ADC64, 0x1E8C32, 0x2D6437, 0x0E3216, 0x96C8A0, 0x3CAA46, 0x103C1A, 0x82E68C, 0xDCFFDC,
                          0x46BE50, 0x328C3C, 0x0C3214, 0x328C3C, 0x06180A, 0x82E68C, 0x103C1A, 0xEBFAEB, 0xBEE6C3, 0x96C89B, 0x6EAA78,
                          0xFFD700, 0xDCF5DC, 0x96C89B, 0x082A10),
-    THEME("MANIA SOLID", true, true, 0x0A1438, 0x2A6CF0, 0x2A6CF0, 0x1A3C8C, 0x2A3C78, 0x101C48, 0xB4C0E6, 0x2A6CF0, 0x12245C, 0x7AA8FF, 0xFFFFFF,
-                                0x3C78F0, 0xF8C820, 0x0E1A48, 0x2A6CF0, 0x070E28, 0xF8C820, 0x12245C, 0xFFFFFF, 0xE6ECFF, 0xC8D2F0, 0x8CA0D8,
-                                0xFFE45C, 0xE0E8FF, 0x9AAAD8, 0x0A1438),
 };
 #undef THEME
 enum { THEME_COUNT = sizeof(kThemes) / sizeof(kThemes[0]) };
