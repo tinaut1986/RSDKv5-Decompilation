@@ -1909,9 +1909,27 @@ static void DrawDebugTab()
 
 #endif // MANIA_DEV_TOOLS
 
+static unsigned sDrawCount;
+static u64 sDrawTicks;
+
+void BottomUi::DrawStats(unsigned *count, float *ms)
+{
+    *count = sDrawCount;
+    *ms    = sDrawTicks * (1000.0f / SYSCLOCK_ARM11);
+}
+
 static void Draw()
 {
     char val[32];
+    const u64 tDraw = svcGetSystemTick();
+    ++sDrawCount;
+    // Any full redraw shows the updater's state as it is now. Only the UPDATES tab and the prompt took it before, so
+    // after the boot's update check every other tab was redrawn every frame (7-11 ms a frame on the New 3DS).
+    {
+        UpdateStatus st;
+        Updater_GetStatus(&st);
+        sDrawnRevision = st.revision;
+    }
 
     C2D_TextBufClear(sTextBuf);
     C3D_FrameBegin(0); // SYNCDRAW would wait for a vblank: up to 16 ms of the game's frame, four times a second
@@ -1963,6 +1981,7 @@ static void Draw()
 #endif
 
     C3D_FrameEnd(0);
+    sDrawTicks += svcGetSystemTick() - tDraw;
 }
 
 // ---------------------------------------------------------------- top-screen FPS counter

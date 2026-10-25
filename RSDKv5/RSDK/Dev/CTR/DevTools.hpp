@@ -35,6 +35,7 @@ enum Stage {
     STAGE_PXFER,   // ... display transfer into the texture
     STAGE_PFRAME,  // ... citro3d frame (wait for the previous one, draw, queue)
     STAGE_WAIT,    // idle time the pacing waits for the next tick: the headroom of the frame
+    STAGE_BOTTOM,  // the bottom screen (BottomUi::Update and its redraws)
     STAGE_COUNT
 };
 
