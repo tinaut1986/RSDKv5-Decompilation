@@ -58,8 +58,10 @@ inline int16 Quarter(float p) { return (int16)(p >= 0 ? p * 4.0f + 0.5f : p * 4.
 // texel (rotozoom layers: affine runs need sub-texel coordinates).
 // TEX_ROTO0..: a rotozoom layer drawn whole into a texture of its own (RotoTex), texel coordinates in 1/16 texel.
 // TEX_ROTOMASK0..: that layer's hot-colour mask (RotoTex::mask), drawn with BLEND_HOT.
+// TEX_BIG0..: the line strip of a rotozoom layer too big for one texture (Strip), texel coordinates in 1/16 texel.
 // TEX_FLOOR0..4: the Special Stage floor windows in bank 0 (FloorWin), 1/16 texel, faded to the fog colour per line.
-enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE, TEX_FLOOR0, TEX_FLOOR1, TEX_FLOOR2, TEX_FLOOR3, TEX_FLOOR4, TEX_ROTO0, TEX_ROTO1, TEX_ROTOMASK0, TEX_ROTOMASK1 };
+enum Tex { TEX_TILE, TEX_SPRITE, TEX_SOFT, TEX_3D, TEX_TILE_FINE, TEX_FLOOR0, TEX_FLOOR1, TEX_FLOOR2, TEX_FLOOR3, TEX_FLOOR4, TEX_ROTO0, TEX_ROTO1, TEX_ROTOMASK0, TEX_ROTOMASK1,
+           TEX_BIG0 }; // TEX_BIG0 + slot: a big rotozoom layer's line strip (Strip)
 
 // Software layers: a layer kind the GPU cannot draw (rotozoom, vscroll, a layer split by the water line) is drawn by
 // the engine's own function into screens[1] (unused on the 3DS), keyed with a colour no palette produces in practice,
@@ -2081,7 +2083,7 @@ bool EmitLayerBasic(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 // cell. Empty tiles (0xFFFF) are skipped, which is most of the Special Stage map (its far lines cross hundreds of
 // empty tiles: walking them is cheap, drawing them is not needed). A layer that would take too many runs or quads (a
 // horizon full of tiles) goes back to the software.
-enum { ROTO_MAX_RUNS = 16384, ROTO_MAX_QUADS = 6000 };
+enum { ROTO_MAX_RUNS = 65536, ROTO_MAX_QUADS = 6000 }; // the walk is cheap (runs over empty tiles cost little): quads are the limit
 
 // Where a line's walk along one axis enters the next tile, as exact integer steps (no division per run): with N the
 // distance in 16.16 to the next tile edge counted from the line's start, the crossing is pixel ceil(N / |d|); each tile
@@ -3066,6 +3068,243 @@ bool EmitDeformed(const Cmd &c, const ScanlineInfo *sl)
     return handled ? true : Refuse(GpuRender::REASON_UNSUPPORTED, c.type);
 }
 
+// ---------------------------------------------------------------- big rotozoom layers as line strips
+
+// A rotozoom layer too big for a texture (Pinball's table: two 2048x2048 maps whose tiles fill 29 x 112 of their
+// 128 x 128) whose lines are horizontal (no y step): each screen line samples one map row, so a strip texture holds,
+// in its row y, screen line y's map row over the box of the layer's non-empty columns (up to 512 pixels), in that
+// line's palette bank (Pinball fogs the table by distance with banks 0-7, 105 colours in bank 7: a texture per bank
+// would not fit). Each line is then one quad per turn of the map in which it crosses the box. A strip row is
+// converted again only when its line's map row, bank colours or the layout change; just before C3D_FrameBegin (the
+// GPU has finished the last frame, UploadStrips). As tile runs the table took ~9000 quads and ~18 ms a frame on the 2DS.
+enum { STRIP_SLOTS = 2, STRIP_W = 512, STRIP_H = 256 };
+struct Strip {
+    const TileLayer *layer; // NULL: a free slot
+    C3D_Tex tex;
+    bool alloc;
+    unsigned x0;               // map pixel column of the strip's column 0
+    uint32 layoutHash;         // the layout (and tileset epoch) the box was taken for
+    uint32 have[STRIP_H];      // what each row holds (StripKey; 0: nothing)
+    uint32 want[STRIP_H];      // what this frame's lines need
+    uint16 row[STRIP_H];       // their map rows
+    uint8 bank[STRIP_H];       // and banks
+    bool dirty;                // rows to convert after FrameBegin
+    unsigned rowsUp;           // SITE REFUSED: rows converted at the last upload
+    uint32 lastUsed;           // sRotoFrame
+};
+Strip sStrips[STRIP_SLOTS];
+const char *sBigWhy = "-"; // SITE REFUSED: the last big layer's state
+
+void FreeStrip(Strip &st)
+{
+    if (st.alloc)
+        C3D_TexDelete(&st.tex);
+    memset(&st, 0, sizeof(st));
+}
+
+// The box of the layer's non-empty tile columns (inclusive); false when it has none.
+bool LayoutColumns(const TileLayer *layer, int *tx0, int *tx1)
+{
+    int x0 = 0x7FFF, x1 = -1;
+    for (int y = 0; y < layer->ysize; ++y) {
+        const uint16 *row = &layer->layout[y << layer->widthShift];
+        for (int x = 0; x < layer->xsize; ++x)
+            if (row[x] != 0xFFFF)
+                x0 = x < x0 ? x : x0, x1 = x > x1 ? x : x1;
+    }
+    *tx0 = x0, *tx1 = x1;
+    return x1 >= 0;
+}
+
+// floor(a / b) for b > 0
+inline int64 FloorDiv(int64 a, int64 b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+
+// The layer's lines [y1, y2) from its strip. *handled false: not this way (lines with a y step, a box too wide, no
+// VRAM): the caller draws tile runs.
+bool EmitStripRoto(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, int y1, int y2, float feet, bool *handled)
+{
+    *handled = false;
+    if (GpuRender::depthMode & 512) // debug: the tile runs as before
+        return true;
+    const unsigned mapW = (unsigned)TILE_SIZE << layer->widthShift, mapH = (unsigned)TILE_SIZE << layer->heightShift;
+    if (mapW <= 1024 && mapH <= 1024) // RotoTex's
+        return true;
+    sBigWhy = "lines";
+    for (int y = y1; y < y2; ++y)
+        if (first[y - y1].deform.y)
+            return true;
+    // The slot: the layer's, a free one, or one not drawn for a second
+    Strip *st = NULL;
+    for (Strip &t : sStrips)
+        if (t.layer == layer)
+            st = &t;
+    for (unsigned i = 0; i < STRIP_SLOTS && !st; ++i)
+        if (!sStrips[i].layer || sRotoFrame - sStrips[i].lastUsed > 60) {
+            FreeStrip(sStrips[i]);
+            st = &sStrips[i];
+        }
+    sBigWhy = "slots";
+    if (!st)
+        return true;
+    // The layout (and the tileset's epoch): a change takes the box again and every row anew
+    uint32 layoutHash = 2166136261u ^ sTileEpoch * 16777619u;
+    {
+        const uint32 *lw     = (const uint32 *)layer->layout;
+        const unsigned words = ((1u << layer->widthShift) << layer->heightShift) / 2;
+        for (unsigned i = 0; i < words; ++i)
+            layoutHash = (layoutHash ^ lw[i]) * 16777619u;
+    }
+    if (st->layer != layer || st->layoutHash != layoutHash) {
+        int tx0, tx1;
+        sBigWhy = "empty";
+        if (!LayoutColumns(layer, &tx0, &tx1))
+            return true;
+        sBigWhy = "too wide";
+        if ((tx1 - tx0 + 1) * TILE_SIZE > STRIP_W)
+            return true;
+        if (!st->alloc) {
+            sBigWhy = "no vram";
+            if (vramSpaceFree() < STRIP_W * STRIP_H * 2 + VramReserve() || !C3D_TexInitVRAM(&st->tex, STRIP_W, STRIP_H, GPU_RGBA5551))
+                return true;
+            C3D_TexSetFilter(&st->tex, GPU_NEAREST, GPU_NEAREST);
+            C3D_TexSetWrap(&st->tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+            st->alloc = true;
+        }
+        st->layer      = layer;
+        st->x0         = (unsigned)tx0 * TILE_SIZE;
+        st->layoutHash = layoutHash;
+        memset(st->have, 0, sizeof(st->have));
+    }
+    // Each bank's colours as a hash: a row's key is its map row, its bank's colours and the layout
+    uint32 bankHash[8];
+    for (unsigned b = 0; b < 8; ++b) {
+        const uint32 *pw = (const uint32 *)sPalShadow[sBankMap[b]];
+        uint32 h         = 2166136261u ^ b;
+        for (unsigned i = 0; i < PALETTE_BANK_SIZE / 2; ++i)
+            h = (h ^ pw[i]) * 16777619u;
+        bankHash[b] = h;
+    }
+
+    const int lineSize = x2 - x1;
+    sBigWhy            = "quads";
+    if (sQuadCount + (unsigned)(y2 - y1) * 3 > MAX_QUADS)
+        return true;
+    *handled     = true;
+    sBigWhy      = "-";
+    st->lastUsed = sRotoFrame;
+    const uint8 tex     = (uint8)(TEX_BIG0 + (st - sStrips));
+    const int64 period  = (int64)mapW << 16;
+    unsigned q          = sQuadCount;
+    uint32 *w32         = (uint32 *)&sVbo[sCur][q * 4];
+    for (int y = y1; y < y2; ++y) {
+        const ScanlineInfo &s = first[y - y1];
+        const unsigned row = ((uint32)s.position.y >> 16) & (mapH - 1), bank = sLineBuf[y] & 7;
+        const uint32 key   = ((row * 2654435761u) ^ bankHash[bank] ^ layoutHash) | 1u;
+        st->want[y] = key, st->row[y] = (uint16)row, st->bank[y] = (uint8)bank;
+        st->dirty |= st->have[y] != key;
+        const int32 dx   = s.deform.x;
+        const int64 p0   = (int64)(uint32)s.position.x;
+        const int64 pEnd = p0 + (int64)dx * (lineSize - 1);
+        const int64 lo = p0 < pEnd ? p0 : pEnd, hi = p0 < pEnd ? pEnd : p0;
+        const uint32 v   = (uint32)(y * 16 + 8); // the strip row's middle, 1/16 texel
+        const int8 depth = feet > 0 ? RotoLineDepth(feet, dx, 0) : sDepth;
+        for (int64 turn = FloorDiv(lo, period) - 1; turn <= FloorDiv(hi, period) + 1; ++turn) {
+            const int64 a = ((int64)st->x0 << 16) + turn * period, e = a + ((int64)STRIP_W << 16); // [a, e) in 16.16
+            if (e <= lo || a > hi)
+                continue;
+            int64 c0, c1; // the pixels whose samples fall in [a, e)
+            if (dx > 0)
+                c0 = FloorDiv(a - p0 + dx - 1, dx), c1 = FloorDiv(e - p0 + dx - 1, dx);
+            else if (dx < 0)
+                c0 = FloorDiv(p0 - e, -dx) + 1, c1 = FloorDiv(p0 - a, -dx) + 1;
+            else
+                c0 = 0, c1 = lineSize;
+            c0 = c0 < 0 ? 0 : c0, c1 = c1 > lineSize ? lineSize : c1;
+            if (c0 >= c1 || q >= MAX_QUADS)
+                continue;
+            // Ends half a step outside the first and last samples (as RotoTex), in 1/16 texel of the strip
+            const int64 u0 = (p0 + c0 * dx - a) - dx / 2, u1 = u0 + (int64)dx * (c1 - c0);
+            Batch *last = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
+            if (!last || last->tex != tex || last->blend != BLEND_NORMAL || last->depth != depth || last->scissor != sScissor) {
+                if (sBatchCount >= MAX_BATCHES) {
+                    sQuadCount = q;
+                    return Refuse(GpuRender::REASON_QUAD_LIMIT);
+                }
+                if (last)
+                    last->count = q - last->first;
+                sBatches[sBatchCount++] = { tex, BLEND_NORMAL, q, 0, 0, depth, sScissor };
+            }
+            const uint32 U0 = (uint32)(uint16)(int16)(u0 >> 12), U1 = (uint32)(uint16)(int16)(u1 >> 12);
+            const uint32 X0 = (uint32)((x1 + (int)c0) << 2), X1 = (uint32)((x1 + (int)c1) << 2);
+            const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
+            w32[0] = X0 | Y0, w32[1] = U0 | v << 16, w32[2] = 0xFFFFFFFFu;
+            w32[3] = X1 | Y0, w32[4] = U1 | v << 16, w32[5] = 0xFFFFFFFFu;
+            w32[6] = X1 | Y1, w32[7] = U1 | v << 16, w32[8] = 0xFFFFFFFFu;
+            w32[9] = X0 | Y1, w32[10] = U0 | v << 16, w32[11] = 0xFFFFFFFFu;
+            w32 += 12, ++q;
+        }
+    }
+    if (sBatchCount)
+        sBatches[sBatchCount - 1].count = q - sBatches[sBatchCount - 1].first;
+    sQuadCount = q;
+    return true;
+}
+
+// Before FrameBegin: the strip rows this frame's lines need and do not hold, by blocks of 8 rows (a block's other rows
+// are converted with it: the staging buffer holds no earlier content), each run of blocks one copy into VRAM.
+void UploadStrips()
+{
+    static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
+    u16 *staging = (u16 *)C3DPresent::Staging();
+    for (Strip &st : sStrips) {
+        if (!st.layer || !st.dirty || !staging)
+            continue;
+        st.dirty = false;
+        st.rowsUp = 0;
+        const TileLayer *layer = st.layer;
+        const unsigned maskTX = layer->xsize - 1, maskTY = layer->ysize - 1, wShift = layer->widthShift;
+        const unsigned blockBytes = STRIP_W * 8 * 2;
+        int runStart = -1;
+        for (unsigned br = 0; br <= STRIP_H / 8; ++br) {
+            bool need = false;
+            if (br < STRIP_H / 8)
+                for (unsigned y = br * 8; y < br * 8 + 8; ++y)
+                    need |= st.want[y] && st.want[y] != st.have[y];
+            if (need) {
+                if (runStart < 0)
+                    runStart = (int)br;
+                for (unsigned y = br * 8; y < br * 8 + 8; ++y) {
+                    if (!st.want[y]) { // no line there this frame: the copy overwrites it with whatever staging holds
+                        st.have[y] = 0;
+                        continue;
+                    }
+                    const unsigned row = st.row[y], ty = (row >> 4) & maskTY;
+                    const u16 *tex     = sTexPal[sBankMap[st.bank[y]]];
+                    u16 *blkRow        = &staging[(br * (STRIP_W >> 3)) << 6];
+                    for (unsigned tx = 0; tx < STRIP_W / 16; ++tx) {
+                        const unsigned t = layer->layout[(((st.x0 >> 4) + tx) & maskTX) + (ty << wShift)] & 0xFFF;
+                        const uint8 *sp  = &tilesetPixels[TILE_DATASIZE * t + (row & 15) * 16];
+                        u16 *b           = blkRow + ((tx * 2) << 6) + my[y & 7];
+                        b[0] = tex[sp[0]], b[1] = tex[sp[1]], b[4] = tex[sp[2]], b[5] = tex[sp[3]];
+                        b[16] = tex[sp[4]], b[17] = tex[sp[5]], b[20] = tex[sp[6]], b[21] = tex[sp[7]];
+                        b += 64;
+                        b[0] = tex[sp[8]], b[1] = tex[sp[9]], b[4] = tex[sp[10]], b[5] = tex[sp[11]];
+                        b[16] = tex[sp[12]], b[17] = tex[sp[13]], b[20] = tex[sp[14]], b[21] = tex[sp[15]];
+                    }
+                    st.have[y] = st.want[y];
+                    ++st.rowsUp;
+                }
+            }
+            else if (runStart >= 0) {
+                const u32 off = (u32)runStart * blockBytes, bytes = (br - (u32)runStart) * blockBytes;
+                CopyToVram((u8 *)staging + off, (u8 *)st.tex.data + off, bytes);
+                runStart = -1;
+            }
+        }
+        memset(st.want, 0, sizeof(st.want));
+    }
+}
+
 bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 {
     const int x1 = c.clip[0] < 0 ? 0 : c.clip[0], x2 = c.clip[2] > screens[0].pitch ? screens[0].pitch : c.clip[2];
@@ -3080,6 +3319,13 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
         bool handled;
         const RotoSrc src = { layer, NULL };
         if (!EmitRotoTex(src, (unsigned)TILE_SIZE << layer->widthShift, (unsigned)TILE_SIZE << layer->heightShift, first, x1, x2, y1, y2, feet, &handled))
+            return false;
+        if (handled)
+            return true;
+    }
+    {
+        bool handled;
+        if (!EmitStripRoto(layer, first, x1, x2, y1, y2, feet, &handled))
             return false;
         if (handled)
             return true;
@@ -3350,8 +3596,11 @@ int GpuRender::floorFogPercent  = 60;
 unsigned GpuRender::gpuSkip    = 0;
 const char *GpuRender::RotoTexWhy()
 {
-    static char buf[48];
-    snprintf(buf, sizeof(buf), "%s, floor %s", sRotoTexWhy, sFloorWhy);
+    static char buf[200];
+    int n = snprintf(buf, sizeof(buf), "%s, floor %s, big %s", sRotoTexWhy, sFloorWhy, sBigWhy);
+    for (const Strip &st : sStrips)
+        if (st.layer && n < (int)sizeof(buf))
+            n += snprintf(buf + n, sizeof(buf) - n, " | strip L%d x0 %u rows %u", (int)(st.layer - tileLayers), st.x0, st.rowsUp);
     return buf;
 }
 const char *GpuRender::DepthSummary() { return sDepthLast[0] ? sDepthLast : "- (no 3D frame yet: slider up or SET force3d 1)"; }
@@ -3520,6 +3769,8 @@ bool GpuRender::Render(const Stream &stream)
         sSeenContent = contentVersion;
         for (unsigned i = 0; i < ROTO_TEX_SLOTS; ++i)
             FreeRotoTex(sRotoTex[i]);
+        for (Strip &st : sStrips)
+            FreeStrip(st);
         sRotoTexFailed = NULL;
         FreeFloor();
         FreeModels();
@@ -3753,6 +4004,10 @@ bool GpuRender::Render(const Stream &stream)
     GPU_TIME(STAGE_PCOPY, tStart);
     u64 t = svcGetSystemTick();
     C3D_RenderTarget *target = (C3D_RenderTarget *)C3DPresent::Target();
+    // The line strips before the frame: inside one, citro3d only queues C3D_SyncTextureCopy for the frame's end, and
+    // every strip would get what the shared staging buffer held last (Pinball's two table layers both showed the top
+    // one). Outside it the copy waits for the GPU's queue: the wait FrameBegin makes anyway.
+    UploadStrips();
     // Without SYNCDRAW, which waits for the next vblank (up to 16 ms): FrameBegin already waits until the GPU has
     // finished the previous frame, so the atlas cells rewritten below are no longer being read.
     C3D_FrameBegin(0);
@@ -3960,8 +4215,13 @@ bool GpuRender::Render(const Stream &stream)
             C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / (l.texW * 16.0f), -1.0f / (l.texW * 16.0f), 0.0f, 0.0f);
             curTex = bt.tex;
         }
+        if (bt.tex >= TEX_BIG0 && curTex != bt.tex) {
+            C3D_TexBind(0, (C3D_Tex *)&sStrips[bt.tex - TEX_BIG0].tex);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, sUvLoc, 1.0f / (STRIP_W * 16.0f), -1.0f / (STRIP_H * 16.0f), 0.0f, 0.0f);
+            curTex = bt.tex;
+        }
         const int rotoKey = (int)(bt.tex | (bt.blend == BLEND_HOT ? 0 : bt.fog << 8) | bt.uvk << 16);
-        if (bt.tex >= TEX_ROTO0 && curTex != rotoKey) {
+        if (bt.tex >= TEX_ROTO0 && bt.tex < TEX_BIG0 && curTex != rotoKey) {
             // A rotozoom layer's texture: the copy for the batch's bank (Batch::fog), or its hot-colour mask; texel
             // units of 1/16 << uvk.
             const bool mask  = bt.tex >= TEX_ROTOMASK0;
