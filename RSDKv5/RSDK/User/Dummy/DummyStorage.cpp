@@ -26,11 +26,42 @@ int32 DummyUserStorage::TryInitStorage()
     }
     return storageStatus;
 }
+#if RETRO_PLATFORM == RETRO_3DS
+// The nickname of the console's profile (config block 0xA0000: UTF-16, 10 characters at most), read once. The menu font
+// has ASCII only, so other characters are left out; empty when nothing is left.
+static const char *ConsoleNickname()
+{
+    static char nick[11];
+    static bool read;
+    if (!read) {
+        read = true;
+        u16 utf16[0x1C / 2] = {};
+        if (R_SUCCEEDED(cfguInit())) {
+            if (R_SUCCEEDED(CFGU_GetConfigInfoBlk2(sizeof(utf16), 0xA0000, utf16))) {
+                int len = 0;
+                for (int i = 0; i < 10 && utf16[i]; ++i)
+                    if (utf16[i] >= 0x20 && utf16[i] < 0x7F)
+                        nick[len++] = (char)utf16[i];
+                while (len > 0 && nick[len - 1] == ' ')
+                    --len;
+                nick[len] = 0;
+            }
+            cfguExit();
+        }
+    }
+    return nick;
+}
+#endif
+
 bool32 DummyUserStorage::GetUsername(String *name)
 {
 #if !RETRO_USE_ORIGINAL_CODE
     if (strlen(customSettings.username) > 0)
         InitString(name, customSettings.username, 0);
+#if RETRO_PLATFORM == RETRO_3DS
+    else if (ConsoleNickname()[0])
+        InitString(name, ConsoleNickname(), 0);
+#endif
     else
         InitString(name, "IntegerGeorge802", 0);
 #else
