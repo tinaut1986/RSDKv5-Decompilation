@@ -773,6 +773,8 @@ static void HandleSession(int ctrl)
                     DevTools::swFlipCopy = v != 0;
                 else if (!strncmp(path, "gpu3d", 5))
                     DevTools::swGpu3D = v != 0;
+                else if (!strncmp(path, "gpuskip", 7)) // before "gpu": it took gpuskip for gpu (0 turned the GPU renderer off)
+                    GpuRender::gpuSkip = (unsigned)v;
                 else if (!strncmp(path, "depthmode", 9))
                     GpuRender::depthMode = (unsigned)v & 2047;
                 else if (!strncmp(path, "gpurender", 9))
@@ -803,8 +805,6 @@ static void HandleSession(int ctrl)
                     engine.streamsEnabled = v != 0;
                 else if (!strncmp(path, "force3d", 7))
                     DevTools::swForce3D = v != 0;
-                else if (!strncmp(path, "gpuskip", 7))
-                    GpuRender::gpuSkip = (unsigned)v;
                 else if (!strncmp(path, "floorwin", 8))
                     GpuRender::floorWindows = v != 0;
                 else if (!strncmp(path, "floorfogavg", 11)) {
@@ -1805,6 +1805,10 @@ static void Capture()
         fprintf(f, "fps %.1f frame %.1f ms, heap used %u KB, linear free %u KB, vram free %u KB\n", sLastFps, sLastFrameMs,
                 (unsigned)(mallinfo().uordblks >> 10), (unsigned)(linearSpaceFree() >> 10), (unsigned)(vramSpaceFree() >> 10));
         fprintf(f, "depths: %s\n", GpuRender::DepthSummary());
+        fprintf(f, "times: frame %.1f update %.1f draw %.1f flip %.1f (pcopy %.1f pframe %.1f), gpu draw %.1f\n", sLastFrameMs,
+                sLastStageMs[DevTools::STAGE_UPDATE], sLastStageMs[DevTools::STAGE_DRAW], sLastStageMs[DevTools::STAGE_FLIP],
+                sLastStageMs[DevTools::STAGE_PCOPY], sLastStageMs[DevTools::STAGE_PFRAME], g.gpuDrawMs);
+        GpuRender::DumpBatches(f);
         fclose(f);
     }
     sStep = 1;

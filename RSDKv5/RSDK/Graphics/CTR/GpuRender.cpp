@@ -3196,6 +3196,7 @@ bool EmitStripRoto(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, 
     const int64 period  = (int64)mapW << 16;
     unsigned q          = sQuadCount;
     uint32 *w32         = (uint32 *)&sVbo[sCur][q * 4];
+    Batch *own          = NULL; // the batch this layer is adding to (only its own: another's count is that emitter's)
     for (int y = y1; y < y2; ++y) {
         const ScanlineInfo &s = first[y - y1];
         const unsigned row = ((uint32)s.position.y >> 16) & (mapH - 1), bank = sLineBuf[y] & 7;
@@ -3224,15 +3225,15 @@ bool EmitStripRoto(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, 
                 continue;
             // Ends half a step outside the first and last samples (as RotoTex), in 1/16 texel of the strip
             const int64 u0 = (p0 + c0 * dx - a) - dx / 2, u1 = u0 + (int64)dx * (c1 - c0);
-            Batch *last = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
-            if (!last || last->tex != tex || last->blend != BLEND_NORMAL || last->depth != depth || last->scissor != sScissor) {
+            if (!own || own->depth != depth || own->scissor != sScissor) {
+                if (own)
+                    own->count = q - own->first;
                 if (sBatchCount >= MAX_BATCHES) {
                     sQuadCount = q;
                     return Refuse(GpuRender::REASON_QUAD_LIMIT);
                 }
-                if (last)
-                    last->count = q - last->first;
                 sBatches[sBatchCount++] = { tex, BLEND_NORMAL, q, 0, 0, depth, sScissor };
+                own                     = &sBatches[sBatchCount - 1];
             }
             const uint32 U0 = (uint32)(uint16)(int16)(u0 >> 12), U1 = (uint32)(uint16)(int16)(u1 >> 12);
             const uint32 X0 = (uint32)((x1 + (int)c0) << 2), X1 = (uint32)((x1 + (int)c1) << 2);
@@ -3244,8 +3245,8 @@ bool EmitStripRoto(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, 
             w32 += 12, ++q;
         }
     }
-    if (sBatchCount)
-        sBatches[sBatchCount - 1].count = q - sBatches[sBatchCount - 1].first;
+    if (own)
+        own->count = q - own->first;
     sQuadCount = q;
     return true;
 }
@@ -3618,6 +3619,16 @@ unsigned GpuRender::TakeC3DTimes(float avg[5])
     return n;
 }
 const char *GpuRender::LastRefusal() { return sRefusal[0] ? sRefusal : "-"; }
+
+void GpuRender::DumpBatches(void *file)
+{
+    FILE *f = (FILE *)file;
+    fprintf(f, "batches %u, quads %u (tex blend first count depth scissor):\n", sBatchCount, sQuadCount);
+    for (unsigned b = 0; b < sBatchCount; ++b) {
+        const Batch &bt = sBatches[b];
+        fprintf(f, "  %3u tex %2u blend %2u first %5u count %5u depth %3d scissor %u\n", b, bt.tex, bt.blend, bt.first, bt.count, bt.depth, bt.scissor);
+    }
+}
 
 #if MANIA_DEV_TOOLS
 const char *GpuRender::ConvReport() { return sConvReport; }
