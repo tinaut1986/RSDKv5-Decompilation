@@ -38,7 +38,7 @@ enum {
     SPR_ATLAS_H  = 512,
     SPR_SLOTS    = 4096,
     SPR_MAX_PIXELS = 256 * 256,
-    MAX_QUADS    = 8192,
+    MAX_QUADS    = 10240, // Pinball's two table layers take ~9000 tile runs; 108 bytes of linear heap a quad (two VBOs, indices)
     MAX_BATCHES  = 512,
     MAX_PENDING  = 2048,
     REAL_BANKS   = PALETTE_BANK_COUNT,
@@ -2081,7 +2081,7 @@ bool EmitLayerBasic(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
 // cell. Empty tiles (0xFFFF) are skipped, which is most of the Special Stage map (its far lines cross hundreds of
 // empty tiles: walking them is cheap, drawing them is not needed). A layer that would take too many runs or quads (a
 // horizon full of tiles) goes back to the software.
-enum { ROTO_MAX_RUNS = 16384, ROTO_MAX_QUADS = 6000 };
+enum { ROTO_MAX_RUNS = 65536, ROTO_MAX_QUADS = 7168 }; // the walk is cheap (runs over empty tiles cost little): quads are the limit
 
 // Where a line's walk along one axis enters the next tile, as exact integer steps (no division per run): with N the
 // distance in 16.16 to the next tile edge counted from the line's start, the crossing is pixel ceil(N / |d|); each tile

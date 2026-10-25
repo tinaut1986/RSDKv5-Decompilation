@@ -891,6 +891,14 @@ static void HandleSession(int ctrl)
                     fwrite("LINE", 1, 4, f), fwrite(gfxLineBuffer, 1, SCREEN_YSIZE, f);
                     fwrite("SCAN", 1, 4, f), fwrite(lines, sizeof(ScanlineInfo), SCREEN_YSIZE, f);
                     fwrite("TILE", 1, 4, f), fwrite(tilesetPixels, 1, TILESET_SIZE, f);
+                    // Then every rotozoom layer's own lines: "SCNL", the layer, its scanlines
+                    for (int l = 0; l < LAYER_COUNT; ++l) {
+                        if (!tileLayers[l].layout || tileLayers[l].type != LAYER_ROTOZOOM || !tileLayers[l].scanlineCallback)
+                            continue;
+                        tileLayers[l].scanlineCallback(lines);
+                        const uint8 id = (uint8)l;
+                        fwrite("SCNL", 1, 4, f), fwrite(&id, 1, 1, f), fwrite(lines, sizeof(ScanlineInfo), SCREEN_YSIZE, f);
+                    }
                     fclose(f);
                     Reply(s, "200 debug/layers.bin");
                 }
