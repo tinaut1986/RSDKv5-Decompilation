@@ -1733,6 +1733,14 @@ static int sCaptureNumber = -1;
 static volatile bool sCaptureTap;
 
 void DevTools::TapCapture() { sCaptureTap = true; }
+
+void DevTools::LoadScene(int category, int scene)
+{
+    if (category < 0 || category >= sceneInfo.categoryCount || scene < 0 || scene >= sceneInfo.listCategory[category].sceneCount)
+        return;
+    sPendingScene    = scene;
+    sPendingCategory = category;
+}
 int DevTools::CaptureNumber() { return sCaptureNumber; }
 
 static void Capture()

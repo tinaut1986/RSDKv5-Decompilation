@@ -115,6 +115,7 @@ static const char *const kText[][COLS] = {
     { "WHAT'S NEW", "NOUVEAUTÉS", "NOVITÀ", "NEUIGKEITEN", "NOVEDADES", "新機能" },
     { "PREV", "PRÉC.", "PREC.", "ZURÜCK", "ANT.", "前へ" },
     { "CLOSE", "FERMER", "CHIUDI", "SCHLIESSEN", "CERRAR", "閉じる" },
+    { "BACK", "RETOUR", "INDIETRO", "ZURÜCK", "ATRÁS", "戻る" },
     { "NEXT", "SUIV.", "SUCC.", "WEITER", "SIG.", "次へ" },
     { "UPDATE AVAILABLE", "MISE À JOUR DISPONIBLE", "AGGIORNAMENTO DISPONIBILE", "UPDATE VERFÜGBAR", "ACTUALIZACIÓN DISPONIBLE", "更新があります" },
     { "NEW VERSION", "NOUVELLE VERSION", "NUOVA VERSIONE", "NEUE VERSION", "VERSIÓN NUEVA", "新バージョン" },
