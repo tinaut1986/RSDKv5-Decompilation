@@ -220,6 +220,7 @@ struct SprSlot {
     uint16 srcW, srcH;
     uint32 stamp;  // sGen when converted (0: never)
     uint32 groups; // palette groups its pixels use (see sGroupGen)
+    uint32 conv;   // sGen of the cell's content (0: none): a reconversion rewrites only the colours changed since
 };
 
 struct Pending {
@@ -292,6 +293,7 @@ uint32 sGen = 1;
 uint16 sPalShadow[BANKS][PALETTE_BANK_SIZE];
 u16 sTexPal[BANKS][PALETTE_BANK_SIZE]; // the palette as atlas texels (index 0 transparent), kept with the shadow
 uint32 sGroupGen[BANKS][32];
+uint32 sColorGen[BANKS][PALETTE_BANK_SIZE]; // the same per colour, for the partial sprite reconversions
 // The bank a command's palette bank stands for: itself, or the virtual bank (8..15) holding the snapshot that bank had
 // when the command was recorded. Virtual banks are handed out in order of appearance each frame, so a boss flashing
 // the same way every frame keeps its atlas copies.
@@ -562,8 +564,12 @@ void TrackBank(unsigned b, const uint16 *pal, bool all)
     if (!all && !memcmp(now, was, sizeof(sPalShadow[b])))
         return;
     for (unsigned g = 0; g < 32; ++g) // a group is 8 colours, 4 words
-        if (all || now[g * 4] != was[g * 4] || now[g * 4 + 1] != was[g * 4 + 1] || now[g * 4 + 2] != was[g * 4 + 2] || now[g * 4 + 3] != was[g * 4 + 3])
+        if (all || now[g * 4] != was[g * 4] || now[g * 4 + 1] != was[g * 4 + 1] || now[g * 4 + 2] != was[g * 4 + 2] || now[g * 4 + 3] != was[g * 4 + 3]) {
             sGroupGen[b][g] = sGen;
+            for (unsigned i = g * 8; i < g * 8 + 8; ++i)
+                if (all || pal[i] != sPalShadow[b][i])
+                    sColorGen[b][i] = sGen;
+        }
     memcpy(sPalShadow[b], pal, sizeof(sPalShadow[b]));
     sTexPal[b][0] = 0;
     for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i)
@@ -694,6 +700,19 @@ bool AllocSprite(unsigned w8, unsigned h8, unsigned *x, unsigned *y)
 unsigned sBadData;   // which check of EnsureSprite failed (GpuRender::ReasonName)
 char sRefusal[160]; // the last refused command (GpuRender::LastRefusal)
 
+#if MANIA_DEV_TOOLS
+// SITE CONV: the last frame's conversions, to tell a real colour change from a group that changed elsewhere. Each
+// conversion counts the texels that came out different from what the cell held; the biggest sprites are listed.
+struct ConvEntry {
+    uint16 sheet, w, h, bank;
+    uint32 groups, changed;
+    bool fresh;
+};
+ConvEntry sConvTop[6];
+unsigned sConvTopCount, sConvTiles, sConvTilesSame, sConvSprites, sConvSpritesSame, sConvSpritePixels, sConvSpriteChanged;
+char sConvReport[600] = "-";
+#endif
+
 SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, int h, int *refuse)
 {
     *refuse   = 0;
@@ -744,6 +763,7 @@ SprSlot *EnsureSprite(unsigned sheet, unsigned bank, int sprX, int sprY, int w, 
             s.srcW = (uint16)w, s.srcH = (uint16)h;
             s.stamp  = sGen;
             s.groups = 0;
+            s.conv   = 0;
             ++sSlotsUsed;
             sPending[sPendingCount++] = { 1, (uint8)bank, (uint16)i, 0 };
             return &s;
@@ -767,16 +787,27 @@ void ConvertTile(const Pending &p)
     }
     // Four 8x8 blocks, each 64 texels in Morton order: Morton(x, y) = mx[x] | my[y] (the bits interleave).
     static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
+#if MANIA_DEV_TOOLS
+    unsigned changed = 0;
+#endif
     for (unsigned by = 0; by < 2; ++by)
         for (unsigned bx = 0; bx < 2; ++bx) {
             u16 *blk        = &sTileData[(((Y >> 3) + by) * (TILE_ATLAS_W >> 3) + (X >> 3) + bx) << 6];
             const uint8 *sp = src + by * 8 * 16 + bx * 8;
             for (unsigned y = 0; y < 8; ++y, sp += 16) {
                 u16 *b = blk + my[y];
+#if MANIA_DEV_TOOLS
+                changed |= (b[0] ^ tex[sp[0]]) | (b[1] ^ tex[sp[1]]) | (b[4] ^ tex[sp[2]]) | (b[5] ^ tex[sp[3]]) | (b[16] ^ tex[sp[4]])
+                           | (b[17] ^ tex[sp[5]]) | (b[20] ^ tex[sp[6]]) | (b[21] ^ tex[sp[7]]);
+#endif
                 b[0] = tex[sp[0]], b[1] = tex[sp[1]], b[4] = tex[sp[2]], b[5] = tex[sp[3]];
                 b[16] = tex[sp[4]], b[17] = tex[sp[5]], b[20] = tex[sp[6]], b[21] = tex[sp[7]];
             }
         }
+#if MANIA_DEV_TOOLS
+    ++sConvTiles;
+    sConvTilesSame += !changed;
+#endif
     Dirty(sTileDirtyLo, sTileDirtyHi, TILE_ATLAS_W, X, Y, 16, 16);
     ++sStats.tileConversions;
 }
@@ -787,20 +818,80 @@ void ConvertSprite(const Pending &p)
     // The key holds the sheet position: unpack it.
     const unsigned sheet = (unsigned)(s.key >> 57), sprX = (unsigned)((s.key >> 17) & 0x3FFF), sprY = (unsigned)((s.key >> 1) & 0xFFFF);
     const GFXSurface &g  = gfxSurface[sheet];
-    const uint16 *pal    = sPalShadow[p.bank]; // the bank as the frame used it (a virtual one: a snapshot)
-    uint32 groups        = 0;
-    for (unsigned y = 0; y < s.h; ++y)
-        for (unsigned x = 0; x < s.w; ++x) {
-            u16 texel = 0;
-            if (x < s.srcW && y < s.srcH && (int)(sprX + x) < g.width && (int)(sprY + y) < g.height) {
-                const unsigned idx = g.pixels[(sprY + y) * g.width + sprX + x];
-                groups |= (idx ? 1u : 0u) << (idx >> 3);
-                texel = idx ? ToTexel(pal[idx]) : 0;
+    const u16 *tex       = sTexPal[p.bank]; // the bank as the frame used it (a virtual one: a snapshot)
+    // The part of the cell the sheet covers; the rest stays transparent
+    const unsigned w = (int)(sprX + s.srcW) <= g.width ? s.srcW : g.width > (int)sprX ? g.width - sprX : 0;
+    const unsigned h = (int)(sprY + s.srcH) <= g.height ? s.srcH : g.height > (int)sprY ? g.height - sprY : 0;
+    static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
+    static const uint8 mx[8] = { 0, 1, 4, 5, 16, 17, 20, 21 };
+    unsigned written = 0;
+    if (s.conv) {
+        // The cell holds the conversion of generation s.conv: rewrite only the texels of the colours changed since.
+        // Studiopolis' shop windows (256x256) share a group with a pulsing colour: ~100 of their texels change.
+        bool dirty[PALETTE_BANK_SIZE];
+        bool any = false;
+        dirty[0] = false;
+        for (unsigned i = 1; i < PALETTE_BANK_SIZE; ++i)
+            any |= dirty[i] = sColorGen[p.bank][i] > s.conv;
+        if (any)
+            for (unsigned y = 0; y < h; ++y) {
+                const uint8 *src = &g.pixels[(sprY + y) * g.width + sprX];
+                const unsigned Y = s.y + y;
+                u16 *row         = &sSprData[((Y >> 3) * (SPR_ATLAS_W >> 3) + (s.x >> 3)) << 6] + my[Y & 7];
+                for (unsigned x = 0; x < w; ++x)
+                    if (dirty[src[x]]) {
+                        row[((x >> 3) << 6) + mx[x & 7]] = tex[src[x]];
+                        ++written;
+                    }
             }
-            Put(sSprData, SPR_ATLAS_W, s.x + x, s.y + y, texel);
+    }
+    else {
+        // A whole conversion, by 8x8 blocks of the atlas (the PICA's Morton order inside each)
+        uint32 groups = 0;
+        for (unsigned by = 0; by < s.h; by += 8)
+            for (unsigned bx = 0; bx < s.w; bx += 8) {
+                u16 *blk = &sSprData[(((s.y + by) >> 3) * (SPR_ATLAS_W >> 3) + ((s.x + bx) >> 3)) << 6];
+                for (unsigned y = 0; y < 8; ++y) {
+                    u16 *b = blk + my[y];
+                    if (by + y >= h) {
+                        for (unsigned x = 0; x < 8; ++x)
+                            b[mx[x]] = 0;
+                        continue;
+                    }
+                    const uint8 *src = &g.pixels[(sprY + by + y) * g.width + sprX + bx];
+                    for (unsigned x = 0; x < 8; ++x) {
+                        const unsigned idx = bx + x < w ? src[x] : 0;
+                        groups |= (idx ? 1u : 0u) << (idx >> 3);
+                        b[mx[x]] = tex[idx];
+                    }
+                }
+            }
+        s.groups = groups;
+        written  = s.w * s.h;
+    }
+    s.conv = sGen;
+#if MANIA_DEV_TOOLS
+    ++sConvSprites;
+    sConvSpritesSame += !written;
+    sConvSpritePixels += s.w * s.h;
+    sConvSpriteChanged += written;
+    {
+        // Keep the biggest few, largest first
+        const ConvEntry e = { (uint16)sheet, s.w, s.h, p.bank, s.groups, written, written == (unsigned)s.w * s.h };
+        unsigned k = sConvTopCount < 6 ? sConvTopCount++ : 6;
+        if (k == 6 && sConvTop[5].w * sConvTop[5].h < e.w * e.h)
+            k = 5;
+        if (k < 6) {
+            while (k > 0 && sConvTop[k - 1].w * sConvTop[k - 1].h < e.w * e.h) {
+                sConvTop[k] = sConvTop[k - 1];
+                --k;
+            }
+            sConvTop[k] = e;
         }
-    s.groups = groups;
-    Dirty(sSprDirtyLo, sSprDirtyHi, SPR_ATLAS_W, s.x, s.y, s.w, s.h);
+    }
+#endif
+    if (written)
+        Dirty(sSprDirtyLo, sSprDirtyHi, SPR_ATLAS_W, s.x, s.y, s.w, s.h);
     ++sStats.spriteConversions;
 }
 
@@ -3279,6 +3370,12 @@ unsigned GpuRender::TakeC3DTimes(float avg[5])
 }
 const char *GpuRender::LastRefusal() { return sRefusal[0] ? sRefusal : "-"; }
 
+#if MANIA_DEV_TOOLS
+const char *GpuRender::ConvReport() { return sConvReport; }
+#else
+const char *GpuRender::ConvReport() { return "-"; }
+#endif
+
 const char *GpuRender::ReasonName()
 {
     static const char *const kCmd[]   = { "FILL", "LINE", "RECT", "CIRCLE", "CIRCLE OUTLINE", "FACE", "BLENDED FACE", "SPRITE", "ROTO SPRITE", "LAYER", "LINEBUF", "FACES", "BLENDED FACES", "3D SCENE", "PALETTE", "DEFORMED SPRITE" };
@@ -3666,12 +3763,30 @@ bool GpuRender::Render(const Stream &stream)
     t            = svcGetSystemTick();
     sTileDirtyLo = sSprDirtyLo = ~0u;
     sTileDirtyHi = sSprDirtyHi = 0;
+#if MANIA_DEV_TOOLS
+    sConvTopCount = sConvTiles = sConvTilesSame = sConvSprites = sConvSpritesSame = sConvSpritePixels = sConvSpriteChanged = 0;
+    const u64 tConv = svcGetSystemTick();
+#endif
     for (unsigned i = 0; i < sPendingCount; ++i) {
         if (sPending[i].kind == 0)
             ConvertTile(sPending[i]);
         else
             ConvertSprite(sPending[i]);
     }
+#if MANIA_DEV_TOOLS
+    {
+        int n = snprintf(sConvReport, sizeof(sConvReport), "%.2f ms | tiles %u (%u unchanged) | sprites %u (%u with nothing to rewrite), %u px, %u written | groups changed bank 0:",
+                         (svcGetSystemTick() - tConv) * (1000.0f / SYSCLOCK_ARM11), sConvTiles, sConvTilesSame, sConvSprites, sConvSpritesSame, sConvSpritePixels, sConvSpriteChanged);
+        for (unsigned g = 0; g < 32 && n < (int)sizeof(sConvReport); ++g)
+            if (sGroupGen[0][g] == sGen)
+                n += snprintf(sConvReport + n, sizeof(sConvReport) - n, " %u-%u", g * 8, g * 8 + 7);
+        for (unsigned k = 0; k < sConvTopCount && n < (int)sizeof(sConvReport); ++k) {
+            const ConvEntry &e = sConvTop[k];
+            n += snprintf(sConvReport + n, sizeof(sConvReport) - n, " | sheet %u %ux%u bank %u%s groups %08lx written %lu", e.sheet, e.w, e.h, e.bank,
+                          e.fresh ? " whole" : "", (unsigned long)e.groups, (unsigned long)e.changed);
+        }
+    }
+#endif
     if (sTileDirtyHi > sTileDirtyLo) {
         GSPGPU_FlushDataCache((u8 *)sTileData + sTileDirtyLo, sTileDirtyHi - sTileDirtyLo);
         ++sStats.atlasFlushes;
