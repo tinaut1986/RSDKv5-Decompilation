@@ -984,6 +984,10 @@ static void HandleSession(int ctrl)
                 else
                     Reply(s, "550 no %s in this scene", name);
             }
+            else if (!strcmp(sub, "CONV")) {
+                // The last GPU frame's atlas conversions: which ones really changed colour
+                Reply(s, "200 %s", GpuRender::ConvReport());
+            }
             else if (!strcmp(sub, "REFUSED")) {
                 // The last command the GPU executor refused (SITE STATE's line is cut by the FTP line limit)
                 Reply(s, "200 %s | why %s | roto to software: runs %u quads %u, soft layers %u, roto texture %s, vram free %u KB", GpuRender::LastRefusal(), sLastWhy ? sLastWhy : "-", GpuRender::GetStats().rotoSoftRuns, GpuRender::GetStats().rotoSoftQuads, GpuRender::GetStats().softLayers, GpuRender::RotoTexWhy(), (unsigned)(vramSpaceFree() >> 10));
