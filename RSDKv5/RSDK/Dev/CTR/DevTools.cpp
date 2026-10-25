@@ -1055,9 +1055,12 @@ static void HandleSession(int ctrl)
                 // The frame's costs in one short line (ms; STATE's is cut by the FTP limit): logic, recording, flip
                 // (pcopy geometry, pframe citro3d frame), wait, and the GPU's own drawing time.
                 const GpuRender::Stats &g = GpuRender::GetStats();
-                Reply(s, "200 frame %.1f upd %.1f draw %.1f flip %.1f pcopy %.1f pframe %.1f wait %.1f | gpu draw %.1f submit %.1f | quads %u batches %u cmdbuf %u%% eye %u KB 3d %u KB (%u models in %u scenes) dropped %u",
+                unsigned bottomDraws;
+                float bottomMs;
+                BottomUi::DrawStats(&bottomDraws, &bottomMs);
+                Reply(s, "200 frame %.1f upd %.1f draw %.1f flip %.1f pcopy %.1f pframe %.1f wait %.1f bottom %.1f (redraws %u, %.0f ms) | gpu draw %.1f submit %.1f | quads %u batches %u cmdbuf %u%% eye %u KB 3d %u KB (%u models in %u scenes) dropped %u",
                       sLastFrameMs, sLastStageMs[DevTools::STAGE_UPDATE], sLastStageMs[DevTools::STAGE_DRAW], sLastStageMs[DevTools::STAGE_FLIP], sLastStageMs[DevTools::STAGE_PCOPY],
-                      sLastStageMs[DevTools::STAGE_PFRAME], sLastStageMs[DevTools::STAGE_WAIT], g.gpuDrawMs, g.gpuProcMs, g.quads, g.batches, g.cmdBufPct, g.cmdEyeKB, g.cmd3dKB, g.instances3d, g.scenes3d, g.eyesDropped);
+                      sLastStageMs[DevTools::STAGE_PFRAME], sLastStageMs[DevTools::STAGE_WAIT], sLastStageMs[DevTools::STAGE_BOTTOM], bottomDraws, bottomMs, g.gpuDrawMs, g.gpuProcMs, g.quads, g.batches, g.cmdBufPct, g.cmdEyeKB, g.cmd3dKB, g.instances3d, g.scenes3d, g.eyesDropped);
             }
             else if (!strcmp(sub, "C3D")) {
                 // pframe split, averages since the last C3D (ms a frame): FrameBegin's wait, each eye's commands, the
@@ -1225,7 +1228,7 @@ void DevTools::SetFtp(bool on)
 
 // ---------------------------------------------------------------- perf timing
 
-static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes", "pcopy", "pxfer", "pframe", "wait" };
+static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes", "pcopy", "pxfer", "pframe", "wait", "bottom" };
 static const char *kDir                              = "sdmc:/3ds/Sonic Mania 3DS/debug";
 
 static uint64 sStageTicks[DevTools::STAGE_COUNT];
@@ -1265,7 +1268,7 @@ void DevTools::OrderNote(char kind)
 
 DevTools::StageScope::StageScope(Stage s) : stage(s), start(svcGetSystemTick())
 {
-    static const char kinds[STAGE_COUNT] = { 0, 0, 0, 'L', 'S', 'R', 'F', '3', 'P', 0, 0, 0, 0 };
+    static const char kinds[STAGE_COUNT] = { 0, 0, 0, 'L', 'S', 'R', 'F', '3', 'P', 0, 0, 0, 0, 0 };
     if (kinds[s])
         OrderNote(kinds[s]);
 }
@@ -1972,8 +1975,10 @@ bool DevTools::FrameEnd()
     // bottom screen (CAPTURE again) never sees a tap.
     if (freeze)
         hidScanInput();
-    if (BottomUi::Ready())
+    if (BottomUi::Ready()) {
+        DEV_STAGE(STAGE_BOTTOM);
         BottomUi::Update();
+    }
     else
         PollTouch();
 
