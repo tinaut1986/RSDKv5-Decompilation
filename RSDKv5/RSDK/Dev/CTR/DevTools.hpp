@@ -114,6 +114,8 @@ void RunKeys(uint32 *held, uint32 *down);
 // again, carry on. CaptureNumber: the last capture's number (-1: none yet).
 void TapCapture();
 int CaptureNumber();
+// The DEBUG tab's STAGES list: scene `scene` of category `category` is loaded at the end of the frame (as SITE SCENE).
+void LoadScene(int category, int scene);
 extern bool freeze;       // skip the objects' update, keep drawing (SITE FREEZE): the same frame in both renderers
 extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy (part of the GPU mode)
 extern bool swGpuRender;   // execute recorded frames on the GPU (needs swRecord and swGpuPresent)
