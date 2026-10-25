@@ -1887,6 +1887,8 @@ void DevTools::HeapCheck(const char *where)
 
 bool DevTools::FrameEnd()
 {
+    // Whether this frame ran frozen, before CAPTURE (below) can change it: the input is read for the frame that was
+    const bool frozenFrame = freeze;
     HeapCheck("frame end");
     if (sShotRequest) {
         const int request = sShotRequest;
@@ -1980,8 +1982,10 @@ bool DevTools::FrameEnd()
     else if (!BottomUi::Ready() && ((sPhase == 3 && (sFrames & 15) == 0) || sMenuDirty))
         DrawStatus();
     // Frozen, the game's ProcessInput (the only hidScanInput) does not run: read the touch screen here, or the
-    // bottom screen (CAPTURE again) never sees a tap.
-    if (freeze)
+    // bottom screen (CAPTURE again) never sees a tap. By whether this frame was frozen: on the frame the second tap
+    // unfreezes, a test of `freeze` skipped the read and the bottom screen saw the same tap as new (CAPTURE again,
+    // frozen again, every tap).
+    if (frozenFrame)
         hidScanInput();
     if (BottomUi::Ready()) {
         DEV_STAGE(STAGE_BOTTOM);
