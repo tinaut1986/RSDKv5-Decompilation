@@ -1035,7 +1035,9 @@ static void DrawGameTab()
     static const u32 kEmerald[7] = { Rgb(60, 200, 90),  Rgb(240, 210, 60), Rgb(70, 120, 240), Rgb(170, 90, 220),
                                      Rgb(190, 195, 205), Rgb(80, 220, 230), Rgb(235, 70, 70) };
     for (int i = 0; i < 7; ++i) {
-        const float ex = 84 + i * 26, ey = y + 8; // the save select's icons are 24 px wide at twice their size
+        // Right-aligned with the boxes above (the label is longer in some languages); the save select's icons are 24 px
+        // wide at twice their size
+        const float ex = W - 8 - 12 - (6 - i) * 26, ey = y + 8;
         const bool got = gi.emeralds > 0 && (gi.emeralds & (1 << i));
         if (sEmeraldReady) { // the save select's: each one, or the empty slot, centred on its place
             const ArtFrame &a = sEmerald[got ? i : 7];
