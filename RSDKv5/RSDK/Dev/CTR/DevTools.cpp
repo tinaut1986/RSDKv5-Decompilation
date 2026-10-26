@@ -1,6 +1,7 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
+#include "RSDK/Dev/CTR/GameInfo.h"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 #include "RSDK/Graphics/CTR/GpuRender.hpp"
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
@@ -1370,6 +1371,7 @@ bool DevTools::swGpuPresent = true; // the renderer starts in GPU mode (SetGpuMo
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 bool DevTools::freeze         = false;
+bool DevTools::immortal       = false;
 bool DevTools::swForce3D      = false;
 bool DevTools::swFtp          = true;
 
@@ -2029,6 +2031,7 @@ bool DevTools::FrameEnd()
     // frozen again, every tap).
     if (frozenFrame)
         hidScanInput();
+    PortGame_Immortal(DevTools::immortal);
     if (BottomUi::Ready()) {
         DEV_STAGE(STAGE_BOTTOM);
         BottomUi::Update();

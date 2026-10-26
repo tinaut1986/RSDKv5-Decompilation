@@ -117,6 +117,7 @@ int CaptureNumber();
 // The DEBUG tab's STAGES list: scene `scene` of category `category` is loaded at the end of the frame (as SITE SCENE).
 void LoadScene(int category, int scene);
 extern bool freeze;       // skip the objects' update, keep drawing (SITE FREEZE): the same frame in both renderers
+extern bool immortal;     // the DEBUG tab's IMMORTAL: player 1 kept invincible (PortGame_Immortal); not saved
 extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy (part of the GPU mode)
 extern bool swGpuRender;   // execute recorded frames on the GPU (needs swRecord and swGpuPresent)
 extern bool swRecord;      // record draw calls per frame and execute them at the flip (GpuFrame)
