@@ -3174,6 +3174,25 @@ bool EmitStripRoto(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, 
     for (int y = y1; y < y2; ++y)
         if (first[y - y1].deform.y)
             return true;
+    // A layer found empty or too wide stays so until the scene changes: finding out hashes and walks its whole layout,
+    // ~28 ms a frame for Special Stage 4's floor (512x512 tiles) while the camera looks along an axis (every line's y
+    // step 0) at the start, until the first turn.
+    static struct {
+        const TileLayer *layer;
+        uint32 content;
+        const char *why;
+    } sNot[4];
+    static unsigned sNotNext;
+    for (auto &n : sNot)
+        if (n.layer == layer && n.content == contentVersion) {
+            sBigWhy = n.why;
+            return true;
+        }
+    auto refuse = [&](const char *why) {
+        sNot[sNotNext++ % 4] = { layer, contentVersion, why };
+        sBigWhy              = why;
+        return true;
+    };
     // The slot: the layer's, a free one, or one not drawn for a second
     Strip *st = NULL;
     for (Strip &t : sStrips)
@@ -3197,12 +3216,10 @@ bool EmitStripRoto(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, 
     }
     if (st->layer != layer || st->layoutHash != layoutHash) {
         int tx0, tx1;
-        sBigWhy = "empty";
         if (!LayoutColumns(layer, &tx0, &tx1))
-            return true;
-        sBigWhy = "too wide";
+            return refuse("empty");
         if ((tx1 - tx0 + 1) * TILE_SIZE > STRIP_W)
-            return true;
+            return refuse("too wide");
         if (!st->alloc) {
             sBigWhy = "no vram";
             if (vramSpaceFree() < STRIP_W * STRIP_H * 2 + VramReserve() || !C3D_TexInitVRAM(&st->tex, STRIP_W, STRIP_H, GPU_RGBA5551))
