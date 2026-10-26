@@ -181,6 +181,8 @@ struct RotoTex {
     unsigned hotCount;
     uint32 used[8]; // palette indices its pixels use (only those colours count as a change); all until usedOk
     bool usedOk;
+    uint32 tileUsed[TILE_COUNT / 32]; // base tiles the layer's map uses (a layer; a sheet has none)
+    uint32 tileGen;                   // bumped when one of those tiles changed (the tileset's epoch counts every tile)
     uint32 lastUsed; // sRotoFrame when last drawn
 };
 enum { ROTO_TEX_SLOTS = 3, ROTO_BANK_BUDGET = 1024 * 1024 };
@@ -2208,7 +2210,7 @@ uint32 RotoContentHash(const RotoTex &r, const RotoSrc &src, const uint16 *pal)
     memcpy(used, r.used, sizeof(used));
     for (unsigned k = 0; k < r.hotCount; ++k)
         used[r.hot[k] >> 5] &= ~(1u << (r.hot[k] & 31));
-    uint32 hash = 2166136261u ^ sTileEpoch * 16777619u;
+    uint32 hash = 2166136261u ^ (src.sheet ? sTileEpoch : r.tileGen) * 16777619u;
     for (unsigned i = 0; i < PALETTE_BANK_SIZE; ++i)
         if (used[i >> 5] & (1u << (i & 31)))
             hash = (hash ^ pal[i]) * 16777619u;
@@ -2314,6 +2316,23 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
             return true;
         r->key = key, r->w = w, r->h = h;
         memset(r->used, 0xFF, sizeof(r->used));
+    }
+
+    // Only the tiles the map uses count: Flying Battery animates tiles of other layers every other frame, and its
+    // 512x1024 layer was rebuilt (~26 ms) each time with the tileset's epoch.
+    if (src.layer && sTileChangedAny) {
+        memset(r->tileUsed, 0, sizeof(r->tileUsed));
+        const unsigned n = (1u << src.layer->widthShift) << src.layer->heightShift;
+        for (unsigned i = 0; i < n; ++i) {
+            const unsigned t = src.layer->layout[i];
+            if (t != 0xFFFF)
+                r->tileUsed[(t & (TILE_COUNT - 1)) >> 5] |= 1u << (t & 31);
+        }
+        for (unsigned w = 0; w < TILE_COUNT / 32; ++w)
+            if (r->tileUsed[w] & sTileChanged[w]) {
+                ++r->tileGen;
+                break;
+            }
     }
 
     // Each bank's copy: made, current (its colours, the layout, the tileset), or rebuilt once the change has held.
