@@ -156,13 +156,13 @@ static void Panel(float x, float y, float z, float w, float h, u32 edge, u32 fil
 }
 
 // MANIA's background: the diagonal stripes of the game's menus, a shade lighter than the navy.
-static void DrawBackdrop(float top)
+static void DrawBackdrop(float top, float width = 320)
 {
     if (!T().multi) // the MANIA themes
         return;
     const u32 c = Hex(Mix(0x0A1438, 0x2A6CF0, 0.14f));
     const float h = 240 - top;
-    for (float k = -h; k < 320; k += 44)
+    for (float k = -h; k < width; k += 44)
     { // one band at 45 degrees, two triangles
         C2D_DrawTriangle(k, 240, c, k + 20, 240, c, k + h, top, c, 0.05f);
         C2D_DrawTriangle(k + 20, 240, c, k + h + 20, top, c, k + h, top, c, 0.05f);
@@ -2488,6 +2488,11 @@ int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, co
         C2D_TextBufClear(sTextBuf);
         C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
         C2D_Prepare();
+        // As the loading box: the top screen's target has a depth buffer, and on the console (not in Azahar) its
+        // uncleared contents failed every pixel with the test on: the HOME menu's banner stayed on the top screen.
+        C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+        C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
         C2D_TargetClear(sTarget, T().bg);
         C2D_SceneBegin(sTarget);
@@ -2499,6 +2504,14 @@ int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, co
         Button(yesX, cy, btnW, 24, yes, pressed == 1, T().cellEdge, T().text, 0.9f);
         if (no)
             Button(noX, cy, btnW, 24, no, pressed == 0, T().cellEdge, T().text, 0.9f);
+        // The top screen in the same style: the boot's navy, the menus' stripes, the question's title
+        if (DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init())) {
+            C2D_SceneBegin((C3D_RenderTarget *)C3DPresent::Target());
+            C2D_DrawRectSolid(0, 0, 0.01f, 400, 240, Hex(kBootTop)); // not C2D_TargetClear: wrong colour on this RGB565 target
+            DrawBackdrop(0, 400);
+            Text(title, 200, 104, 0.8f, T().accent, C2D_AlignCenter, 0.5f);
+            Text("SONIC MANIA 3DS", 200, 240 - 22, 0.45f, T().footer, C2D_AlignCenter, 0.5f);
+        }
         C3D_FrameEnd(0);
     }
     return -1;

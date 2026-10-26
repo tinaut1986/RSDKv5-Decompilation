@@ -35,6 +35,10 @@ void Save();
 // off by default is allowed. OfferPlus asks once, at boot, when the data has the Plus content; ApplyPlus hands the
 // option to the engine (the DLC check) before the game starts, so a change counts from the next start.
 void OfferPlus();
+// A console sometimes starts the game in a smaller memory mode than the RSF asks for (#18): the bottom screen says to
+// power it off and on, and the game does not start (true: leave). Right after the bottom screen is up, before the
+// engine's memory is taken.
+bool LowMemoryStop();
 void ApplyPlus();
 bool PlusApplied();
 bool DataHasPlus();
