@@ -99,6 +99,7 @@ static volatile int sPendingCategory = -1, sPendingScene = -1;
 static char sOrderCur[400], sOrderLast[400];
 static volatile bool sGoto; // SITE GOTO: move the player at the end of the frame
 static volatile bool sUfoTime; // SITE SET ufotime 1: the Special Stage's countdown never runs out (not saved)
+static volatile bool sModelCheck; // SITE SET modelcheck 1: the 3D models' VRAM checked every 2 s (not saved)
 static s32 sMainPrio; // the main thread's priority (SITE C3D)
 static volatile bool sUfoNoFall; // SITE SET ufonofall 1: the Special Stage's holes are ground (not saved)
 
@@ -858,6 +859,8 @@ static void HandleSession(int ctrl)
                     GpuRender::floorFogPercent = v < 0 ? 0 : v > 100 ? 100 : v;
                 else if (!strncmp(path, "ufotime", 7))
                     sUfoTime = v != 0;
+                else if (!strncmp(path, "modelcheck", 10))
+                    sModelCheck = v != 0;
                 else if (!strncmp(path, "ufonofall", 9))
                     sUfoNoFall = v != 0;
                 else if (!strncmp(path, "depthtint", 9))
@@ -875,13 +878,15 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|ufonofall|floorwin|floorfog|floorfogavg|gpuskip|audioprio <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|modelcheck|ufonofall|floorwin|floorfog|floorfogavg|gpuskip|audioprio <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
-                // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range.
+                // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range. "MODELS N"
+                // starts at model N (the reply is cut at the FTP line limit).
                 char list[FTP_LINE_MAX - 8];
                 unsigned n = 0;
-                for (int m = 0; m < MODEL_COUNT && n + 64 < sizeof(list); ++m) {
+                const int from = path ? atoi(path) : 0;
+                for (int m = from < 0 ? 0 : from; m < MODEL_COUNT && n + 64 < sizeof(list); ++m) {
                     const Model &md = modelList[m];
                     if (!md.vertices || !md.vertCount)
                         continue;
@@ -997,6 +1002,24 @@ static void HandleSession(int ctrl)
                     fclose(f);
                 }
                 Reply(s, "200 %s", GpuRender::DepthSummary());
+            }
+            else if (!strcmp(sub, "MODELCHECK")) {
+                // The 3D models' VRAM against what was uploaded, in debug/models.txt
+                FILE *f = fopen("sdmc:/3ds/Sonic Mania 3DS/debug/models.txt", "w");
+                if (f) {
+                    GpuRender::CheckModels(f);
+                    fclose(f);
+                }
+                Reply(s, f ? "200 debug/models.txt" : "550 cannot write debug/models.txt");
+            }
+            else if (!strcmp(sub, "FLOOR")) {
+                // The Special Stage floor's last frame from its windows, a line each, in debug/floor.txt (GpuRender::DumpFloor)
+                FILE *f = fopen("sdmc:/3ds/Sonic Mania 3DS/debug/floor.txt", "w");
+                if (f) {
+                    GpuRender::DumpFloor(f);
+                    fclose(f);
+                }
+                Reply(s, f ? "200 debug/floor.txt" : "550 cannot write debug/floor.txt");
             }
             else if (!strcmp(sub, "ORDER")) {
                 Reply(s, "200 %s", sOrderLast);
@@ -2048,6 +2071,26 @@ bool DevTools::FrameEnd()
         WriteShot(request, path);
     }
     Capture();
+    if (sModelCheck) {
+        // SITE SET modelcheck 1: the models' VRAM against what was uploaded every 120 frames; the first damage goes to
+        // the log with the scene and frame, and the VRAM map to debug/models-damage.txt (once per boot).
+        static unsigned frames;
+        static bool reported;
+        if (!reported && ++frames % 120 == 0) {
+            const unsigned bad = GpuRender::ModelDamage();
+            if (bad) {
+                reported = true;
+                DevTools::Log("modelcheck: %u bytes of the 3D models' VRAM differ (scene %d/%d, frame %u): debug/models-damage.txt", bad,
+                              (int)sceneInfo.activeCategory, (int)sceneInfo.listPos, sTotGpu + sTotCpu);
+                char path[160];
+                snprintf(path, sizeof(path), "%s/models-damage.txt", kDir);
+                if (FILE *f = fopen(path, "w")) {
+                    GpuRender::CheckModels(f);
+                    fclose(f);
+                }
+            }
+        }
+    }
     if (sUfoTime) {
         // SITE SET ufotime 1: the Special Stage's countdown (UFO_Setup->rings, one a second, time over at 0) kept at
         // 50 or more, to test the floor at leisure.
