@@ -181,6 +181,8 @@ struct RotoTex {
     unsigned hotCount;
     uint32 used[8]; // palette indices its pixels use (only those colours count as a change); all until usedOk
     bool usedOk;
+    uint32 tileUsed[TILE_COUNT / 32]; // base tiles the layer's map uses (a layer; a sheet has none)
+    uint32 tileGen;                   // bumped when one of those tiles changed (the tileset's epoch counts every tile)
     uint32 lastUsed; // sRotoFrame when last drawn
 };
 enum { ROTO_TEX_SLOTS = 3, ROTO_BANK_BUDGET = 1024 * 1024 };
@@ -624,6 +626,17 @@ void EvictTiles()
     ++sStats.tileEvictions;
 }
 
+// A tile whose palette group changed after `stamp` still has its picture if none of the colours it uses did (Press Garden
+// cycles 232-239 each frame: groups are 8 colours, most tiles use only some of them).
+bool TileColorsChanged(unsigned bank, unsigned id, uint32 stamp)
+{
+    const uint8 *px = &tilesetPixels[TILE_DATASIZE * id];
+    for (unsigned i = 0; i < TILE_DATASIZE; ++i)
+        if (px[i] && sColorGen[bank][px[i]] > stamp)
+            return true;
+    return false;
+}
+
 // Atlas cell of a tile with the palette bank applied; queues its conversion when it is new or stale.
 int EnsureTile(unsigned id, unsigned bank)
 {
@@ -649,7 +662,7 @@ int EnsureTile(unsigned id, unsigned bank)
         return cell;
     // Unchanged colours: the copy is as good as one made now, so it takes this generation and the tile's other
     // uses this frame (the same water tile on many lines) stop at the test above.
-    if (stamp && !GroupsChanged(bank, sTileGroups[id], stamp)) {
+    if (stamp && (!GroupsChanged(bank, sTileGroups[id], stamp) || !TileColorsChanged(bank, id, stamp))) {
         sTileStamp[bank][id] = sGen;
         return cell;
     }
@@ -823,8 +836,11 @@ void ConvertSprite(const Pending &p)
     const GFXSurface &g  = gfxSurface[sheet];
     const u16 *tex       = sTexPal[p.bank]; // the bank as the frame used it (a virtual one: a snapshot)
     // The part of the cell the sheet covers; the rest stays transparent
+    // (DrawTile draws a tile as a sprite of sheet 0 at row 16 * (tile & 0xFFF): the flip bits put it past the sheet's
+    // height, in the flipped copies tilesetPixels keeps after the plain ones: Stardust Speedway's frames.)
+    const int gHeight = sheet == 0 ? g.height * 4 : g.height;
     const unsigned w = (int)(sprX + s.srcW) <= g.width ? s.srcW : g.width > (int)sprX ? g.width - sprX : 0;
-    const unsigned h = (int)(sprY + s.srcH) <= g.height ? s.srcH : g.height > (int)sprY ? g.height - sprY : 0;
+    const unsigned h = (int)(sprY + s.srcH) <= gHeight ? s.srcH : gHeight > (int)sprY ? gHeight - sprY : 0;
     static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
     static const uint8 mx[8] = { 0, 1, 4, 5, 16, 17, 20, 21 };
     unsigned written = 0;
@@ -2090,6 +2106,10 @@ bool EmitLayerBasic(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
             return false;
         line += n;
         layerY += n;
+        // The software wraps at the layer's last row: a screen that crosses the layer's bottom continues at its top (Press
+        // Garden's far background when the camera is high; the rows past the end drew nothing, the sky showed through).
+        if (layerY >= layer->ysize << 4)
+            layerY -= layer->ysize << 4;
     }
     return true;
 }
@@ -2208,7 +2228,7 @@ uint32 RotoContentHash(const RotoTex &r, const RotoSrc &src, const uint16 *pal)
     memcpy(used, r.used, sizeof(used));
     for (unsigned k = 0; k < r.hotCount; ++k)
         used[r.hot[k] >> 5] &= ~(1u << (r.hot[k] & 31));
-    uint32 hash = 2166136261u ^ sTileEpoch * 16777619u;
+    uint32 hash = 2166136261u ^ (src.sheet ? sTileEpoch : r.tileGen) * 16777619u;
     for (unsigned i = 0; i < PALETTE_BANK_SIZE; ++i)
         if (used[i >> 5] & (1u << (i & 31)))
             hash = (hash ^ pal[i]) * 16777619u;
@@ -2314,6 +2334,23 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
             return true;
         r->key = key, r->w = w, r->h = h;
         memset(r->used, 0xFF, sizeof(r->used));
+    }
+
+    // Only the tiles the map uses count: Flying Battery animates tiles of other layers every other frame, and its
+    // 512x1024 layer was rebuilt (~26 ms) each time with the tileset's epoch.
+    if (src.layer && sTileChangedAny) {
+        memset(r->tileUsed, 0, sizeof(r->tileUsed));
+        const unsigned n = (1u << src.layer->widthShift) << src.layer->heightShift;
+        for (unsigned i = 0; i < n; ++i) {
+            const unsigned t = src.layer->layout[i];
+            if (t != 0xFFFF)
+                r->tileUsed[(t & (TILE_COUNT - 1)) >> 5] |= 1u << (t & 31);
+        }
+        for (unsigned w = 0; w < TILE_COUNT / 32; ++w)
+            if (r->tileUsed[w] & sTileChanged[w]) {
+                ++r->tileGen;
+                break;
+            }
     }
 
     // Each bank's copy: made, current (its colours, the layout, the tileset), or rebuilt once the change has held.
