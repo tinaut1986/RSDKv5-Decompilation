@@ -2302,7 +2302,22 @@ static struct {
     char title[64], step[48], file[64];
     float lo, hi, progress;
     u64 start, lastDraw;
+    // The load's phases and their time (ms), the loading box's own drawing, the reads at the start (the load log)
+    char phases[320];
+    u64 phaseStart, drawTicks;
+    unsigned draws;
+    ReaderStats io0;
 } sLoad;
+
+// The phase that just ended into the load's log line
+static void LoadPhaseEnd()
+{
+    if (!sLoad.phaseStart)
+        return;
+    const size_t n = strlen(sLoad.phases);
+    snprintf(sLoad.phases + n, sizeof(sLoad.phases) - n, "%s%s %lu", n ? ", " : "", sLoad.step[0] ? sLoad.step : "START",
+             (unsigned long)((svcGetSystemTick() - sLoad.phaseStart) / (SYSCLOCK_ARM11 / 1000)));
+}
 
 // ---------------------------------------------------------------- the top screen while the game starts
 // One flat colour, MANIA's navy (the game's menus): the boot redraws only as its loaders report, too seldom for an
@@ -2314,8 +2329,11 @@ static void DrawLoading()
     if (!sReady)
         return;
     char line[64];
+    // Not waiting for the last frame (or citro3d's frame pacing): while the GPU is still busy this redraw is skipped
+    // (a wait each time was ~40 ms, 3 s of a zone's load)
+    if (!C3D_FrameBegin(C3D_FRAME_NONBLOCK))
+        return;
     C2D_TextBufClear(sTextBuf);
-    C3D_FrameBegin(0);
     C2D_Prepare();
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
@@ -2355,8 +2373,13 @@ static void DrawLoading()
 
 static void MaybeDrawLoading(bool now)
 {
-    if (sLoad.active && (now || svcGetSystemTick() - sLoad.lastDraw > SYSCLOCK_ARM11 / 20))
+    // Every 200 ms: a redraw takes ~24 ms on the New 3DS, every 50 ms it was a third of a zone's load
+    if (sLoad.active && (now || svcGetSystemTick() - sLoad.lastDraw > SYSCLOCK_ARM11 / 5)) {
+        const u64 t0 = svcGetSystemTick();
         DrawLoading();
+        sLoad.drawTicks += svcGetSystemTick() - t0;
+        ++sLoad.draws;
+    }
 }
 
 static void Upper(char *dst, unsigned cap, const char *src)
@@ -2376,6 +2399,11 @@ void BottomUi::LoadBegin(const char *title)
     sLoad.lo = sLoad.progress = 0;
     sLoad.hi                  = 1;
     sLoad.start               = svcGetSystemTick();
+    sLoad.phaseStart          = sLoad.start;
+    sLoad.phases[0]           = 0;
+    sLoad.drawTicks           = 0;
+    sLoad.draws               = 0;
+    sLoad.io0                 = readerStats;
     sLoad.active              = true;
     MaybeDrawLoading(true);
 }
@@ -2387,6 +2415,8 @@ void BottomUi::LoadPhase(const char *step, float lo, float hi)
 #endif
     if (!sLoad.active)
         return;
+    LoadPhaseEnd();
+    sLoad.phaseStart = svcGetSystemTick();
     Upper(sLoad.step, sizeof(sLoad.step), step);
     sLoad.file[0] = 0;
     sLoad.lo = sLoad.progress = lo;
@@ -2426,6 +2456,13 @@ void BottomUi::LoadEnd()
 #if MANIA_DEV_TOOLS
     if (sLoad.active) {
         DEV_LOG("load: %s in %lu ms", sLoad.title, (unsigned long)((svcGetSystemTick() - sLoad.start) / (SYSCLOCK_ARM11 / 1000)));
+        LoadPhaseEnd();
+        const ReaderStats &a = sLoad.io0, &b = readerStats;
+        const unsigned long ms = SYSCLOCK_ARM11 / 1000;
+        DEV_LOG("load phases (ms): %s | box %u draws %lu ms | whole files %lu (%lu KB) | reads %lu (%lu KB) %lu ms, seeks %lu %lu ms, decrypt %lu ms, inflate %lu ms",
+                sLoad.phases, sLoad.draws, (unsigned long)(sLoad.drawTicks / ms), b.wholeFiles - a.wholeFiles, b.wholeKB - a.wholeKB, b.reads - a.reads, (b.bytes - a.bytes) >> 10,
+                (unsigned long)((b.readTicks - a.readTicks) / ms), b.seeks - a.seeks, (unsigned long)((b.seekTicks - a.seekTicks) / ms),
+                (unsigned long)((b.decryptTicks - a.decryptTicks) / ms), (unsigned long)((b.inflateTicks - a.inflateTicks) / ms));
         // The engine's storage pools after the load: used / limit KB, entries, defragmentations and refused
         // allocations so far (a refused one leaves a layout empty: the scene drawn with tile 0).
         static const char *const kSet[DATASET_MAX] = { "STG", "MUS", "SFX", "STR", "TMP" };
