@@ -26,7 +26,9 @@ void __system_allocateHeaps(void)
     svcGetResourceLimitCurrentValues(&curCommit, limit, &type, 1);
     svcCloseHandle(limit);
     const u32 remaining = (u32)(maxCommit - curCommit) & ~pageMask;
-    if (remaining <= linearMin + (24 << 20))
+    // A console in a smaller memory mode than the RSF's still gets heaps (small ones): the boot says so
+    // (Port::LowMemoryStop) instead of a panic here, before anything can be shown.
+    if (remaining <= linearMin + (4 << 20))
         svcBreak(USERBREAK_PANIC);
 
     u32 heap = remaining - linearMin;
@@ -37,7 +39,7 @@ void __system_allocateHeaps(void)
         __ctru_heap = 0;
         if (R_SUCCEEDED(svcControlMemory(&__ctru_heap, OS_HEAP_AREA_BEGIN, 0, heap, MEMOP_ALLOC, (MemPerm)(MEMPERM_READ | MEMPERM_WRITE))))
             break;
-        if (heap < (24 << 20) + step)
+        if (heap < (4 << 20) + step)
             svcBreak(USERBREAK_PANIC);
         heap -= step;
     }
