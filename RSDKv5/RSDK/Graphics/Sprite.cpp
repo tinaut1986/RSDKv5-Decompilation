@@ -183,8 +183,166 @@ uint8 TraceGifPrefix(uint32 *prefix, int32 code, int32 clearCode)
 
     return code;
 }
+#if RETRO_PLATFORM == RETRO_3DS
+bool gifCheck; // SITE SET gifcheck 1: every sheet decoded both ways and compared (the log says where they differ)
+
+// The engine's decoder (ReadGifLine and below, after giflib) walks every new code's whole prefix chain twice to find
+// its first character (TraceGifPrefix) and goes through a call and the decoder struct for every byte and code: ~2.7 MB/s,
+// 2 s of a zone's load. The same algorithm, rules and table updates, with the state in locals and each code's first
+// character kept in a table, reading the sub-blocks straight from the file in memory (OpenDataFile reads a pack's
+// file whole and decrypted). Only for what the engine's decoder does without quirks: a file in memory and plain, not
+// interlaced, a clear code before any table code, exactly width x height pixels before the end code. Anything else:
+// false, nothing read from `image`, and the engine's decoder does it.
+static bool DecodeGifFast(ImageGIF *image, int32 width, int32 height, bool32 interlaced, uint8 *pixels)
+{
+    FileInfo &fi = image->info;
+    if (!fi.usingFileBuffer || fi.encrypted || interlaced || width <= 0 || height <= 0)
+        return false;
+    const uint8 *p = fi.fileBuffer, *end = (const uint8 *)fi.file + fi.fileSize;
+    if (p >= end)
+        return false;
+    const int32 depth = *p++;
+    if (depth < 2 || depth > 8)
+        return false;
+    static uint16 prefix[LZ_MAX_CODE + 1], length[LZ_MAX_CODE + 1]; // length: the code's string, to write it in place
+    static uint8 suffix[LZ_MAX_CODE + 1], first[LZ_MAX_CODE + 1], stack[LZ_MAX_CODE + 2];
+    const int32 clearCode = 1 << depth, eofCode = clearCode + 1;
+    int32 runningCode = eofCode + 1, runningBits = depth + 1, maxCodePlusOne = 1 << runningBits;
+    int32 prevCode = -1; // NO_SUCH_CODE
+    bool cleared   = false;
+    uint32 shiftData = 0;
+    int32 shiftState = 0, blockLeft = 0;
+    const uint32 total = (uint32)width * (uint32)height;
+    uint32 o = 0;
+    while (o < total) {
+        while (shiftState < runningBits) {
+            if (!blockLeft) {
+                if (p >= end || !(blockLeft = *p++))
+                    return false; // the data ends before the pixels do
+            }
+            if (p >= end)
+                return false;
+            shiftData |= (uint32)*p++ << shiftState;
+            shiftState += 8;
+            --blockLeft;
+        }
+        const int32 code = (int32)(shiftData & (uint32)codeMasks[runningBits]);
+        shiftData >>= runningBits;
+        shiftState -= runningBits;
+        if (++runningCode > maxCodePlusOne && runningBits < LZ_BITS) {
+            maxCodePlusOne <<= 1;
+            runningBits++;
+        }
+        if (code == eofCode)
+            return false;
+        if (code == clearCode) {
+            memset(prefix, 0xFF, sizeof(prefix));
+            runningCode    = eofCode + 1;
+            runningBits    = depth + 1;
+            maxCodePlusOne = 1 << runningBits;
+            prevCode       = -1;
+            cleared        = true;
+            continue;
+        }
+        if (code < clearCode)
+            pixels[o++] = (uint8)code;
+        else {
+            if (!cleared)
+                return false;
+            int32 c = code;
+            uint32 n;      // the string's length
+            int32 tail = -1; // KwKwK: its last character, the first of prevCode's string
+            if (prefix[code] == 0xFFFF) { // not in the table yet: only the code being defined now (KwKwK)
+                if (code != runningCode - 2 || prevCode < 0)
+                    return false;
+                c                       = prevCode;
+                tail                    = prevCode < clearCode ? prevCode : first[prevCode];
+                suffix[runningCode - 2] = (uint8)tail;
+                n                       = (prevCode < clearCode ? 1u : length[prevCode]) + 1;
+            }
+            else
+                n = length[code];
+            if (o + n <= total) {
+                // Written in place from its end: suffixes along the prefix chain, then the root
+                uint8 *at = pixels + o + n - 1;
+                if (tail >= 0)
+                    *at-- = (uint8)tail;
+                while (c > clearCode) {
+                    *at-- = suffix[c];
+                    c     = prefix[c];
+                }
+                *at = (uint8)c;
+                o += n;
+            }
+            else {
+                // The image's last string, cut at its end
+                int32 sp = 0;
+                if (tail >= 0)
+                    stack[sp++] = (uint8)tail;
+                while (c > clearCode) {
+                    if (sp > LZ_MAX_CODE)
+                        return false;
+                    stack[sp++] = suffix[c];
+                    c           = prefix[c];
+                }
+                stack[sp++] = (uint8)c;
+                while (sp && o < total)
+                    pixels[o++] = stack[--sp];
+            }
+        }
+        if (prevCode >= 0) {
+            if (runningCode < 2 || runningCode > FIRST_CODE)
+                return false;
+            const int32 idx = runningCode - 2;
+            if (idx > LZ_MAX_CODE)
+                return false;
+            const int32 from = code == idx ? prevCode : code; // TraceGifPrefix's code
+            const uint8 root = prevCode < clearCode ? (uint8)prevCode : first[prevCode];
+            prefix[idx]      = (uint16)prevCode;
+            first[idx]       = root;
+            length[idx]      = (uint16)((prevCode < clearCode ? 1 : length[prevCode]) + 1);
+            suffix[idx]      = from < clearCode ? (uint8)from : first[from];
+        }
+        prevCode = code;
+    }
+    return true;
+}
+#endif
+
 void ReadGifPictureData(ImageGIF *image, int32 width, int32 height, bool32 interlaced, uint8 *pixels)
 {
+#if RETRO_PLATFORM == RETRO_3DS
+    TicksTo timedDecode(readerStats.gifDecodeTicks);
+    if (DecodeGifFast(image, width, height, interlaced, pixels)) {
+        ++readerStats.gifFast;
+        if (!gifCheck)
+            return;
+        // The engine's decoder too, into a copy: the same pixels or the log says where not
+        const uint32 n = (uint32)width * (uint32)height;
+        uint8 *fast    = (uint8 *)malloc(n);
+        if (!fast)
+            return;
+        memcpy(fast, pixels, n);
+        image->decoder->pixelCount = 0;
+        int32 initialRows[] = { 0, 4, 2, 1 };
+        (void)initialRows;
+        InitGifDecoder(image);
+        for (int32 h = 0; h < height; ++h)
+            ReadGifLine(image, pixels, width, h * width);
+        for (uint32 i = 0; i < n; ++i)
+            if (fast[i] != pixels[i]) {
+                ++readerStats.gifMismatch;
+                PrintLog(PRINT_NORMAL, "gifcheck: %dx%d differs at pixel %u (fast %u, engine %u)", width, height, i, fast[i], pixels[i]);
+#if MANIA_DEV_TOOLS
+                DevTools::Log("gifcheck: %dx%d sheet differs at pixel %u (fast %u, engine %u)", width, height, (unsigned)i, fast[i], pixels[i]);
+#endif
+                break;
+            }
+        free(fast);
+        return;
+    }
+    ++readerStats.gifSlow;
+#endif
     int32 initialRows[] = { 0, 4, 2, 1 };
     int32 rowInc[]      = { 8, 8, 4, 2 };
 

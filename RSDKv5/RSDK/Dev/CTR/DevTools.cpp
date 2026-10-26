@@ -99,6 +99,7 @@ static volatile int sPendingCategory = -1, sPendingScene = -1;
 static char sOrderCur[400], sOrderLast[400];
 static volatile bool sGoto; // SITE GOTO: move the player at the end of the frame
 static volatile bool sUfoTime; // SITE SET ufotime 1: the Special Stage's countdown never runs out (not saved)
+extern bool gifCheck; // Sprite.cpp: SITE SET gifcheck 1 (not saved)
 static volatile bool sModelCheck; // SITE SET modelcheck 1: the 3D models' VRAM checked every 2 s (not saved)
 static s32 sMainPrio; // the main thread's priority (SITE C3D)
 static volatile bool sUfoNoFall; // SITE SET ufonofall 1: the Special Stage's holes are ground (not saved)
@@ -861,6 +862,8 @@ static void HandleSession(int ctrl)
                     sUfoTime = v != 0;
                 else if (!strncmp(path, "modelcheck", 10))
                     sModelCheck = v != 0;
+                else if (!strncmp(path, "gifcheck", 8))
+                    gifCheck = v != 0;
                 else if (!strncmp(path, "ufonofall", 9))
                     sUfoNoFall = v != 0;
                 else if (!strncmp(path, "depthtint", 9))
@@ -878,7 +881,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|modelcheck|ufonofall|floorwin|floorfog|floorfogavg|gpuskip|audioprio <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|modelcheck|gifcheck|ufonofall|floorwin|floorfog|floorfogavg|gpuskip|audioprio <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range. "MODELS N"
