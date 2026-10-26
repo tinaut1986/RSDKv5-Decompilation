@@ -2377,7 +2377,10 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
             // tiles every frame: as tile runs it took ~10 ms and 4500 quads); a big one waits for the change to hold.
             if (rb.seenFrames < 2 && w * h > 256 * 256)
                 return true;
-            if (!BuildRotoTex(rb.tex, w, h, src, sTexPal[sBankMap[b]]))
+            const u64 tBuild = svcGetSystemTick();
+            const bool built = BuildRotoTex(rb.tex, w, h, src, sTexPal[sBankMap[b]]);
+            sStats.rotoBuildUs += (unsigned)((svcGetSystemTick() - tBuild) / (SYSCLOCK_ARM11 / 1000000));
+            if (!built)
                 return true;
             memcpy(rb.builtPal, pal, sizeof(rb.builtPal));
             if (!r->usedOk && src.sheet) {
@@ -2683,6 +2686,7 @@ bool FloorWriteColumn(FloorLevel &l, const TileLayer *layer, int ox, int oy, uns
         FloorCell(l, layer, col, bpc, 0, sy * bpc, cx, cy);
     }
     FloorCopy(col, (u8 *)l.tex.data + sx * bpc * 128, colBytes, bpc * 128, (blocksW - bpc) * 128, async);
+    ++sStats.floorWrites;
     return true;
 }
 
@@ -2704,11 +2708,21 @@ bool FloorWriteRow(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsign
         FloorCell(l, layer, col, blocksW, sx * bpc, 0, cx, cy);
     }
     FloorCopy(col, (u8 *)l.tex.data + sy * bpc * blocksW * 128, colBytes, 0, 0, async);
+    ++sStats.floorWrites;
     return true;
 }
 
 // Places a level's window at origin (wantX, wantY) cells: the cells entering it, or all of it.
+bool FloorMoveCells(FloorLevel &l, const TileLayer *layer, int wantX, int wantY, bool all);
 bool FloorMove(FloorLevel &l, const TileLayer *layer, int wantX, int wantY, bool all)
+{
+    const u64 t0 = svcGetSystemTick();
+    const bool ok = FloorMoveCells(l, layer, wantX, wantY, all);
+    sStats.floorMoveUs += (unsigned)((svcGetSystemTick() - t0) / (SYSCLOCK_ARM11 / 1000000));
+    return ok;
+}
+
+bool FloorMoveCells(FloorLevel &l, const TileLayer *layer, int wantX, int wantY, bool all)
 {
     const int cells = (int)l.Cells();
     const int dxC = wantX - l.ox, dyC = wantY - l.oy;
@@ -3174,6 +3188,25 @@ bool EmitStripRoto(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, 
     for (int y = y1; y < y2; ++y)
         if (first[y - y1].deform.y)
             return true;
+    // A layer found empty or too wide stays so until the scene changes: finding out hashes and walks its whole layout,
+    // ~28 ms a frame for Special Stage 4's floor (512x512 tiles) while the camera looks along an axis (every line's y
+    // step 0) at the start, until the first turn.
+    static struct {
+        const TileLayer *layer;
+        uint32 content;
+        const char *why;
+    } sNot[4];
+    static unsigned sNotNext;
+    for (auto &n : sNot)
+        if (n.layer == layer && n.content == contentVersion) {
+            sBigWhy = n.why;
+            return true;
+        }
+    auto refuse = [&](const char *why) {
+        sNot[sNotNext++ % 4] = { layer, contentVersion, why };
+        sBigWhy              = why;
+        return true;
+    };
     // The slot: the layer's, a free one, or one not drawn for a second
     Strip *st = NULL;
     for (Strip &t : sStrips)
@@ -3197,12 +3230,10 @@ bool EmitStripRoto(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, 
     }
     if (st->layer != layer || st->layoutHash != layoutHash) {
         int tx0, tx1;
-        sBigWhy = "empty";
         if (!LayoutColumns(layer, &tx0, &tx1))
-            return true;
-        sBigWhy = "too wide";
+            return refuse("empty");
         if ((tx1 - tx0 + 1) * TILE_SIZE > STRIP_W)
-            return true;
+            return refuse("too wide");
         if (!st->alloc) {
             sBigWhy = "no vram";
             if (vramSpaceFree() < STRIP_W * STRIP_H * 2 + VramReserve() || !C3D_TexInitVRAM(&st->tex, STRIP_W, STRIP_H, GPU_RGBA5551))
@@ -3373,23 +3404,35 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     // c.clip[1] is where the recorded scanlines start (the software reads scanlines[clipBound_Y1]).
     const ScanlineInfo *first = sl + (y1 - c.clip[1]);
     const float feet          = RotoFeet(first, y1, y2);
+    auto us = [](u64 t0) { return (unsigned)((svcGetSystemTick() - t0) / (SYSCLOCK_ARM11 / 1000000)); };
     {
         bool handled;
         const RotoSrc src = { layer, NULL };
-        if (!EmitRotoTex(src, (unsigned)TILE_SIZE << layer->widthShift, (unsigned)TILE_SIZE << layer->heightShift, first, x1, x2, y1, y2, feet, &handled))
+        const u64 t0 = svcGetSystemTick();
+        const bool ok = EmitRotoTex(src, (unsigned)TILE_SIZE << layer->widthShift, (unsigned)TILE_SIZE << layer->heightShift, first, x1, x2, y1, y2, feet, &handled);
+        sStats.rotoTexUs += us(t0);
+        if (!ok)
             return false;
         if (handled)
             return true;
     }
     {
         bool handled;
-        if (!EmitStripRoto(layer, first, x1, x2, y1, y2, feet, &handled))
+        const u64 t0 = svcGetSystemTick();
+        const bool ok = EmitStripRoto(layer, first, x1, x2, y1, y2, feet, &handled);
+        sStats.rotoStripUs += us(t0);
+        if (!ok)
             return false;
         if (handled)
             return true;
     }
-    if (!EmitFloorWindow(layer, first, x1, x2, y1, y2, feet))
-        return false;
+    {
+        const u64 t0 = svcGetSystemTick();
+        const bool ok = EmitFloorWindow(layer, first, x1, x2, y1, y2, feet);
+        sStats.rotoFloorUs += us(t0);
+        if (!ok)
+            return false;
+    }
 
     // Estimate the runs: tile crossings along x and y per line, plus one.
     unsigned estimate = 0;
@@ -4071,6 +4114,8 @@ bool GpuRender::Render(const Stream &stream)
     sStats.softLayers = 0;
     sStats.faces      = 0;
     sStats.rotoUs = sStats.rotoQuads = 0;
+    sStats.rotoBuildUs = sStats.floorMoveUs = sStats.floorWrites = 0;
+    sStats.rotoTexUs = sStats.rotoStripUs = sStats.rotoFloorUs = 0;
     ok            = true;
     memset(sLineBuf, 0, sizeof(sLineBuf));
     for (unsigned b = 0; b < REAL_BANKS; ++b)

@@ -42,6 +42,9 @@ struct Stats {
     unsigned rotoSoftRuns, rotoSoftQuads; // rotozoom layers sent to the software: too many runs / quads (total)
     unsigned rotoUs, rotoQuads; // rotozoom layers as tile runs: build time (us) and quads (last frame)
     unsigned rotoTexBuilds; // rotozoom layers drawn into their own texture (RotoTex), times built (total)
+    unsigned rotoBuildUs;   // last frame: time building rotozoom textures (us)
+    unsigned floorMoveUs, floorWrites; // last frame: time moving the floor windows (us), columns and rows written
+    unsigned rotoTexUs, rotoStripUs, rotoFloorUs; // last frame: rotozoom layers' time in each way tried (us)
     float gpuDrawMs, gpuProcMs; // citro3d: the last GPU frame's drawing time and its submit time (ms)
     // The last frame's citro3d part on the CPU (ms): FrameBegin's wait for the previous GPU frame, each eye's
     // commands (the FPS overlay apart), the overlay, FrameEnd.
