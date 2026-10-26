@@ -931,7 +931,10 @@ uint16 RSDK::LoadSpriteSheet(const char *filename, uint8 scope)
     if (id >= SURFACE_COUNT)
         return -1;
 
-
+#if RETRO_PLATFORM == RETRO_3DS
+    TicksTo timed(readerStats.gifTicks);
+    ++readerStats.gifs;
+#endif
     GFXSurface *surface = &gfxSurface[id];
     ImageGIF image;
 
@@ -966,6 +969,9 @@ uint16 RSDK::LoadSpriteSheet(const char *filename, uint8 scope)
 #endif
         image.pixels = surface->pixels;
         image.Load(NULL, false);
+#if RETRO_PLATFORM == RETRO_3DS
+        readerStats.gifKB += (unsigned long)((surface->width * surface->height) >> 10);
+#endif
 
 #if RETRO_USE_ORIGINAL_CODE
         image.palette = NULL;

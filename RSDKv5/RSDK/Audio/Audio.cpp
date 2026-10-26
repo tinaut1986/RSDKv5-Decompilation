@@ -355,6 +355,10 @@ int32 RSDK::PlayStream(const char *filename, uint32 slot, uint32 startPos, uint3
 
 void RSDK::LoadSfxToSlot(char *filename, uint8 slot, uint8 plays, uint8 scope)
 {
+#if RETRO_PLATFORM == RETRO_3DS
+    TicksTo timed(readerStats.sfxTicks);
+    ++readerStats.sfxs;
+#endif
     FileInfo info;
     InitFileInfo(&info);
 

@@ -2463,6 +2463,11 @@ void BottomUi::LoadEnd()
                 sLoad.phases, sLoad.draws, (unsigned long)(sLoad.drawTicks / ms), b.wholeFiles - a.wholeFiles, b.wholeKB - a.wholeKB, b.reads - a.reads, (b.bytes - a.bytes) >> 10,
                 (unsigned long)((b.readTicks - a.readTicks) / ms), b.seeks - a.seeks, (unsigned long)((b.seekTicks - a.seekTicks) / ms),
                 (unsigned long)((b.decryptTicks - a.decryptTicks) / ms), (unsigned long)((b.inflateTicks - a.inflateTicks) / ms));
+        DEV_LOG("load inside (ms): gif %lu sheets (%lu KB, fast %lu, engine %lu, differing %lu) %lu (decoding %lu), animations %lu %lu, sfx %lu %lu, stage loads %lu (gif, anim, sfx in them), creates %lu",
+                b.gifs - a.gifs, b.gifKB - a.gifKB, b.gifFast - a.gifFast, b.gifSlow - a.gifSlow, b.gifMismatch - a.gifMismatch,
+                (unsigned long)((b.gifTicks - a.gifTicks) / ms), (unsigned long)((b.gifDecodeTicks - a.gifDecodeTicks) / ms), b.anims - a.anims,
+                (unsigned long)((b.animTicks - a.animTicks) / ms), b.sfxs - a.sfxs, (unsigned long)((b.sfxTicks - a.sfxTicks) / ms),
+                (unsigned long)((b.stageLoadTicks - a.stageLoadTicks) / ms), (unsigned long)((b.createTicks - a.createTicks) / ms));
         // The engine's storage pools after the load: used / limit KB, entries, defragmentations and refused
         // allocations so far (a refused one leaves a layout empty: the scene drawn with tile 0).
         static const char *const kSet[DATASET_MAX] = { "STG", "MUS", "SFX", "STR", "TMP" };

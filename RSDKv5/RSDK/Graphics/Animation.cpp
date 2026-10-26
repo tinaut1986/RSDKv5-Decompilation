@@ -24,6 +24,10 @@ uint16 RSDK::LoadSpriteAnimation(const char *filePath, uint8 scope)
             return i;
     }
 
+#if RETRO_PLATFORM == RETRO_3DS
+    TicksTo timed(readerStats.animTicks);
+    ++readerStats.anims;
+#endif
     uint16 id = -1;
     for (id = 0; id < SPRFILE_COUNT; ++id) {
         if (spriteAnimationList[id].scope == SCOPE_NONE)
