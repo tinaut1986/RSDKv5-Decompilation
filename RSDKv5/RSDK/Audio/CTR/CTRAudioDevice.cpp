@@ -222,26 +222,18 @@ inline s16 floatToS16(float f) {
   return (s16) fOut;
 }
 
-bool32 AudioDevice::Init()
+Result ctrNdspRc;   // ndspInit's answer: it fails without sdmc:/3ds/dspfirm.cdc (Port::EnsureDspFirmware)
+
+static bool sMixerUp;   // the audio thread and the ndsp channel run (they need ndspInit to have worked)
+
+// The part of the audio that talks to ndsp: the channel, the audio thread that fills its wave bufs, the callback.
+static void StartMixer()
 {
-  // taken from 3DS audio example
-  ndspInit();
   ndspChnReset(0);
   ndspSetOutputMode(NDSP_OUTPUT_STEREO);
   ndspChnSetInterp(0, NDSP_INTERP_POLYPHASE);
   ndspChnSetRate(0, SAMPLE_RATE);
   ndspChnSetFormat(0, TARGET_OUT_FORMAT);
-
-  AudioDeviceBase::InitAudioChannels();
-
-  
-  // allocate space for audio buffer
-  const size_t bufferSize = WAVEBUF_SIZE * WAVEBUF_COUNT;
-  audioBuffer = (int16*) linearAlloc(bufferSize);
-  if (!audioBuffer) {
-    PrintLog(PRINT_NORMAL, "ERROR: failed to allocate audio buffer\n");
-    return false;
-  }
 
   // set up ndsp wavebufs
   memset(&wbuf, 0, sizeof(wbuf));
@@ -255,12 +247,10 @@ bool32 AudioDevice::Init()
 
   // create audio thread
   // (run on same core as main thread, at a higher priority: it preempts the game)
-  s32 prio = GetThreadPriority();
   threadRunning = true;
   audioThreadHandle = threadCreate(AudioThread, 0,
-                                          THREAD_STACK_SZ, prio,
+                                          THREAD_STACK_SZ, GetThreadPriority(),
                                           0, false);
-  CtrMusicStart(prio);
   if (!audioThreadHandle) {
     PrintLog(PRINT_NORMAL, "ERROR: failed to init audio thread\n");
   }
@@ -270,27 +260,63 @@ bool32 AudioDevice::Init()
   
   // set audio callback (simply triggers audioThreadRequest event)
   ndspSetCallback(AudioCallback, NULL);
+  sMixerUp = true;
+}
+
+bool32 AudioDevice::Init()
+{
+  // taken from 3DS audio example
+  ctrNdspRc = ndspInit();
+
+  AudioDeviceBase::InitAudioChannels();
+
   
+  // allocate space for audio buffer
+  const size_t bufferSize = WAVEBUF_SIZE * WAVEBUF_COUNT;
+  audioBuffer = (int16*) linearAlloc(bufferSize);
+  if (!audioBuffer) {
+    PrintLog(PRINT_NORMAL, "ERROR: failed to allocate audio buffer\n");
+    return false;
+  }
+
+  CtrMusicStart(GetThreadPriority());
+  // Without the DSP firmware ndspInit fails and the mixer must stay off: it would drive an ndsp that is not up.
+  if (R_SUCCEEDED(ctrNdspRc))
+    StartMixer();
+  return true;
+}
+
+bool AudioDevice::RetryDsp()
+{
+  if (sMixerUp)
+    return true;
+  ctrNdspRc = ndspInit();
+  if (R_FAILED(ctrNdspRc))
+    return false;
+  StartMixer();   // the buffer and the music thread of Init are still there
   return true;
 }
 
 void AudioDevice::Release()
 {
   CtrMusicStop();
-  // close thread
-  threadRunning = false;
-  svcSignalEvent(audioThreadRequest);
+  if (sMixerUp) {
+    // close thread
+    threadRunning = false;
+    svcSignalEvent(audioThreadRequest);
 
-  threadJoin(audioThreadHandle, UINT64_MAX);
-  threadFree(audioThreadHandle);
+    threadJoin(audioThreadHandle, UINT64_MAX);
+    threadFree(audioThreadHandle);
 
-  // close event handle 
-  svcCloseHandle(audioThreadRequest);
+    // close event handle 
+    svcCloseHandle(audioThreadRequest);
 
-  // ... then de-init audio stuff 
-  ndspChnReset(0);
+    // ... then de-init audio stuff 
+    ndspChnReset(0);
+    ndspExit();
+    sMixerUp = false;
+  }
   linearFree(audioBuffer);
-  ndspExit();
 
   AudioDeviceBase::Release();
 }

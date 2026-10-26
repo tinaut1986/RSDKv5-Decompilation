@@ -35,6 +35,10 @@ goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`). Without
 (`Dev/CTR/Upstream.cpp`; the answer is kept in `save-import.txt`). In the emulator the question is answered from a file:
 `debug/ask.txt` with `s` / `t` (bottom / top screen to `debug/shot-bottom.raw` / `shot-top.raw`), `1` or `0` (`DevTools::AskFromFile`).
 
+The sound needs the console's DSP firmware (`sdmc:/3ds/dspfirm.cdc`), which is Nintendo's: never ship it. When `ndspInit` fails
+at boot the game offers to extract it from the console's own Home Menu (`Port::EnsureDspFirmware` in `Dev/CTR/Upstream.cpp`,
+`Dev/CTR/DspFirm.c`, copied from `../sm-3ds`; host test `tools/dsp-firm-test/run.sh`). To test: rename the file on the SD.
+
 ## Build
 
 ```sh

@@ -115,6 +115,7 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
             ReleaseStorage();
             return 0;
         }
+        Port::EnsureDspFirmware(); // the sound needs the console's DSP firmware (Upstream.hpp)
         Port::OfferSaveImport(); // before the game reads its saves (Upstream.hpp)
         Port::OfferPlus();       // once, when the data has the Plus content
         Port::ApplyPlus();       // OPTIONS > PLUS (off by default), before the game starts

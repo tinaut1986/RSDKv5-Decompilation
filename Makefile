@@ -157,6 +157,7 @@ RSDK_SOURCES += \
 	RSDKv5/RSDK/Dev/CTR/Port 			\
 	RSDKv5/RSDK/Dev/CTR/PortText 		\
 	RSDKv5/RSDK/Dev/CTR/Upstream 		\
+	RSDKv5/RSDK/Dev/CTR/DspFirm 		\
 	RSDKv5/RSDK/Dev/CTR/Updater 			\
 	RSDKv5/RSDK/Dev/CTR/UpdateManifest 		\
 	RSDKv5/RSDK/Graphics/CTR/C3DPresent 		\

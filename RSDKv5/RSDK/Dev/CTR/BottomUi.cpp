@@ -1292,6 +1292,21 @@ static void Button(float x, float y, float w, float h, const char *label, bool p
     Text(Tr(label), x + w / 2, y + h / 2 - 7, 0.5f, textCol, C2D_AlignCenter, z + 0.02f);
 }
 
+// The pad's key a button answers to, in a round badge (radius 7) at the button's left: a disc in runs
+// (C2D_DrawCircleSolid drew nothing here) with the letter cut out in the background colour.
+static void KeyBadge(float x, float y, float h, char key, float z)
+{
+    const float cx = x + 14, cy = y + h / 2;
+    for (int dy = -7; dy <= 7; ++dy) {
+        int dx = 0;
+        while ((dx + 1) * (dx + 1) + dy * dy <= 7 * 7 + 7)
+            ++dx;
+        C2D_DrawRectSolid(cx - dx, cy + dy, z, 2 * dx + 1, 1, T().text);
+    }
+    const char k[2] = { key, 0 };
+    Text(k, cx, cy - 7, 0.45f, T().bg, C2D_AlignCenter, z + 0.02f);
+}
+
 static bool Inside(int px, int py, float x, float y, float w, float h) { return px >= x && px < x + w && py >= y && py < y + h; }
 
 // The notes, paged, in the box (x, y, w) and its PREV / CLOSE / NEXT row at `by` (hit ids prev, prev + 1, prev + 2).
@@ -2525,8 +2540,11 @@ int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, co
             ly += rows * th + 8 > 34 ? rows * th + 8 : 34;
         }
         Button(yesX, cy, btnW, 24, yes, pressed == 1, T().cellEdge, T().text, 0.9f);
-        if (no)
+        KeyBadge(yesX, cy, 24, 'A', 0.95f);
+        if (no) {
             Button(noX, cy, btnW, 24, no, pressed == 0, T().cellEdge, T().text, 0.9f);
+            KeyBadge(noX, cy, 24, 'B', 0.95f);
+        }
         // The top screen in the same style: the boot's navy, the menus' stripes, the question's title
         if (DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init())) {
             C2D_SceneBegin((C3D_RenderTarget *)C3DPresent::Target());
