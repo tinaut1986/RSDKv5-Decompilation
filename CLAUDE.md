@@ -135,6 +135,11 @@ name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/lu
 - After the game freezes the console needs a manual power cycle; the first install of a build that cannot be
   installed over FTP (a bug in the installer) is manual: upload to `/cias/` and install with FBI.
 - `DEV_TOOLS=0 ./build_3ds.sh` builds without the dev tools (production).
+- **Production builds** have no FTP unless `dev-ftp.txt` (any content) is in `sdmc:/3ds/Sonic Mania 3DS/`: then an
+  install-only server starts once Wi-Fi is up (only `/3ds/Sonic Mania 3DS/update` reachable, of `SITE` only INSTALL), so
+  `--install` works over a production install too. The bottom screen shows `FTP (INSTALL ONLY)`, the address and a
+  CANCEL (off until the game is opened again). Create the file from a dev build:
+  `curl -T /dev/null "ftp://IP:5000/3ds/Sonic%20Mania%203DS/dev-ftp.txt"`; delete it to turn it off.
 - **No console at hand**: `tools/azahar.sh` runs the build in the owner's Azahar (Flatpak) and the same tools work with
   `-i 127.0.0.1` (`tools/site.sh -i 127.0.0.1 STATE`, `tools/shot.sh -i 127.0.0.1 top x.png`). Good for pictures, crashes
   and libctru panics (PC/LR in Azahar's log, resolve with addr2line); useless for timings; it does not reproduce the
