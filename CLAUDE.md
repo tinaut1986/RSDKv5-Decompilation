@@ -73,7 +73,7 @@ at boot the game offers to extract it from the console's own Home Menu (`Port::E
   history and we do not use it.
 - Releases: `tools/version.sh` gives the version from git; a tag `vX.Y.Z` runs `.github/workflows/build-release.yml`, which
   builds the CIA and publishes it (beta = pre-release, built with the dev tools, off a `release/*` branch; stable on
-  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.3.4` since 2026-10-26, after the `v0.3.3` stable) and the open feature branches are on `origin`.
+  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.3.5` since 2026-10-26, after the `v0.3.4` stable) and the open feature branches are on `origin`.
 - Commit only when the owner asks; the owner asked for commits at the end of each long task.
 - **Issues** are enabled on `origin` (2026-10-22): pending work, bugs and the owner's requests go there (English, label
   `bug`/`enhancement`, sections Seen / Likely cause / To try / To check, as in sm-3ds); docs keep the technical record.
@@ -114,6 +114,8 @@ tools/site.sh MODELCHECK                    # 3D models' VRAM against what was u
 tools/site.sh "SET modelcheck 1"            # the same every 120 frames, the first damage to the log; not saved
 tools/site.sh FLOOR                         # last frame's Special Stage floor lines (window level, map ends, texels) -> debug/floor.txt
 tools/site.sh "MODELS 13"                   # the model list from model 13 (the reply is cut at the FTP line limit)
+tools/site.sh READTEST                      # the SD card's read speed on Data.rsdk; each load logs "load phases" (ms per phase, reads, decrypt, box)
+tools/site.sh "SET gifcheck 1"              # every sprite sheet decoded by both GIF decoders, a difference to the log; "load inside" lines: GIF, anims, sfx; not saved
 tools/site.sh EMIT                          # pcopy split by command type (layers, sprites, 3D, lines...)
 tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU drew too; right = right eye in 3D)
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE

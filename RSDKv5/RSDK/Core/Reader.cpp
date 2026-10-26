@@ -224,6 +224,76 @@ inline bool ends_with(std::string const &value, std::string const &ending)
 }
 #endif
 
+#if RETRO_PLATFORM == RETRO_3DS
+ReaderStats readerStats;
+
+size_t TimedRead(void *buffer, size_t size, size_t count, FILE *file)
+{
+    const u64 t0 = svcGetSystemTick();
+    const size_t n = fread(buffer, size, count, file);
+    readerStats.readTicks += svcGetSystemTick() - t0;
+    ++readerStats.reads;
+    readerStats.bytes += (unsigned long)(n * size);
+    return n;
+}
+
+int TimedSeek(FILE *file, long offset, int whence)
+{
+    const u64 t0 = svcGetSystemTick();
+    const int r  = fseek(file, offset, whence);
+    readerStats.seekTicks += svcGetSystemTick() - t0;
+    ++readerStats.seeks;
+    return r;
+}
+
+// The engine reads a file a few bytes at a time (ReadInt8 / ReadInt16: a sound effect sample by sample, a GIF byte
+// by byte), each one an fread: a zone's load was 1-2 million calls of ~3 bytes, ~10 s of a 25 s load on the New 3DS
+// (a read-ahead buffer under fread did not help: the cost is the call, not the card). A pack's file up to 1 MB is
+// read whole with one fread and served from memory, as the engine does for a pack held in memory (usingFileBuffer);
+// CloseFile frees it (iocache). Bigger files (music) and a malloc that fails keep the FILE.
+static bool LoadPackFileWhole(FileInfo *info, const char *packName, int32 offset, int32 size)
+{
+    if (size <= 0 || size > 1024 * 1024)
+        return false;
+    // One handle on the pack for the whole run, read at each file's offset: opening the 200 MB pack anew for every file
+    // (as the engine does) and seeking into it cost ~90 ms a file, the card walking the file's clusters from its start
+    // each time (the card itself reads ~9 MB/s).
+    static Handle sPack;
+    static char sPackName[0x100];
+    if (strcmp(sPackName, packName)) {
+        if (sPack)
+            FSFILE_Close(sPack);
+        sPack           = 0;
+        const char *rel = !strncmp(packName, "sdmc:", 5) ? packName + 5 : packName;
+        if (R_FAILED(FSUSER_OpenFileDirectly(&sPack, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, rel), FS_OPEN_READ, 0)))
+            sPack = 0;
+        snprintf(sPackName, sizeof(sPackName), "%s", packName);
+    }
+    if (!sPack)
+        return false;
+    uint8 *buf = (uint8 *)malloc((size_t)size);
+    if (!buf)
+        return false;
+    const u64 t0 = svcGetSystemTick();
+    u32 got      = 0;
+    const bool ok = R_SUCCEEDED(FSFILE_Read(sPack, &got, (u64)offset, buf, (u32)size)) && got == (u32)size;
+    readerStats.readTicks += svcGetSystemTick() - t0;
+    ++readerStats.reads;
+    readerStats.bytes += got;
+    if (!ok) {
+        free(buf);
+        return false;
+    }
+    info->iocache         = buf;
+    info->file            = (FileIO *)buf;
+    info->fileBuffer      = buf;
+    info->usingFileBuffer = true;
+    ++readerStats.wholeFiles;
+    readerStats.wholeKB += (unsigned long)(size >> 10);
+    return true;
+}
+#endif
+
 bool32 RSDK::OpenDataFile(FileInfo *info, const char *filename)
 {
     char hashBuffer[0x400];
@@ -238,6 +308,11 @@ bool32 RSDK::OpenDataFile(FileInfo *info, const char *filename)
             continue;
 
         info->usingFileBuffer = file->useFileBuffer;
+#if RETRO_PLATFORM == RETRO_3DS
+        if (!file->useFileBuffer && LoadPackFileWhole(info, dataPacks[file->packID].name, file->offset, file->size)) {
+        }
+        else
+#endif
         if (!file->useFileBuffer) {
             info->file = fOpen(dataPacks[file->packID].name, "rb");
             if (!info->file) {
@@ -272,6 +347,15 @@ bool32 RSDK::OpenDataFile(FileInfo *info, const char *filename)
             info->eKeyPosA    = 0;
             info->eKeyPosB    = 8;
             info->eNybbleSwap = false;
+#if RETRO_PLATFORM == RETRO_3DS
+            // A file read whole into its own buffer is decrypted there once: the engine decrypted it a byte at a time
+            // as it read (a call per ReadInt8), 2-4 s of a load. Then it reads as plain data; Seek_Set's re-keying is
+            // skipped with it. (Not a pack held in memory: that buffer is shared.)
+            if (info->usingFileBuffer && info->iocache && info->fileBuffer == info->iocache) {
+                DecryptBytes(info, info->iocache, (size_t)info->fileSize);
+                info->encrypted = false;
+            }
+#endif
         }
 
 #if !RETRO_USE_ORIGINAL_CODE
@@ -453,50 +537,55 @@ void RSDK::GenerateELoadKeys(FileInfo *info, const char *key1, int32 key2)
 
 void RSDK::DecryptBytes(FileInfo *info, void *buffer, size_t size)
 {
-    if (size) {
-        uint8 *data = (uint8 *)buffer;
-        while (size > 0) {
-            *data ^= info->eKeyNo ^ info->encryptionKeyB[info->eKeyPosB];
-            if (info->eNybbleSwap)
-                *data = ((*data << 4) + (*data >> 4)) & 0xFF;
-            *data ^= info->encryptionKeyA[info->eKeyPosA];
+#if RETRO_PLATFORM == RETRO_3DS
+    const u64 tDecrypt = svcGetSystemTick();
+#endif
+    // The key state in locals (one call decrypts a whole file now: OpenDataFile), written back at the end
+    uint8 *data = (uint8 *)buffer;
+    uint8 keyNo = info->eKeyNo, posA = info->eKeyPosA, posB = info->eKeyPosB, swap = info->eNybbleSwap;
+    const uint8 *keyA = info->encryptionKeyA, *keyB = info->encryptionKeyB;
+    while (size > 0) {
+        uint8 d = *data ^ keyNo ^ keyB[posB];
+        if (swap)
+            d = (uint8)((d << 4) | (d >> 4));
+        *data = d ^ keyA[posA];
 
-            info->eKeyPosA++;
-            info->eKeyPosB++;
+        posA++;
+        posB++;
 
-            if (info->eKeyPosA <= 15) {
-                if (info->eKeyPosB > 12) {
-                    info->eKeyPosB = 0;
-                    info->eNybbleSwap ^= 1;
-                }
+        if (posA <= 15) {
+            if (posB > 12) {
+                posB = 0;
+                swap ^= 1;
             }
-            else if (info->eKeyPosB <= 8) {
-                info->eKeyPosA = 0;
-                info->eNybbleSwap ^= 1;
+        }
+        else if (posB <= 8) {
+            posA = 0;
+            swap ^= 1;
+        }
+        else {
+            keyNo = (keyNo + 2) & 0x7F;
+            if (swap) {
+                swap = false;
+                posA = keyNo % 7;
+                posB = (keyNo % 12) + 2;
             }
             else {
-                info->eKeyNo += 2;
-                info->eKeyNo &= 0x7F;
-
-                if (info->eNybbleSwap) {
-                    info->eNybbleSwap = false;
-
-                    info->eKeyPosA = info->eKeyNo % 7;
-                    info->eKeyPosB = (info->eKeyNo % 12) + 2;
-                }
-                else {
-                    info->eNybbleSwap = true;
-
-                    info->eKeyPosA = (info->eKeyNo % 12) + 3;
-                    info->eKeyPosB = info->eKeyNo % 7;
-                }
+                swap = true;
+                posA = (keyNo % 12) + 3;
+                posB = keyNo % 7;
             }
-
-            ++data;
-            --size;
         }
+
+        ++data;
+        --size;
     }
+    info->eKeyNo = keyNo, info->eKeyPosA = posA, info->eKeyPosB = posB, info->eNybbleSwap = swap;
+#if RETRO_PLATFORM == RETRO_3DS
+    readerStats.decryptTicks += svcGetSystemTick() - tDecrypt;
+#endif
 }
+
 void RSDK::SkipBytes(FileInfo *info, int32 size)
 {
     if (size) {

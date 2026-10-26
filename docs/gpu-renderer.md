@@ -683,6 +683,10 @@ Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); 
 
 ## Lessons (read before touching this)
 
+- **Loads: open the data pack once** (2026-10-26, `Reader.cpp` `LoadPackFileWhole`). Opening the 200 MB `Data.rsdk`
+  anew for every file and seeking into it cost ~90 ms a file (the card reads ~9 MB/s, `SITE READTEST`); the engine's
+  1-2 million byte-sized reads and byte-by-byte decrypting did the rest. One FS handle, each file read whole and
+  decrypted once: Green Hill 1 18 s -> 4 s. The `load phases` log line says where a load's time goes.
 - **`C3D_SyncTextureCopy` / `C3D_SyncDisplayTransfer` are not synchronous** outside a frame: they end in
   `gspWaitForEvent(PPF, false)`, which returns at once when an earlier PPF (the last frame's display transfer) was never
   waited for. Before the CPU writes the staging buffer again, `C3DPresent::StagingWait()` (2026-10-26, #10): without it

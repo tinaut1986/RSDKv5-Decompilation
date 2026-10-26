@@ -59,8 +59,8 @@
   for a while (floor and water rebuilt every frame) and could not be repeated; `SITE REFUSED` now says what changed in
   the floor ("changing (tiles)" or the bank and colour) should it come back. The v5U engine no longer fits with the new
   pools (the game quits at boot): revision 2 stays.
-- **Active release line**: `release/v0.3.4`, on `origin` (`v0.1.0`, `v0.1.1`, `v0.1.2` are beta tags on its history;
-  `v0.2.0` to `v0.2.3`, 2026-10-24, `v0.3.0` to `v0.3.3`, 2026-10-26, stable tags on `main`; `v0.2.2` panicked at boot on the New 3DS, fixed in `v0.2.3`).
+- **Active release line**: `release/v0.3.5`, on `origin` (`v0.1.0`, `v0.1.1`, `v0.1.2` are beta tags on its history;
+  `v0.2.0` to `v0.2.3`, 2026-10-24, `v0.3.0` to `v0.3.4`, 2026-10-26, stable tags on `main`; `v0.2.2` panicked at boot on the New 3DS, fixed in `v0.2.3`).
 - **Consoles**: the owner's Old 2DS (`192.168.1.139` on 2026-10-26) and New 3DS (`.133` that day) (DHCP: ping first, the DEBUG tab shows the IP;
   `tools/site.sh -i IP`). Both run the latest dev build of `release/v0.1.0`; the New 3DS takes `--install` over FTP too
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS). Ask the owner before installing in a new session (each session's
@@ -73,7 +73,7 @@
 | Branch | State |
 |---|---|
 | `main` | Stable releases: the release branch merged with `--no-ff` for each stable tag (from `v0.2.0`, 2026-10-24), on SaturnSH2x2 `3ds-main` (dfef28d). |
-| `release/v0.3.4` | (was `release/v0.1.0` .. `v0.3.3`, renamed after each tag) Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). On 2026-10-24 also the session 6 work (beta `v0.1.1`) and `fix/3d-depth-bands` (#11, #12, #13). Merged topic branches deleted. |
+| `release/v0.3.5` | (was `release/v0.1.0` .. `v0.3.4`, renamed after each tag) Everything the owner checked on the console, merged with `--no-ff`: build/docs, dev tools, GPU presentation, bottom UI, pacing, the GPU renderer (layers, sprites, faces, 3D scenes as instances, masked inks, rotozoom textures), bottom tabs, stereo 3D and layer depth, recorded runs; and on 2026-10-23 (session 5) `perf/floor-lerp`, `perf/audio-core1` (music decoded on core 1), `perf/floor-lod` (the floor in five window levels) and `perf/stereo-submit` (runs of 3D scenes keep their state). On 2026-10-24 also the session 6 work (beta `v0.1.1`) and `fix/3d-depth-bands` (#11, #12, #13). Merged topic branches deleted. |
 | `feat/ui-languages` | Off `release/v0.1.3`: the port's text in the game's language. Waiting for the owner on the console. |
 | `feat/ui-themes` | Off `feat/ui-languages`: OPTIONS > THEME (dropdown) and `SITE TOUCH x y`. Waiting for the owner; merge after the languages. |
 | `feat/game-tab-hud-art` | Off `feat/ui-themes`: the GAME tab with the game's HUD art, the time at the game's rate. Waiting for the owner. |

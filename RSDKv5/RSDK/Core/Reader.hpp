@@ -19,6 +19,34 @@
 #define fWrite(buffer, elementSize, elementCount, file) fwrite(buffer, elementSize, elementCount, file)
 #endif
 
+#if RETRO_PLATFORM == RETRO_3DS
+// Where a load's time goes (BottomUi's load log): the reads and seeks still going to a file (a pack's file is read
+// whole into memory when it is opened: LoadPackFileWhole), timed and counted, and the time decrypting and inflating.
+struct ReaderStats {
+    unsigned long long readTicks, seekTicks, decryptTicks, inflateTicks;
+    unsigned long reads, seeks, bytes, wholeFiles, wholeKB;
+    // Inside the phases: sprite sheets decoded (GIF), animation files, sound effects, the objects' StageLoad and the
+    // entities' Create
+    unsigned long long gifTicks, animTicks, sfxTicks, stageLoadTicks, createTicks, gifDecodeTicks;
+    unsigned long gifs, gifKB, anims, sfxs;
+    unsigned long gifFast, gifSlow, gifMismatch; // DecodeGifFast taken / left to the engine's decoder / differing (gifcheck)
+};
+extern ReaderStats readerStats;
+// Adds the time from here to the end of the scope to `acc`
+struct TicksTo {
+    unsigned long long &acc;
+    unsigned long long t0;
+    explicit TicksTo(unsigned long long &a) : acc(a), t0(svcGetSystemTick()) {}
+    ~TicksTo() { acc += svcGetSystemTick() - t0; }
+};
+size_t TimedRead(void *buffer, size_t size, size_t count, FILE *file);
+int TimedSeek(FILE *file, long offset, int whence);
+#undef fRead
+#undef fSeek
+#define fRead(buffer, elementSize, elementCount, file) TimedRead(buffer, elementSize, elementCount, file)
+#define fSeek(file, offset, whence)                    TimedSeek(file, offset, whence)
+#endif
+
 #if RETRO_PLATFORM == RETRO_ANDROID
 #undef fOpen
 FileIO *fOpen(const char *path, const char *mode);
@@ -431,8 +459,14 @@ inline int32 Uncompress(uint8 **cBuffer, int32 cSize, uint8 **buffer, int32 size
     uLongf cLen    = cSize;
     uLongf destLen = size;
 
+#if RETRO_PLATFORM == RETRO_3DS
+    const u64 tInflate = svcGetSystemTick();
+#endif
     int32 result = uncompress(*buffer, &destLen, *cBuffer, cLen);
     (void)result;
+#if RETRO_PLATFORM == RETRO_3DS
+    readerStats.inflateTicks += svcGetSystemTick() - tInflate;
+#endif
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
     // zlib mallocs its state and window: with the heap full it fails and the data stays unwritten (a scene layout of
     // tile 0, 2026-10-23). Never silently again.
