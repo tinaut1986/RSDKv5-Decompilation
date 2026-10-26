@@ -60,6 +60,10 @@ If that folder has no `Data.rsdk`, the game reads the one of the original 3DS po
 in place, and at the first start it offers once to copy that folder's saves. Both applications can be installed side
 by side.
 
+The sound needs your console's DSP firmware (`sdmc:/3ds/dspfirm.cdc`, the file other homebrew uses too). If it is
+missing or damaged the game says so and offers to extract it from the console itself (EXTRACT); without it the game
+runs, silent. It is Nintendo's, so it is never part of a download.
+
 **Sonic Mania Plus** (Mighty, Ray, Encore mode) is off by default, as the decompilation's license asks of every build
 given to anyone. When the game data has the Plus content, the first start asks whether to turn it on; do so only if
 you own Sonic Mania Plus. It can be changed later in OPTIONS > PLUS (from the next start).
