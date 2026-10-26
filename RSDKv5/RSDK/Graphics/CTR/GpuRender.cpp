@@ -254,6 +254,7 @@ struct GModel {
     u8 *col; // RGBA bytes per vertex, NULL: the instance colour
     u16 *idx;
     u32 idxCount;
+    u32 vbytes, ibytes, cbytes; // the VRAM blocks' sizes (SITE MODELCHECK)
     u16 vc;
     bool tried, ok;
     float radius; // the farthest vertex from the model's origin, any frame (model units): its scene's depth range
@@ -1489,6 +1490,7 @@ template <typename F> bool UploadVram(void *dst, u32 bytes, F fill)
     const u32 chunk = SOFT_W * SOFT_H * 2;
     for (u32 off = 0; off < bytes; off += chunk) {
         const u32 n = bytes - off < chunk ? bytes - off : chunk;
+        C3DPresent::StagingWait(); // the last chunk's copy may still be reading it
         fill(off, n, staging);
         CopyToVram(staging, (u8 *)dst + off, (n + 15) & ~15u);
     }
@@ -1505,6 +1507,47 @@ u32 ModelVramNeed(const Model &md)
     const u32 idx        = faces * (md.faceVertCount == 4 ? 6 : 3);
     const bool colors    = md.flags == 5 && md.colors;
     return (((u32)vc * frames * 12 + 15) & ~15u) + ((idx * 2 + 15) & ~15u) + (colors ? (((u32)vc * 4 + 15) & ~15u) : 0);
+}
+
+// A model's VRAM contents, `n` bytes from `off` of block `which` (0 vertices, 1 triangles, 2 colours): what EnsureModel
+// uploads and SITE MODELCHECK compares with what the VRAM holds.
+void FillModel(const Model &md, const GModel &g, int which, u32 off, u32 n, u8 *buf)
+{
+    const unsigned frames = md.frameCount ? md.frameCount : 1, vc = md.vertCount;
+    if (which == 0) {
+        int16 *o = (int16 *)buf;
+        for (u32 i = 0; i < n / 2; ++i) {
+            const u32 e = off / 2 + i, v = e / 6, k = e % 6;
+            if (v >= (u32)vc * frames) {
+                o[i] = 0;
+                continue;
+            }
+            const ModelVertex &mv = md.vertices[v];
+            o[i] = (int16)(k == 0 ? mv.x : k == 1 ? mv.y : k == 2 ? mv.z : k == 3 ? mv.nx >> 2 : k == 4 ? mv.ny >> 2 : mv.nz >> 2);
+        }
+    }
+    else if (which == 1) {
+        u16 *o = (u16 *)buf;
+        for (u32 i = 0; i < n / 2; ++i) {
+            const u32 e = off / 2 + i;
+            if (e >= g.idxCount) {
+                o[i] = 0;
+                continue;
+            }
+            if (md.faceVertCount == 3)
+                o[i] = md.indices[e];
+            else {
+                static const u8 kQuad[6] = { 0, 1, 2, 0, 2, 3 };
+                o[i] = md.indices[(e / 6) * 4 + kQuad[e % 6]];
+            }
+        }
+    }
+    else
+        for (u32 i = 0; i < n; ++i) {
+            const u32 e = off + i, v = e / 4, k = e % 4;
+            const uint32 c = v < vc ? md.colors[v].color : 0;
+            buf[i] = (u8)(k == 0 ? c >> 16 : k == 1 ? c >> 8 : k == 2 ? c : 0xFF);
+        }
 }
 
 bool EnsureModel(unsigned m)
@@ -1542,49 +1585,23 @@ bool EnsureModel(unsigned m)
     sModelVram += vbytes + ibytes + (colors ? cbytes : 0);
     {
         float r2 = 0;
+        unsigned wide = 0, firstWide = 0;
         for (u32 v = 0; v < (u32)vc * frames; ++v) {
             const ModelVertex &mv = md.vertices[v];
             const float d = (float)mv.x * mv.x + (float)mv.y * mv.y + (float)mv.z * mv.z;
             r2            = d > r2 ? d : r2;
+            if (mv.x != (int16)mv.x || mv.y != (int16)mv.y || mv.z != (int16)mv.z) // the VRAM copy keeps 16 bits
+                firstWide = wide++ ? firstWide : v;
         }
         g.radius = sqrtf(r2);
+        if (wide)
+            DEV_LOG("gpu3d: model %u has %u vertices beyond 16 bits (first: frame %u vertex %u)", m, wide, firstWide / vc, firstWide % vc);
     }
-    bool ok = UploadVram(g.vtx, vbytes, [&](u32 off, u32 n, u8 *buf) {
-        int16 *o = (int16 *)buf;
-        for (u32 i = 0; i < n / 2; ++i) {
-            const u32 e = off / 2 + i, v = e / 6, k = e % 6;
-            if (v >= (u32)vc * frames) {
-                o[i] = 0;
-                continue;
-            }
-            const ModelVertex &mv = md.vertices[v];
-            o[i] = (int16)(k == 0 ? mv.x : k == 1 ? mv.y : k == 2 ? mv.z : k == 3 ? mv.nx >> 2 : k == 4 ? mv.ny >> 2 : mv.nz >> 2);
-        }
-    });
-    ok = ok && UploadVram(g.idx, ibytes, [&](u32 off, u32 n, u8 *buf) {
-        u16 *o = (u16 *)buf;
-        for (u32 i = 0; i < n / 2; ++i) {
-            const u32 e = off / 2 + i;
-            if (e >= g.idxCount) {
-                o[i] = 0;
-                continue;
-            }
-            if (md.faceVertCount == 3)
-                o[i] = md.indices[e];
-            else {
-                static const u8 kQuad[6] = { 0, 1, 2, 0, 2, 3 };
-                o[i] = md.indices[(e / 6) * 4 + kQuad[e % 6]];
-            }
-        }
-    });
+    g.vbytes = vbytes, g.ibytes = ibytes, g.cbytes = colors ? cbytes : 0;
+    bool ok = UploadVram(g.vtx, vbytes, [&](u32 off, u32 n, u8 *buf) { FillModel(md, g, 0, off, n, buf); });
+    ok      = ok && UploadVram(g.idx, ibytes, [&](u32 off, u32 n, u8 *buf) { FillModel(md, g, 1, off, n, buf); });
     if (colors)
-        ok = ok && UploadVram(g.col, cbytes, [&](u32 off, u32 n, u8 *buf) {
-            for (u32 i = 0; i < n; ++i) {
-                const u32 e = off + i, v = e / 4, k = e % 4;
-                const uint32 c = v < vc ? md.colors[v].color : 0;
-                buf[i] = (u8)(k == 0 ? c >> 16 : k == 1 ? c >> 8 : k == 2 ? c : 0xFF);
-            }
-        });
+        ok = ok && UploadVram(g.col, cbytes, [&](u32 off, u32 n, u8 *buf) { FillModel(md, g, 2, off, n, buf); });
     g.vc = (u16)vc;
     g.ok = ok;
     if (ok)
@@ -1995,6 +2012,7 @@ bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int k
 void ConvertSoft(const SoftJob &j)
 {
     const ScreenInfo &scr = screens[1];
+    C3DPresent::StagingWait();
     u16 *staging          = (u16 *)C3DPresent::Staging();
     for (int y = j.y1; y < j.y2; ++y) {
         const uint16 *src = &scr.frameBuffer[y * scr.pitch];
@@ -2560,6 +2578,17 @@ bool FloorFadeReady() { return GpuRender::floorWindows && sFloor.fogOk && sFloor
 unsigned FloorFade(unsigned bank) { return sFloor.fogAlpha[bank & 7] * (unsigned)GpuRender::floorFogPercent / 100; }
 const char *sFloorWhy = "-"; // the floor windows' state for SITE REFUSED (the last frame with a floor)
 uint8 sLineDone[SCREEN_YSIZE]; // per line of the rotozoom layer being emitted: 1 + the window level drawing it, 0 none
+// SITE FLOOR: the last floor frame's lines as the windows drew them (DumpFloor)
+struct FloorLineLog {
+    int32 px, py, dx, dy;   // the scanline: position and step (16.16 map pixels)
+    uint32 uv0, uv1;        // the quad's texel coordinates (1/16 texel, u | v << 16)
+    uint8 level;            // 1 + the level drawing it, 0 none (tile runs)
+};
+FloorLineLog sFloorLog[SCREEN_YSIZE];
+int sFloorLogY1, sFloorLogY2, sFloorLogX1, sFloorLogX2;
+int sFloorLogOx[FLOOR_LEVELS], sFloorLogOy[FLOOR_LEVELS];
+bool sFloorLogValid[FLOOR_LEVELS];
+const TileLayer *sFloorLogLayer;
 const u16 *sFloorPal0; // the texel table of bank 0 the cells are written with
 
 void FreeFloor()
@@ -2646,6 +2675,7 @@ bool FloorWriteColumn(FloorLevel &l, const TileLayer *layer, int ox, int oy, uns
         staging = (u8 *)C3DPresent::Staging();
     if (!staging)
         return false;
+    C3DPresent::StagingWait();
     u16 *col = (u16 *)staging;
     const int cx = ox + (int)((sx - (unsigned)ox) & (cells - 1));
     for (unsigned sy = 0; sy < cells; ++sy) {
@@ -2666,6 +2696,7 @@ bool FloorWriteRow(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsign
         staging = (u8 *)C3DPresent::Staging();
     if (!staging)
         return false;
+    C3DPresent::StagingWait();
     u16 *col = (u16 *)staging;
     const int cy = oy + (int)((sy - (unsigned)oy) & (cells - 1));
     for (unsigned sx = 0; sx < cells; ++sx) {
@@ -2945,6 +2976,13 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
                 l.valid = false;
         }
 
+    sFloorLogY1 = y1, sFloorLogY2 = y2, sFloorLogX1 = x1, sFloorLogX2 = x2, sFloorLogLayer = layer;
+    for (int k = 0; k < FLOOR_LEVELS; ++k)
+        sFloorLogOx[k] = f.level[k].ox, sFloorLogOy[k] = f.level[k].oy, sFloorLogValid[k] = f.level[k].valid;
+    for (int y = y1; y < y2; ++y) {
+        const ScanlineInfo &s = first[y - y1];
+        sFloorLog[y] = { s.position.x, s.position.y, s.deform.x, s.deform.y, 0, 0, 0 };
+    }
     // Each line from the finest window holding it whole (its quad's ends, half a step outside the samples).
     unsigned lines[FLOOR_LEVELS] = {};
     for (int y = y1; y < y2; ++y) {
@@ -3020,6 +3058,7 @@ bool EmitFloorWindow(TileLayer *layer, const ScanlineInfo *first, int x1, int x2
             const uint32 X0 = (uint32)(x1 << 2), X1 = (uint32)(x2 << 2);
             const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
             const uint32 rgba = 0x00FFFFFFu | ((uint32)(255 - fade) << 24); // the texture's share: 1 - f
+            sFloorLog[y].uv0 = uv0, sFloorLog[y].uv1 = uv1, sFloorLog[y].level = (uint8)(1 + k);
             w32[0] = X0 | Y0, w32[1] = uv0, w32[2] = rgba;
             w32[3] = X1 | Y0, w32[4] = uv1, w32[5] = rgba;
             w32[6] = X1 | Y1, w32[7] = uv1, w32[8] = rgba;
@@ -3263,6 +3302,7 @@ void UploadStrips()
     for (Strip &st : sStrips) {
         if (!st.layer || !st.dirty || !staging)
             continue;
+        C3DPresent::StagingWait(); // the other strip's copies read the same rows of it
         st.dirty = false;
         st.rowsUp = 0;
         u64 tConv = 0, tCopy = 0;
@@ -3636,6 +3676,164 @@ unsigned GpuRender::TakeC3DTimes(float avg[5])
     return n;
 }
 const char *GpuRender::LastRefusal() { return sRefusal[0] ? sRefusal : "-"; }
+
+void GpuRender::DumpFloor(void *file)
+{
+    FILE *f = (FILE *)file;
+    if (!sFloorLogLayer) {
+        fprintf(f, "no floor drawn from the windows yet\n");
+        return;
+    }
+    const TileLayer *layer = sFloorLogLayer;
+    fprintf(f, "floor lines %d..%d, x %d..%d, map %ux%u px\n", sFloorLogY1, sFloorLogY2 - 1, sFloorLogX1, sFloorLogX2,
+            (unsigned)TILE_SIZE << layer->widthShift, (unsigned)TILE_SIZE << layer->heightShift);
+    for (int k = 0; k < FLOOR_LEVELS; ++k) {
+        const FloorLevel &l = sFloor.level[k];
+        fprintf(f, "level %d: %s, %u texels, 1/%u, cell %d px, origin cells %d %d = px %d %d .. %d %d%s\n", k,
+                sFloorLogValid[k] ? "valid" : "INVALID", l.texW, 1u << l.shift, l.CellPx(), sFloorLogOx[k], sFloorLogOy[k],
+                sFloorLogOx[k] * l.CellPx(), sFloorLogOy[k] * l.CellPx(), (sFloorLogOx[k] + (int)l.Cells()) * l.CellPx() - 1,
+                (sFloorLogOy[k] + (int)l.Cells()) * l.CellPx() - 1, l.alloc && l.Whole(layer) ? " (whole map)" : "");
+    }
+    // Per line: the level, the map pixels of its ends (as the windows test them) and the quad's texel coordinates; the
+    // map's colour index at five points along the line (0: transparent in the map itself).
+    fprintf(f, "y lvl step | map x0 y0 -> x1 y1 | uv0 -> uv1 (texels) | map index at 0 1/4 1/2 3/4 1\n");
+    const int lineSize = sFloorLogX2 - sFloorLogX1;
+    for (int y = sFloorLogY1; y < sFloorLogY2; ++y) {
+        const FloorLineLog &g = sFloorLog[y];
+        const float step = sqrtf((float)g.dx * g.dx + (float)g.dy * g.dy) / 65536.0f;
+        const float ax = (g.px - g.dx * 0.5f) / 65536.0f, ay = (g.py - g.dy * 0.5f) / 65536.0f;
+        const float bx = ax + g.dx / 65536.0f * lineSize, by = ay + g.dy / 65536.0f * lineSize;
+        fprintf(f, "%3d %d %6.3f | %9.1f %9.1f -> %9.1f %9.1f | %8.2f %8.2f -> %8.2f %8.2f |", y, g.level ? g.level - 1 : -1, step, ax, ay, bx,
+                by, (int16)(g.uv0 & 0xFFFF) / 16.0f, (int16)(g.uv0 >> 16) / 16.0f, (int16)(g.uv1 & 0xFFFF) / 16.0f,
+                (int16)(g.uv1 >> 16) / 16.0f);
+        for (int i = 0; i <= 4; ++i) {
+            const int64 mx = ((int64)g.px + (int64)g.dx * lineSize * i / 4) >> 16, my = ((int64)g.py + (int64)g.dy * lineSize * i / 4) >> 16;
+            const unsigned t = FloorTileAt(layer, (int)(mx >> 4), (int)(my >> 4));
+            fprintf(f, " %3u", tilesetPixels[TILE_DATASIZE * t + (my & 15) * 16 + (mx & 15)]);
+        }
+        fprintf(f, "\n");
+    }
+}
+
+// SITE MODELCHECK: every model in VRAM compared with what was uploaded; the VRAM blocks the renderer holds, to see what
+// overlaps or ends just before a broken one.
+void GpuRender::CheckModels(void *file)
+{
+    FILE *f = (FILE *)file;
+    struct Block { const char *what; int id; const u8 *p; u32 n; };
+    static Block blocks[MODEL_COUNT * 3 + 64];
+    unsigned nb = 0;
+    auto add = [&](const char *what, int id, const void *p, u32 n) {
+        if (p && n && nb < sizeof(blocks) / sizeof(blocks[0]))
+            blocks[nb++] = { what, id, (const u8 *)p, n };
+    };
+    for (unsigned m = 0; m < MODEL_COUNT; ++m) {
+        const GModel &g = sModels[m];
+        add("model vtx", (int)m, g.vtx, g.vbytes), add("model idx", (int)m, g.idx, g.ibytes), add("model col", (int)m, g.col, g.cbytes);
+    }
+    add("tile atlas", 0, sTileTex.data, sTileTex.size), add("sprite atlas", 0, sSprTex.data, sSprTex.size);
+    add("soft layer", 0, sSoftTex.data, sSoftTex.size);
+    for (int k = 0; k < FLOOR_LEVELS; ++k)
+        if (sFloor.level[k].alloc)
+            add("floor level", k, sFloor.level[k].tex.data, sFloor.level[k].tex.size);
+    for (unsigned i = 0; i < ROTO_TEX_SLOTS; ++i) {
+        for (int b = 0; b < 8; ++b)
+            if (sRotoTex[i].bank[b].alloc)
+                add("roto bank", (int)(i * 8 + b), sRotoTex[i].bank[b].tex.data, sRotoTex[i].bank[b].tex.size);
+        if (sRotoTex[i].maskAlloc)
+            add("roto mask", (int)i, sRotoTex[i].mask.data, sRotoTex[i].mask.size);
+    }
+    for (unsigned i = 0; i < STRIP_SLOTS; ++i)
+        if (sStrips[i].alloc)
+            add("strip", (int)i, sStrips[i].tex.data, sStrips[i].tex.size);
+    if (sGrabReady)
+        add("grab", 0, sGrabTex.data, sGrabTex.size);
+    fprintf(f, "vram free %u KB, models' share %u KB\n", (unsigned)(vramSpaceFree() >> 10), (unsigned)(sModelVram >> 10));
+    for (unsigned a = 0; a < nb; ++a)
+        for (unsigned b = a + 1; b < nb; ++b)
+            if (blocks[a].p < blocks[b].p + blocks[b].n && blocks[b].p < blocks[a].p + blocks[a].n)
+                fprintf(f, "OVERLAP: %s %d %p+%lu and %s %d %p+%lu\n", blocks[a].what, blocks[a].id, blocks[a].p, (unsigned long)blocks[a].n,
+                        blocks[b].what, blocks[b].id, blocks[b].p, (unsigned long)blocks[b].n);
+    static u8 want[4096];
+    for (unsigned m = 0; m < MODEL_COUNT; ++m) {
+        const GModel &g = sModels[m];
+        if (!g.ok)
+            continue;
+        const Model &md = modelList[m];
+        const u8 *buf[3] = { (const u8 *)g.vtx, (const u8 *)g.idx, g.col };
+        const u32 size[3] = { g.vbytes, g.ibytes, g.cbytes };
+        static const char *const kName[3] = { "vtx", "idx", "col" };
+        for (int w = 0; w < 3; ++w) {
+            if (!buf[w] || !size[w])
+                continue;
+            u32 bad = 0, first = 0, last = 0;
+            for (u32 off = 0; off < size[w]; off += sizeof(want)) {
+                const u32 n = size[w] - off < sizeof(want) ? size[w] - off : sizeof(want);
+                FillModel(md, g, w, off, n, want);
+                for (u32 i = 0; i < n; ++i)
+                    if (buf[w][off + i] != want[i]) {
+                        first = bad++ ? first : off + i;
+                        last  = off + i;
+                    }
+            }
+            if (!bad) {
+                fprintf(f, "model %u %s ok (%lu bytes at %p)\n", m, kName[w], (unsigned long)size[w], buf[w]);
+                continue;
+            }
+            fprintf(f, "MODEL %u %s: %lu of %lu bytes differ, %lu..%lu (at %p)\n", m, kName[w], (unsigned long)bad, (unsigned long)size[w],
+                    (unsigned long)first, (unsigned long)last, buf[w]);
+            // The bad bytes as they are and as they should be (16-bit words), from the first one: what wrote them
+            {
+                const u32 a = first & ~1u, n = (last - a + 2) < 256 ? (last - a + 2) & ~1u : 256;
+                FillModel(md, g, w, a, n, want);
+                fprintf(f, "  at %lu, VRAM / uploaded (u16):\n", (unsigned long)a);
+                for (u32 i = 0; i < n; i += 16) {
+                    fprintf(f, "   ");
+                    for (u32 j = i; j < i + 16 && j < n; j += 2)
+                        fprintf(f, " %04x", *(const u16 *)(buf[w] + a + j));
+                    fprintf(f, "  /");
+                    for (u32 j = i; j < i + 16 && j < n; j += 2)
+                        fprintf(f, " %04x", *(const u16 *)(want + j));
+                    fprintf(f, "\n");
+                }
+            }
+            // The block that ends nearest before the bad bytes (an overrun's suspect)
+            const u8 *badAt = buf[w] + first;
+            int near = -1;
+            for (unsigned b = 0; b < nb; ++b)
+                if (blocks[b].p < badAt && (near < 0 || blocks[b].p > blocks[near].p))
+                    near = (int)b;
+            if (near >= 0)
+                fprintf(f, "  nearest block before: %s %d %p+%lu (ends %p)\n", blocks[near].what, blocks[near].id, blocks[near].p,
+                        (unsigned long)blocks[near].n, blocks[near].p + blocks[near].n);
+        }
+    }
+    fprintf(f, "blocks (%u):\n", nb);
+    for (unsigned b = 0; b < nb; ++b)
+        fprintf(f, "  %p+%-7lu %s %d\n", blocks[b].p, (unsigned long)blocks[b].n, blocks[b].what, blocks[b].id);
+}
+
+unsigned GpuRender::ModelDamage()
+{
+    static u8 want[4096];
+    unsigned bad = 0;
+    for (unsigned m = 0; m < MODEL_COUNT; ++m) {
+        const GModel &g = sModels[m];
+        if (!g.ok)
+            continue;
+        const u8 *buf[3] = { (const u8 *)g.vtx, (const u8 *)g.idx, g.col };
+        const u32 size[3] = { g.vbytes, g.ibytes, g.cbytes };
+        for (int w = 0; w < 3; ++w)
+            for (u32 off = 0; buf[w] && off < size[w]; off += sizeof(want)) {
+                const u32 n = size[w] - off < sizeof(want) ? size[w] - off : sizeof(want);
+                FillModel(modelList[m], g, w, off, n, want);
+                if (memcmp(buf[w] + off, want, n))
+                    for (u32 i = 0; i < n; ++i)
+                        bad += buf[w][off + i] != want[i];
+            }
+    }
+    return bad;
+}
 
 void GpuRender::DumpBatches(void *file)
 {

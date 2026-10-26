@@ -73,7 +73,7 @@ at boot the game offers to extract it from the console's own Home Menu (`Port::E
   history and we do not use it.
 - Releases: `tools/version.sh` gives the version from git; a tag `vX.Y.Z` runs `.github/workflows/build-release.yml`, which
   builds the CIA and publishes it (beta = pre-release, built with the dev tools, off a `release/*` branch; stable on
-  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.3.2` since 2026-10-26, after the `v0.3.1` stable) and the open feature branches are on `origin`.
+  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.3.3` since 2026-10-26, after the `v0.3.2` stable) and the open feature branches are on `origin`.
 - Commit only when the owner asks; the owner asked for commits at the end of each long task.
 - **Issues** are enabled on `origin` (2026-10-22): pending work, bugs and the owner's requests go there (English, label
   `bug`/`enhancement`, sections Seen / Likely cause / To try / To check, as in sm-3ds); docs keep the technical record.
@@ -110,6 +110,10 @@ tools/site.sh "RUNREC 1800" | RUNSTOP | "RUNPLAY [N] [F]" | RUN  # record keys f
                                             # (N passes, then frozen), save debug/run.bin, replay it (F: freeze at the end);
                                             # RUN: the result (real drawn fps). Saved runs and tools/runs/play.sh: tools/runs/
 tools/site.sh "SET ufonofall 1"             # debug: the Special Stage's holes are ground (blind test routes); not saved
+tools/site.sh MODELCHECK                    # 3D models' VRAM against what was uploaded -> debug/models.txt (damage, VRAM blocks)
+tools/site.sh "SET modelcheck 1"            # the same every 120 frames, the first damage to the log; not saved
+tools/site.sh FLOOR                         # last frame's Special Stage floor lines (window level, map ends, texels) -> debug/floor.txt
+tools/site.sh "MODELS 13"                   # the model list from model 13 (the reply is cut at the FTP line limit)
 tools/site.sh EMIT                          # pcopy split by command type (layers, sprites, 3D, lines...)
 tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU drew too; right = right eye in 3D)
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE

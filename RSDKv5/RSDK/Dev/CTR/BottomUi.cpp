@@ -257,7 +257,7 @@ static void ValCapture(char *o, unsigned c, bool *on)
 {
     const int n = DevTools::CaptureNumber();
     if (DevTools::freeze && n >= 0)
-        snprintf(o, c, "#%03d GO ON", n);
+        snprintf(o, c, "GO %03d", n); // as long as FTP's FAILED: "#029 GO ON" ran out of the cell
     else
         snprintf(o, c, "%s", "TAKE");
     *on = DevTools::freeze;
