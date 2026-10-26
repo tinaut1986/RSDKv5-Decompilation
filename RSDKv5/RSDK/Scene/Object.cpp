@@ -377,6 +377,9 @@ void RSDK::InitObjects()
     cameraCount          = 0;
 
     BottomUi::LoadPhase("Objects", 0.5f, 1.0f);
+#if RETRO_PLATFORM == RETRO_3DS
+    const unsigned long long tStageLoad = svcGetSystemTick();
+#endif
     for (int32 o = 0; o < sceneInfo.classCount; ++o) {
 #if RETRO_USE_MOD_LOADER
         currentObjectID = o;
@@ -389,6 +392,10 @@ void RSDK::InitObjects()
 
 #if RETRO_USE_MOD_LOADER
     RunModCallbacks(MODCB_ONSTAGELOAD, NULL);
+#endif
+#if RETRO_PLATFORM == RETRO_3DS
+    readerStats.stageLoadTicks += svcGetSystemTick() - tStageLoad;
+    TicksTo timedCreate(readerStats.createTicks);
 #endif
 
     for (int32 e = 0; e < ENTITY_COUNT; ++e) {

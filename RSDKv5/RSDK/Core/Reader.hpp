@@ -25,8 +25,20 @@
 struct ReaderStats {
     unsigned long long readTicks, seekTicks, decryptTicks, inflateTicks;
     unsigned long reads, seeks, bytes, wholeFiles, wholeKB;
+    // Inside the phases: sprite sheets decoded (GIF), animation files, sound effects, the objects' StageLoad and the
+    // entities' Create
+    unsigned long long gifTicks, animTicks, sfxTicks, stageLoadTicks, createTicks, gifDecodeTicks;
+    unsigned long gifs, gifKB, anims, sfxs;
+    unsigned long gifFast, gifSlow, gifMismatch; // DecodeGifFast taken / left to the engine's decoder / differing (gifcheck)
 };
 extern ReaderStats readerStats;
+// Adds the time from here to the end of the scope to `acc`
+struct TicksTo {
+    unsigned long long &acc;
+    unsigned long long t0;
+    explicit TicksTo(unsigned long long &a) : acc(a), t0(svcGetSystemTick()) {}
+    ~TicksTo() { acc += svcGetSystemTick() - t0; }
+};
 size_t TimedRead(void *buffer, size_t size, size_t count, FILE *file);
 int TimedSeek(FILE *file, long offset, int whence);
 #undef fRead
