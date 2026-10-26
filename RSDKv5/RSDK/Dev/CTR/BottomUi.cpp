@@ -2464,7 +2464,7 @@ void BottomUi::Init()
 
 bool BottomUi::Ready() { return sReady; }
 
-int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, const char *yes, const char *no)
+int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, const char *yes, const char *no, const char *topLine)
 {
     if (!sReady)
         return -1;
@@ -2513,8 +2513,17 @@ int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, co
         DrawBackdrop(0);
         Panel(bx - 2, by - 2, 0.82f, bw + 4, bh + 4, T().popEdge, T().popFill, 2);
         Text(title, W / 2.0f, by + 10, 0.6f, T().accent, C2D_AlignCenter, 0.95f);
-        for (int i = 0; i < lineCount; ++i)
-            Text(lines[i], bx + 12, by + 38 + i * 34, 0.45f, i == lineCount - 1 && lineCount > 1 ? T().dim : T().text, C2D_WordWrap, 0.95f, bw - 24);
+        // Each line below the one before, as tall as it wraps (rows are guessed from its width: word breaks waste some)
+        float ly = by + 38;
+        for (int i = 0; i < lineCount; ++i) {
+            Text(lines[i], bx + 12, ly, 0.45f, i == lineCount - 1 && lineCount > 1 ? T().dim : T().text, C2D_WordWrap, 0.95f, bw - 24);
+            C2D_Text t;
+            C2D_TextParse(&t, sTextBuf, lines[i]);
+            float tw = 0, th = 0;
+            C2D_TextGetDimensions(&t, 0.45f, 0.45f, &tw, &th);
+            const float rows = (float)(int)(tw / ((bw - 24) * 0.85f)) + 1;
+            ly += rows * th + 8 > 34 ? rows * th + 8 : 34;
+        }
         Button(yesX, cy, btnW, 24, yes, pressed == 1, T().cellEdge, T().text, 0.9f);
         if (no)
             Button(noX, cy, btnW, 24, no, pressed == 0, T().cellEdge, T().text, 0.9f);
@@ -2524,6 +2533,8 @@ int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, co
             C2D_DrawRectSolid(0, 0, 0.01f, 400, 240, Hex(kBootTop)); // not C2D_TargetClear: wrong colour on this RGB565 target
             DrawBackdrop(0, 400);
             Text(title, 200, 104, 0.8f, T().accent, C2D_AlignCenter, 0.5f);
+            if (topLine)
+                Text(topLine, 200, 140, 0.55f, T().text, C2D_AlignCenter, 0.5f);
             Text("SONIC MANIA 3DS", 200, 240 - 22, 0.45f, T().footer, C2D_AlignCenter, 0.5f);
         }
         C3D_FrameEnd(0);

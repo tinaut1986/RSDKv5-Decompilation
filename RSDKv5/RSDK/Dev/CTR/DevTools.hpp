@@ -86,7 +86,7 @@ void SetFtp(bool on);
 extern bool heapCheck;
 void HeapCheck(const char *where);
 // A question of BottomUi::Ask (before the FTP server runs) driven from a file, for the emulator: debug/ask.txt holding
-// "s" saves the bottom screen as debug/shot-bottom.raw (tools/shot.sh's format), "1" / "0" answers. -1: nothing asked.
+// "s" / "t" saves the bottom / top screen as debug/shot-bottom.raw / shot-top.raw (tools/shot.sh's format), "1" / "0" answers. -1: nothing asked.
 int AskFromFile();
 // The same for the loading box (the boot has no FTP yet): debug/shot.txt holding "top" or "bottom" saves that screen
 // as debug/shot-<which>.raw. Checked at most twice a second.

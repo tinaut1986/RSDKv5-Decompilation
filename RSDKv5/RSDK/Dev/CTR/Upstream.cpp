@@ -33,6 +33,80 @@ bool Port::UpstreamFallback(const char *path, const char *name, char *out, unsig
     return true;
 }
 
+// ---------------------------------------------------------------- missing game data (#14)
+
+static bool HasPackExtension(const char *name)
+{
+    for (const char *p = name; *p; ++p)
+        if (*p == '.' && !strncasecmp(p, ".rsdk", 5))
+            return true;
+    return false;
+}
+
+// A file with ".rsdk" in its name other than Data.rsdk (archive copies are named "Data Mania Plus.rsdk"; Windows hides
+// the ".txt" of "Data.rsdk.txt"): its name in `out`, cut to fit the question box.
+static bool FindOtherPack(const char *dir, char *out, unsigned cap)
+{
+    DIR *d = opendir(dir);
+    if (!d)
+        return false;
+    bool found = false;
+    struct dirent *e;
+    while (!found && (e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.' || !HasPackExtension(e->d_name) || !strcasecmp(e->d_name, "Data.rsdk"))
+            continue;
+        char path[0x200];
+        snprintf(path, sizeof(path), "%s%s", dir, e->d_name);
+        found = IsFile(path);
+        if (found && strlen(e->d_name) > 28)
+            snprintf(out, cap, "%.24s...", e->d_name);
+        else if (found)
+            snprintf(out, cap, "%s", e->d_name);
+    }
+    closedir(d);
+    return found;
+}
+
+static bool IsDataPack(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return false;
+    char sig[4] = {};
+    const bool ok = fread(sig, 1, 4, f) == 4 && !memcmp(sig, "RSDK", 4);
+    fclose(f);
+    return ok;
+}
+
+bool Port::MissingDataStop()
+{
+    char ours[0x200], path[0x200];
+    snprintf(ours, sizeof(ours), "%sData.romfs", SKU::userFileDir);
+    if (IsFile(ours))
+        return false; // MountRomFS takes it before any pack
+    snprintf(ours, sizeof(ours), "%sData.rsdk", SKU::userFileDir);
+    const bool found = UpstreamFallback(ours, "Data.rsdk", path, sizeof(path));
+    if (found && IsDataPack(path))
+        return false;
+
+    const char *title = Tr("GAME DATA NOT FOUND");
+    char first[0x280];
+    snprintf(first, sizeof(first), "%s", Tr("COPY DATA.RSDK FROM YOUR SONIC MANIA (PC) TO THE SD CARD:"));
+    char other[0x40];
+    if (found) {
+        title = Tr("GAME DATA NOT VALID");
+        snprintf(first, sizeof(first), "%s", Tr("THE DATA.RSDK ON THE SD CARD IS NOT A SONIC MANIA DATA FILE. COPY IT AGAIN:"));
+    }
+    else if (FindOtherPack(SKU::userFileDir, other, sizeof(other)) || FindOtherPack(UPSTREAM_DIR, other, sizeof(other))) {
+        snprintf(first, sizeof(first), Tr("THE SD CARD HAS %s. RENAME AND MOVE IT TO:"), other);
+    }
+    DEV_LOG("game data: %s (%s: %s)", found ? "not a data pack" : "missing", path, first);
+    const char *where = "/3DS/SONIC MANIA 3DS/DATA.RSDK";
+    const char *lines[3] = { first, where, Tr("THEN OPEN THE GAME AGAIN.") };
+    BottomUi::Ask(title, lines, 3, Tr("EXIT"), NULL, where);
+    return true;
+}
+
 // ---------------------------------------------------------------- save import (../zelda-tmc-3ds upstream_import_3ds.c)
 
 static const char *kMarker = "save-import.txt";

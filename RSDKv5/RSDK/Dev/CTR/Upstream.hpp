@@ -22,6 +22,11 @@ bool UpstreamFallback(const char *path, const char *name, char *out, unsigned ca
 // (on the bottom screen) whether to copy them here; the answer is kept in save-import.txt.
 void OfferSaveImport();
 
+// At boot, right after the bottom screen is up: with no Data.rsdk (nor Data.romfs) in either folder, or one that is not
+// a data pack, the engine stopped on a black top screen and a bottom screen that answered nothing (#14). Both screens
+// say where the file goes (and name a .rsdk found under another name), and the game does not start (true: leave).
+bool MissingDataStop();
+
 } // namespace Port
 } // namespace RSDK
 

@@ -33,7 +33,8 @@ void Update();
 void DrawStats(unsigned *count, float *ms);
 // A question over the whole bottom screen, before the game runs (the save import): a title, lines of text and one or
 // two buttons (A / B or a touch), in its own loop. 1: the first button, 0: the second, -1: the app is closing.
-int Ask(const char *title, const char *const *lines, int lineCount, const char *yes, const char *no);
+// The top screen shows the title and, when given, `topLine` under it.
+int Ask(const char *title, const char *const *lines, int lineCount, const char *yes, const char *no, const char *topLine = NULL);
 // After the engine's init: loads the game's HUD, ring and item box sprites for the whole game and copies them into
 // the bottom screen's art, so the GAME tab draws the game's labels and icons from the start.
 void LoadArtAtBoot();

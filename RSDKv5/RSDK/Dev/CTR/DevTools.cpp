@@ -2003,9 +2003,9 @@ int DevTools::AskFromFile()
     const int c = fgetc(f);
     fclose(f);
     remove(path);
-    if (c == 's') {
-        snprintf(path, sizeof(path), "%s/shot-bottom.raw", kDir);
-        WriteShot(2, path);
+    if (c == 's' || c == 't') {
+        snprintf(path, sizeof(path), "%s/shot-%s.raw", kDir, c == 's' ? "bottom" : "top");
+        WriteShot(c == 's' ? 2 : 1, path);
         return -1;
     }
     return c == '1' ? 1 : c == '0' ? 0 : -1;
