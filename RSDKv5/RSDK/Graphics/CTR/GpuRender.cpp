@@ -626,6 +626,17 @@ void EvictTiles()
     ++sStats.tileEvictions;
 }
 
+// A tile whose palette group changed after `stamp` still has its picture if none of the colours it uses did (Press Garden
+// cycles 232-239 each frame: groups are 8 colours, most tiles use only some of them).
+bool TileColorsChanged(unsigned bank, unsigned id, uint32 stamp)
+{
+    const uint8 *px = &tilesetPixels[TILE_DATASIZE * id];
+    for (unsigned i = 0; i < TILE_DATASIZE; ++i)
+        if (px[i] && sColorGen[bank][px[i]] > stamp)
+            return true;
+    return false;
+}
+
 // Atlas cell of a tile with the palette bank applied; queues its conversion when it is new or stale.
 int EnsureTile(unsigned id, unsigned bank)
 {
@@ -651,7 +662,7 @@ int EnsureTile(unsigned id, unsigned bank)
         return cell;
     // Unchanged colours: the copy is as good as one made now, so it takes this generation and the tile's other
     // uses this frame (the same water tile on many lines) stop at the test above.
-    if (stamp && !GroupsChanged(bank, sTileGroups[id], stamp)) {
+    if (stamp && (!GroupsChanged(bank, sTileGroups[id], stamp) || !TileColorsChanged(bank, id, stamp))) {
         sTileStamp[bank][id] = sGen;
         return cell;
     }
