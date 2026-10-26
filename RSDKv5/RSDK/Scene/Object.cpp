@@ -115,6 +115,12 @@ void RSDK::RegisterStaticVariables(void **staticVars, const char *name, uint32 c
 
 inline void ReadInStaticVariable(StaticVarRef* varRef, uint8_t* ptr) {}
 
+// The cached static files are packed byte after byte, so their words sit at any address: read them a byte at a time.
+// (The word loads read them rotated, as the ARM11 does unaligned: counts came out huge, the values were skipped, and
+// tables such as the Blue Spheres rings' scales stayed zero: no rings.)
+static inline uint32 CacheU32(const uint8_t *p) { return (uint32)p[0] | ((uint32)p[1] << 8) | ((uint32)p[2] << 16) | ((uint32)p[3] << 24); }
+static inline uint16 CacheU16(const uint8_t *p) { return (uint16)(p[0] | (p[1] << 8)); }
+
 void RSDK::LoadStaticVariables(uint8 *classPtr, uint32 *hash, int32 readOffset)
 {
     char fullFilePath[0x40];
@@ -134,13 +140,14 @@ void RSDK::LoadStaticVariables(uint8 *classPtr, uint32 *hash, int32 readOffset)
     //InitFileInfo(&info);
 
     // TODO: add file reading support back in at some point
-    StaticVarRef* varRef;
+    StaticVarRef* varRef = NULL;
     GetCachedStaticVar((char*) classHash, &varRef);
     
     if (varRef) {
         //uint32 sig = ReadInt32(&info, false);
         uint8_t* ptr = varRef->ref;
-        volatile uint32 sig = *((uint32_t*) ptr);
+        volatile uint32 sig = CacheU32(ptr);
+
         ptr += 4;
 
         if (sig != RSDK_SIGNATURE_OBJ) {
@@ -150,24 +157,27 @@ void RSDK::LoadStaticVariables(uint8 *classPtr, uint32 *hash, int32 readOffset)
 
         int32 dataPos = 4;
         int32 cachePos = 4;
-        while (dataPos < varRef->size) {
+        // Until the file's end (it compared the object's offset with the file's size: a class whose variables reach past
+        // the file's length stopped early, e.g. BSS_Collectable after its 24 animators, before the rings' scale tables)
+        while (cachePos < varRef->size) {
             //int32 type      = ReadInt8(&info);
             //int32 arraySize = ReadInt32(&info, false);
             int32 type = *((uint8_t*) ptr);
             ptr++;
             cachePos++;
 
-            int32 arraySize = *((uint32_t*) ptr);
+            int32 arraySize = (int32)CacheU32(ptr);
             ptr += 4;
             cachePos += 4;
 
             bool32 hasValues = (type & 0x80) != 0;
+
             type &= 0x7F;
 
             int32 aligned = 0;
             if (hasValues) {
                 //uint32 count = ReadInt32(&info, false);
-                uint32 count = *((uint32_t*) ptr);
+                uint32 count = CacheU32(ptr);
                 ptr += 4;
                 cachePos += 4;
 
@@ -208,7 +218,7 @@ void RSDK::LoadStaticVariables(uint8 *classPtr, uint32 *hash, int32 readOffset)
                             for (int32 i = 0; i < count * sizeof(int16); i += sizeof(int16)) {
 #if !RETRO_USE_ORIGINAL_CODE
                                 //*(int16 *)&classPtr[dataPos + i] = ReadInt16(&info);
-                                *(int16*) &classPtr[dataPos + i] = *((int16*) ptr);
+                                *(int16*) &classPtr[dataPos + i] = (int16)CacheU16(ptr);
                                 ptr += 2;
                                 cachePos += 2;
 #else
@@ -237,7 +247,7 @@ void RSDK::LoadStaticVariables(uint8 *classPtr, uint32 *hash, int32 readOffset)
                             for (int32 i = 0; i < count * sizeof(int32); i += sizeof(int32)) {
 #if !RETRO_USE_ORIGINAL_CODE
                                 //*(int32 *)&classPtr[dataPos + i] = ReadInt32(&info, false);
-                                *(int32*) &classPtr[dataPos + i] = *((int32*) ptr);
+                                *(int32*) &classPtr[dataPos + i] = (int32)CacheU32(ptr);
                                 ptr += 4;
                                 cachePos += 4;
 #else
@@ -249,8 +259,8 @@ void RSDK::LoadStaticVariables(uint8 *classPtr, uint32 *hash, int32 readOffset)
                         }
                         else {
                             //info.readPos += count * sizeof(int32);
-                            cachePos += count * sizeof(int16);
-                            ptr += count * sizeof(int16);
+                            cachePos += count * sizeof(int32);
+                            ptr += count * sizeof(int32);
                         }
 
                         dataPos += sizeof(int32) * count;
@@ -265,7 +275,7 @@ void RSDK::LoadStaticVariables(uint8 *classPtr, uint32 *hash, int32 readOffset)
                             for (int32 i = 0; i < count * sizeof(bool32); i += sizeof(bool32)) {
 #if !RETRO_USE_ORIGINAL_CODE
                                 //*(bool32 *)&classPtr[dataPos + i] = (bool32)ReadInt32(&info, false);
-                                *(bool32*) &classPtr[dataPos + i] = *((bool32*) ptr);
+                                *(bool32*) &classPtr[dataPos + i] = (bool32)CacheU32(ptr);
                                 ptr += 4;
                                 cachePos += 4;
 #else

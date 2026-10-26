@@ -996,6 +996,29 @@ static void HandleSession(int ctrl)
                 // The last GPU frame's atlas conversions: which ones really changed colour
                 Reply(s, "200 %s", GpuRender::ConvReport());
             }
+            else if (!strcmp(sub, "SVAR") && path) {
+                // SITE SVAR <Class> <byte offset> [n]: n int32 of a stage object's static variables (debug)
+                char name[48];
+                int off = 0, n = 8;
+                name[0] = 0;
+                sscanf(path, "%47s %d %d", name, &off, &n);
+                n = n < 1 ? 1 : n > 32 ? 32 : n;
+                uint32 hash[4];
+                GEN_HASH_MD5(name, hash);
+                const uint8 *vars = NULL;
+                for (int i = 0; i < sceneInfo.classCount && !vars; ++i)
+                    if (HASH_MATCH_MD5(objectClassList[stageObjectIDs[i]].hash, hash) && objectClassList[stageObjectIDs[i]].staticVars)
+                        vars = (const uint8 *)*objectClassList[stageObjectIDs[i]].staticVars;
+                if (!vars)
+                    Reply(s, "550 no %s in this scene", name);
+                else {
+                    char line[400];
+                    int len = 0;
+                    for (int k = 0; k < n && len < (int)sizeof(line) - 16; ++k)
+                        len += snprintf(line + len, sizeof(line) - len, " %ld", (long)*(const int32 *)(vars + off + k * 4));
+                    Reply(s, "200 %s +%d:%s", name, off, line);
+                }
+            }
             else if (!strcmp(sub, "REFUSED")) {
                 // The last command the GPU executor refused (SITE STATE's line is cut by the FTP line limit)
                 Reply(s, "200 %s | why %s | roto to software: runs %u quads %u, soft layers %u, roto texture %s, vram free %u KB", GpuRender::LastRefusal(), sLastWhy ? sLastWhy : "-", GpuRender::GetStats().rotoSoftRuns, GpuRender::GetStats().rotoSoftQuads, GpuRender::GetStats().softLayers, GpuRender::RotoTexWhy(), (unsigned)(vramSpaceFree() >> 10));
