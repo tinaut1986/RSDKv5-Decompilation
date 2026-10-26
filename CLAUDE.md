@@ -35,6 +35,10 @@ goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`). Without
 (`Dev/CTR/Upstream.cpp`; the answer is kept in `save-import.txt`). In the emulator the question is answered from a file:
 `debug/ask.txt` with `s` / `t` (bottom / top screen to `debug/shot-bottom.raw` / `shot-top.raw`), `1` or `0` (`DevTools::AskFromFile`).
 
+The sound needs the console's DSP firmware (`sdmc:/3ds/dspfirm.cdc`), which is Nintendo's: never ship it. When `ndspInit` fails
+at boot the game offers to extract it from the console's own Home Menu (`Port::EnsureDspFirmware` in `Dev/CTR/Upstream.cpp`,
+`Dev/CTR/DspFirm.c`, copied from `../sm-3ds`; host test `tools/dsp-firm-test/run.sh`). To test: rename the file on the SD.
+
 ## Build
 
 ```sh
@@ -69,7 +73,7 @@ goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`). Without
   history and we do not use it.
 - Releases: `tools/version.sh` gives the version from git; a tag `vX.Y.Z` runs `.github/workflows/build-release.yml`, which
   builds the CIA and publishes it (beta = pre-release, built with the dev tools, off a `release/*` branch; stable on
-  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.3.1` since 2026-10-26, after the `v0.3.0` stable) and the open feature branches are on `origin`.
+  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.3.2` since 2026-10-26, after the `v0.3.1` stable) and the open feature branches are on `origin`.
 - Commit only when the owner asks; the owner asked for commits at the end of each long task.
 - **Issues** are enabled on `origin` (2026-10-22): pending work, bugs and the owner's requests go there (English, label
   `bug`/`enhancement`, sections Seen / Likely cause / To try / To check, as in sm-3ds); docs keep the technical record.
