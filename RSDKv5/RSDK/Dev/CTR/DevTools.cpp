@@ -462,17 +462,24 @@ static void FormatListLine(char *out, unsigned cap, const char *name, const stru
     snprintf(out, cap, "%s 1 3ds 3ds %12llu Jan  1 00:00 %s\r\n", dir ? "drwxrwxrwx" : "-rw-rw-rw-", (unsigned long long)st->st_size, name);
 }
 
+// The listing is read with FSDIR_Read, which gives each entry's size with its name: a stat() per entry opened the file
+// and walked the directory again, and the debug folder's 400-odd captures and perf files took a minute to list (the
+// server takes one session at a time: STATE, shots and tools/capture.sh all timed out behind it). The lines go out in
+// FTP_IO_SIZE blocks, not one send a line.
 static void CmdList(Session *s, const char *arg, int kind /* 0 LIST, 1 NLST, 2 MLSD */)
 {
     if (arg && arg[0] == '-') {
         const char *space = strchr(arg, ' ');
         arg               = space ? space + 1 : "";
     }
-    char vpath[FTP_PATH_MAX], rpath[FTP_PATH_MAX + 8];
+    char vpath[FTP_PATH_MAX];
     ResolvePath(s, arg, vpath, sizeof(vpath));
-    RealPath(vpath, rpath, sizeof(rpath));
-    DIR *dir = Allowed(vpath) ? opendir(rpath) : NULL;
-    if (!dir) {
+    FS_Archive sdmc = 0;
+    Handle dir      = 0;
+    const bool open = Allowed(vpath) && R_SUCCEEDED(FSUSER_OpenArchive(&sdmc, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, "")));
+    if (!open || R_FAILED(FSUSER_OpenDirectory(&dir, sdmc, fsMakePath(PATH_ASCII, vpath)))) {
+        if (open)
+            FSUSER_CloseArchive(sdmc);
         ClosePasv(s);
         Reply(s, "550 No such directory.");
         return;
@@ -480,32 +487,43 @@ static void CmdList(Session *s, const char *arg, int kind /* 0 LIST, 1 NLST, 2 M
     Reply(s, "150 Listing.");
     int data = AcceptData(s);
     if (data < 0) {
-        closedir(dir);
+        FSDIR_Close(dir);
+        FSUSER_CloseArchive(sdmc);
         Reply(s, "425 No data connection.");
         return;
     }
-    bool ok = true;
-    struct dirent *e;
-    while (ok && (e = readdir(dir)) != NULL) {
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
-            continue;
-        char line[FTP_PATH_MAX + 96];
-        if (kind == 1) {
-            snprintf(line, sizeof(line), "%s\r\n", e->d_name);
-        }
-        else {
-            char full[FTP_PATH_MAX * 2];
-            struct stat st;
-            snprintf(full, sizeof(full), "%s/%s", rpath, e->d_name);
-            if (stat(full, &st) != 0)
+    static FS_DirectoryEntry entries[32];
+    bool ok     = true;
+    size_t used = 0;
+    u32 count   = 0;
+    while (ok && R_SUCCEEDED(FSDIR_Read(dir, &count, 32, entries)) && count > 0) {
+        for (u32 i = 0; i < count && ok; ++i) {
+            char name[FTP_PATH_MAX];
+            const ssize_t n = utf16_to_utf8((uint8_t *)name, entries[i].name, sizeof(name) - 1);
+            name[n > 0 ? n : 0] = 0;
+            char line[FTP_PATH_MAX + 96];
+            if (kind == 1)
+                snprintf(line, sizeof(line), "%s\r\n", name);
+            else {
+                struct stat st;
                 memset(&st, 0, sizeof(st));
-            if (e->d_type == DT_DIR)
-                st.st_mode = S_IFDIR;
-            FormatListLine(line, sizeof(line), e->d_name, &st, kind == 2);
+                st.st_mode = (entries[i].attributes & FS_ATTRIBUTE_DIRECTORY) ? S_IFDIR : S_IFREG;
+                st.st_size = (off_t)entries[i].fileSize;
+                FormatListLine(line, sizeof(line), name, &st, kind == 2);
+            }
+            const size_t len = strlen(line);
+            if (used + len > FTP_IO_SIZE) {
+                ok   = SendAll(data, sIo, used);
+                used = 0;
+            }
+            memcpy(sIo + used, line, len);
+            used += len;
         }
-        ok = SendAll(data, line, strlen(line));
     }
-    closedir(dir);
+    if (ok && used)
+        ok = SendAll(data, sIo, used);
+    FSDIR_Close(dir);
+    FSUSER_CloseArchive(sdmc);
     CloseSocket(&data);
     Reply(s, ok ? "226 Done." : "426 Transfer aborted.");
 }
