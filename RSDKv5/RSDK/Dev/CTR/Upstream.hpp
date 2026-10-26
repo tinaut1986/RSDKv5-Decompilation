@@ -27,6 +27,11 @@ void OfferSaveImport();
 // say where the file goes (and name a .rsdk found under another name), and the game does not start (true: leave).
 bool MissingDataStop();
 
+// At boot, once the bottom screen is up: the sound needs the console's DSP firmware (sdmc:/3ds/dspfirm.cdc). When the audio
+// could not start for want of it, says so and offers to extract it from the Home Menu (EXTRACT / NO SOUND); the game runs
+// silent without it. Never ships Nintendo's file: it is copied from the player's own console.
+void EnsureDspFirmware();
+
 } // namespace Port
 } // namespace RSDK
 

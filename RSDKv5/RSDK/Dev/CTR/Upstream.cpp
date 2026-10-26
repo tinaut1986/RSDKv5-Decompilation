@@ -2,6 +2,7 @@
 #include "RSDK/Dev/CTR/Upstream.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/PortText.hpp"
+#include "RSDK/Dev/CTR/DspFirm.h"
 
 #if RETRO_PLATFORM == RETRO_3DS
 
@@ -212,6 +213,38 @@ void Port::OfferSaveImport()
     WriteMarker(ok ? "copied" : "failed");
     DEV_LOG("save import: %d files, %s", count, ok ? "copied" : "FAILED");
     BottomUi::Ask(Tr(ok ? "SAVES COPIED" : "COPY FAILED"), NULL, 0, "OK", NULL);
+}
+
+// ---------------------------------------------------------------- DSP firmware (../sm-3ds dsp_firm_ui.c)
+
+extern Result ctrNdspRc;
+
+void Port::EnsureDspFirmware()
+{
+    if (R_SUCCEEDED(ctrNdspRc) || !BottomUi::Ready())
+        return;
+    const DspFirmStatus st = DspFirm_Check(DSPFIRM_PATH);
+    DEV_LOG("dsp firmware: ndspInit %08lX, file %s", (unsigned long)ctrNdspRc,
+            st == DSPFIRM_OK ? "valid" : st == DSPFIRM_MISSING ? "missing" : "damaged");
+    if (st == DSPFIRM_OK) // something else failed: nothing to offer
+        return;
+
+    const char *lines[] = { Tr(st == DSPFIRM_MISSING ? "THE DSP FIRMWARE IS NOT ON THE SD CARD." : "THE DSP FIRMWARE ON THE SD CARD IS DAMAGED."),
+                            Tr("WITHOUT IT THE GAME RUNS, BUT SILENT. TO PLAY WITH SOUND, EXTRACT IT NOW.") };
+    if (BottomUi::Ask(Tr("SOUND FIRMWARE NEEDED"), lines, 2, Tr("EXTRACT"), Tr("NO SOUND")) != 1)
+        return;
+
+    int32_t detail = 0;
+    const DspFirmExtractResult r = DspFirm_Extract(DSPFIRM_PATH, &detail);
+    DEV_LOG("dsp firmware: extraction %d (%s), detail %08lX | %s", (int)r, DspFirm_ExtractText(r), (unsigned long)detail, g_dspfirm_trace);
+    if (r == DSPFIRM_EX_OK && AudioDevice::RetryDsp()) {
+        BottomUi::Ask(Tr("DONE. THE SOUND WILL WORK."), NULL, 0, "OK", NULL);
+        return;
+    }
+    char code[48];
+    snprintf(code, sizeof(code), "ERROR %d / %08lX", (int)r, (unsigned long)detail);
+    const char *failed[] = { code };
+    BottomUi::Ask(Tr("COULD NOT EXTRACT IT."), failed, 1, "OK", NULL);
 }
 
 #endif
