@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/Port.hpp"
+#include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/Updater.hpp"
 #include "RSDK/Dev/CTR/PortText.hpp"
@@ -277,6 +278,8 @@ bool Port::FrameEnd()
     }
 #if !MANIA_DEV_TOOLS
     BottomUi::Update(); // the dev tools call it from their own frame end
+    if (DevFtp::Tick()) // an install over the install-only FTP: relaunch into it
+        return true;
 #endif
     if (Updater_ShouldClose()) // a 3DSX update: back to the Homebrew Launcher, which starts the new file
         return true;

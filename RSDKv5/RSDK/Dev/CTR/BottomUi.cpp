@@ -2069,6 +2069,20 @@ static int PickInput(u32 held, u32 down, const touchPosition &t)
 
 #endif // MANIA_DEV_TOOLS
 
+// The install-only FTP server of a production build (dev-ftp.txt, DevFtp): a strip over every tab with its address and
+// a CANCEL that stops it until the game is opened again.
+enum { DEVFTP_X = 236, DEVFTP_Y = 208, DEVFTP_W = 78, DEVFTP_H = 28 };
+
+static void DrawDevFtp()
+{
+    if (!DevFtp::InstallOnly())
+        return;
+    C2D_DrawRectSolid(0, DEVFTP_Y - 4, 0.76f, W, H - DEVFTP_Y + 4, C2D_Color32(0, 0, 0, 200));
+    Text("FTP (INSTALL ONLY)", 8, DEVFTP_Y, 0.42f, T().accent, 0, 0.78f);
+    Text(DevFtp::Address(), 8, DEVFTP_Y + 14, 0.42f, T().text, 0, 0.78f);
+    Button(DEVFTP_X, DEVFTP_Y, DEVFTP_W, DEVFTP_H - 4, "CANCEL", false, T().cellEdge, T().text, 0.78f);
+}
+
 static unsigned sDrawCount;
 static u64 sDrawTicks;
 
@@ -2117,15 +2131,14 @@ static void Draw()
     DrawTabBar();
     DrawAchToast();
     DrawUpdatePrompt();
-
-#if MANIA_DEV_TOOLS
+    DrawDevFtp();
 
     // An install in progress is a modal message: the screen is dimmed and a box with the step, a bar and the
     // percentage (or the seconds left before the restart) in it takes the middle.
     float progress;
     unsigned seconds;
     char title[48];
-    const int phase = DevTools::InstallNotice(title, sizeof(title), &progress, &seconds);
+    const int phase = DevFtp::InstallNotice(title, sizeof(title), &progress, &seconds);
     if (phase) {
         C2D_DrawRectSolid(0, 0, 0.8f, W, H, C2D_Color32(0, 0, 0, 170));
         const float bx = 30, by = 80, bw = W - 60, bh = 84;
@@ -2143,7 +2156,6 @@ static void Draw()
             snprintf(val, sizeof(val), "...");
         Text(val, W / 2.0f, py + 3, 0.55f, Rgb(255, 255, 255), C2D_AlignCenter, 0.95f);
     }
-#endif
 
     C3D_FrameEnd(0);
     sDrawTicks += svcGetSystemTick() - tDraw;
@@ -2209,11 +2221,13 @@ void BottomUi::DrawInTopFrame()
     // And the RINGS box while there are none, at each turn of its label's blink.
     if (!sReady || !(sTimeBox.shown || sRingsBox.shown) || Port::tab != TAB_GAME || UpdatePromptShown())
         return;
-#if MANIA_DEV_TOOLS
     float p;
     unsigned secs;
     char notice[8];
-    if (!DevTools::swBottomUi || DevTools::InstallNotice(notice, sizeof(notice), &p, &secs))
+    if (DevFtp::InstallNotice(notice, sizeof(notice), &p, &secs))
+        return;
+#if MANIA_DEV_TOOLS
+    if (!DevTools::swBottomUi)
         return;
 #endif
     const bool timeMoved = sTimeBox.shown && (sTimeBox.m != sceneInfo.minutes || sTimeBox.sec != sceneInfo.seconds || sTimeBox.ms != sceneInfo.milliseconds);
@@ -2535,6 +2549,20 @@ void BottomUi::Update()
         down |= KEY_TOUCH;
         held |= KEY_TOUCH;
     }
+#if !MANIA_DEV_TOOLS
+    // The install-only FTP strip's CANCEL takes its touch before the tabs (DrawDevFtp)
+    static bool devFtpSeen;
+    if (DevFtp::InstallOnly() != devFtpSeen) {
+        devFtpSeen = !devFtpSeen;
+        sDirty     = true;
+    }
+    if (devFtpSeen && (down & KEY_TOUCH) && Inside(t.px, t.py, DEVFTP_X, DEVFTP_Y, DEVFTP_W, DEVFTP_H)) {
+        DevFtp::Cancel();
+        sDirty = true;
+        down &= ~KEY_TOUCH;
+        held &= ~KEY_TOUCH;
+    }
+#endif
     // ACHIEVEMENTS handles its own touches (a drag scrolls, a release opens), except on the tab bar and under a prompt
     const bool achTab = Port::tab == TAB_ACH && !UpdatePromptShown() && !((down & KEY_TOUCH) && t.py < HEADER_H);
     const int achHit  = achTab ? AchInput(held, down, t) : -1;
@@ -2649,12 +2677,10 @@ void BottomUi::Update()
     const u64 now = svcGetSystemTick();
     // Quicker while something moves (an install, a download, the restart countdown), so the bar moves.
     bool busy = UpdatesBusy();
-#if MANIA_DEV_TOOLS
     float p;
     unsigned secs;
     char notice[8];
-    busy = busy || DevTools::InstallNotice(notice, sizeof(notice), &p, &secs) != 0;
-#endif
+    busy = busy || DevFtp::InstallNotice(notice, sizeof(notice), &p, &secs) != 0;
     if (sDirty || UpdatesChanged() || now - sLastDraw > (busy ? SYSCLOCK_ARM11 / 10 : SYSCLOCK_ARM11 / 4)) {
         Draw();
         sLastDraw = now;

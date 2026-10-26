@@ -13,6 +13,28 @@
 
 #include "RSDK/Dev/CTR/Port.hpp"
 
+#if RETRO_PLATFORM == RETRO_3DS
+namespace RSDK
+{
+// The FTP server, in every build. Dev builds run it in full (DevTools); a production build runs it install-only when
+// dev-ftp.txt is in sdmc:/3ds/Sonic Mania 3DS/ (any content): only /3ds/Sonic Mania 3DS/update can be listed, read or
+// written, and of the remote control only SITE INSTALL is left, so build_3ds.sh --install works on it too. The
+// bottom screen shows its address and a CANCEL, which stops it for the session. Players never see it.
+namespace DevFtp
+{
+// An install in progress, for the bottom screen: 0 none, 1 receiving, 2 installing, 3 restart countdown
+int InstallNotice(char *title, unsigned cap, float *progress, unsigned *secondsLeft);
+bool InstallOnly();     // serving in the install-only mode now
+const char *Address();  // "ip:port", or why it is not serving
+#if !MANIA_DEV_TOOLS
+bool Tick();            // main thread, every frame: starts it when dev-ftp.txt is there; true: relaunching
+void Cancel();
+void Shutdown();
+#endif
+} // namespace DevFtp
+} // namespace RSDK
+#endif
+
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
 
 namespace RSDK

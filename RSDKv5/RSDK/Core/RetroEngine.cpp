@@ -387,6 +387,8 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
     // Shutdown
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
     DevTools::Shutdown(); // the FTP thread ends before the services under it go
+#elif RETRO_PLATFORM == RETRO_3DS
+    DevFtp::Shutdown(); // the install-only FTP server of a production build (dev-ftp.txt)
 #endif
 #if RETRO_PLATFORM == RETRO_3DS
     Updater_Shutdown();
