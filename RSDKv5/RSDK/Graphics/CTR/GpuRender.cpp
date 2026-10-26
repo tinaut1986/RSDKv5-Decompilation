@@ -3083,13 +3083,15 @@ struct Strip {
     C3D_Tex tex;
     bool alloc;
     unsigned x0;               // map pixel column of the strip's column 0
+    unsigned tiles;            // the box's width in tiles: the strip's columns beyond it are never sampled
     uint32 layoutHash;         // the layout (and tileset epoch) the box was taken for
     uint32 have[STRIP_H];      // what each row holds (StripKey; 0: nothing)
     uint32 want[STRIP_H];      // what this frame's lines need
     uint16 row[STRIP_H];       // their map rows
     uint8 bank[STRIP_H];       // and banks
     bool dirty;                // rows to convert after FrameBegin
-    unsigned rowsUp;           // SITE REFUSED: rows converted at the last upload
+    unsigned rowsUp;           // SITE REFUSED: rows converted at the last upload, and its time (us) converting / copying
+    unsigned convUs, copyUs;
     uint32 lastUsed;           // sRotoFrame
 };
 Strip sStrips[STRIP_SLOTS];
@@ -3172,6 +3174,7 @@ bool EmitStripRoto(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, 
         }
         st->layer      = layer;
         st->x0         = (unsigned)tx0 * TILE_SIZE;
+        st->tiles      = (unsigned)(tx1 - tx0 + 1);
         st->layoutHash = layoutHash;
         memset(st->have, 0, sizeof(st->have));
     }
@@ -3210,7 +3213,7 @@ bool EmitStripRoto(TileLayer *layer, const ScanlineInfo *first, int x1, int x2, 
         const uint32 v   = (uint32)(y * 16 + 8); // the strip row's middle, 1/16 texel
         const int8 depth = feet > 0 ? RotoLineDepth(feet, dx, 0) : sDepth;
         for (int64 turn = FloorDiv(lo, period) - 1; turn <= FloorDiv(hi, period) + 1; ++turn) {
-            const int64 a = ((int64)st->x0 << 16) + turn * period, e = a + ((int64)STRIP_W << 16); // [a, e) in 16.16
+            const int64 a = ((int64)st->x0 << 16) + turn * period, e = a + ((int64)(st->tiles * TILE_SIZE) << 16); // [a, e) in 16.16
             if (e <= lo || a > hi)
                 continue;
             int64 c0, c1; // the pixels whose samples fall in [a, e)
@@ -3262,6 +3265,7 @@ void UploadStrips()
             continue;
         st.dirty = false;
         st.rowsUp = 0;
+        u64 tConv = 0, tCopy = 0;
         const TileLayer *layer = st.layer;
         const unsigned maskTX = layer->xsize - 1, maskTY = layer->ysize - 1, wShift = layer->widthShift;
         const unsigned blockBytes = STRIP_W * 8 * 2;
@@ -3274,6 +3278,7 @@ void UploadStrips()
             if (need) {
                 if (runStart < 0)
                     runStart = (int)br;
+                const u64 t0 = svcGetSystemTick();
                 for (unsigned y = br * 8; y < br * 8 + 8; ++y) {
                     if (!st.want[y]) { // no line there this frame: the copy overwrites it with whatever staging holds
                         st.have[y] = 0;
@@ -3282,27 +3287,39 @@ void UploadStrips()
                     const unsigned row = st.row[y], ty = (row >> 4) & maskTY;
                     const u16 *tex     = sTexPal[sBankMap[st.bank[y]]];
                     u16 *blkRow        = &staging[(br * (STRIP_W >> 3)) << 6];
-                    for (unsigned tx = 0; tx < STRIP_W / 16; ++tx) {
-                        const unsigned t = layer->layout[(((st.x0 >> 4) + tx) & maskTX) + (ty << wShift)] & 0xFFF;
-                        const uint8 *sp  = &tilesetPixels[TILE_DATASIZE * t + (row & 15) * 16];
-                        u16 *b           = blkRow + ((tx * 2) << 6) + my[y & 7];
-                        b[0] = tex[sp[0]], b[1] = tex[sp[1]], b[4] = tex[sp[2]], b[5] = tex[sp[3]];
-                        b[16] = tex[sp[4]], b[17] = tex[sp[5]], b[20] = tex[sp[6]], b[21] = tex[sp[7]];
-                        b += 64;
-                        b[0] = tex[sp[8]], b[1] = tex[sp[9]], b[4] = tex[sp[10]], b[5] = tex[sp[11]];
-                        b[16] = tex[sp[12]], b[17] = tex[sp[13]], b[20] = tex[sp[14]], b[21] = tex[sp[15]];
+                    const uint16 *lay  = &layer->layout[ty << wShift];
+                    // Only the box's tiles (the rest of the row is never sampled); texel pairs side by side in the
+                    // Morton order as one word each. (~20 ns a texel on the 2DS: ~10 ms for Pinball's 480 rows when
+                    // the camera moves fast. Prefetching the tiles' pixels or writing whole 8x8 blocks did not help.)
+                    for (unsigned tx = 0; tx < st.tiles; ++tx) {
+                        const uint16 lt = lay[((st.x0 >> 4) + tx) & maskTX];
+                        uint32 *b       = (uint32 *)(blkRow + ((tx * 2) << 6) + my[y & 7]);
+                        if (lt == 0xFFFF) { // an empty tile (tile 0xFFF, transparent as the software has it)
+                            b[0] = b[2] = b[8] = b[10] = 0;
+                            b[32] = b[34] = b[40] = b[42] = 0;
+                            continue;
+                        }
+                        const uint8 *sp = &tilesetPixels[TILE_DATASIZE * (lt & 0xFFF) + (row & 15) * 16];
+                        b[0]  = tex[sp[0]] | (uint32)tex[sp[1]] << 16, b[2] = tex[sp[2]] | (uint32)tex[sp[3]] << 16;
+                        b[8]  = tex[sp[4]] | (uint32)tex[sp[5]] << 16, b[10] = tex[sp[6]] | (uint32)tex[sp[7]] << 16;
+                        b[32] = tex[sp[8]] | (uint32)tex[sp[9]] << 16, b[34] = tex[sp[10]] | (uint32)tex[sp[11]] << 16;
+                        b[40] = tex[sp[12]] | (uint32)tex[sp[13]] << 16, b[42] = tex[sp[14]] | (uint32)tex[sp[15]] << 16;
                     }
                     st.have[y] = st.want[y];
                     ++st.rowsUp;
                 }
+                tConv += svcGetSystemTick() - t0;
             }
             else if (runStart >= 0) {
                 const u32 off = (u32)runStart * blockBytes, bytes = (br - (u32)runStart) * blockBytes;
+                const u64 t0 = svcGetSystemTick();
                 CopyToVram((u8 *)staging + off, (u8 *)st.tex.data + off, bytes);
+                tCopy += svcGetSystemTick() - t0;
                 runStart = -1;
             }
         }
         memset(st.want, 0, sizeof(st.want));
+        st.convUs = (unsigned)(tConv / (SYSCLOCK_ARM11 / 1000000)), st.copyUs = (unsigned)(tCopy / (SYSCLOCK_ARM11 / 1000000));
     }
 }
 
@@ -3597,11 +3614,11 @@ int GpuRender::floorFogPercent  = 60;
 unsigned GpuRender::gpuSkip    = 0;
 const char *GpuRender::RotoTexWhy()
 {
-    static char buf[200];
+    static char buf[240];
     int n = snprintf(buf, sizeof(buf), "%s, floor %s, big %s", sRotoTexWhy, sFloorWhy, sBigWhy);
     for (const Strip &st : sStrips)
         if (st.layer && n < (int)sizeof(buf))
-            n += snprintf(buf + n, sizeof(buf) - n, " | strip L%d x0 %u rows %u", (int)(st.layer - tileLayers), st.x0, st.rowsUp);
+            n += snprintf(buf + n, sizeof(buf) - n, " | strip L%d rows %u conv %u us copy %u us", (int)(st.layer - tileLayers), st.rowsUp, st.convUs, st.copyUs);
     return buf;
 }
 const char *GpuRender::DepthSummary() { return sDepthLast[0] ? sDepthLast : "- (no 3D frame yet: slider up or SET force3d 1)"; }
