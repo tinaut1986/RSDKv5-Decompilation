@@ -104,7 +104,8 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         const bool renderOk = RenderDevice::Init();
         DEV_LOG("RenderDevice::Init (early) done, ok=%d", (int)renderOk);
         BottomUi::Init();
-        if (Port::LowMemoryStop()) { // a smaller memory mode than the RSF's: power the console off and on (#18)
+        // A smaller memory mode than the RSF's: power the console off and on (#18); no game data: where it goes (#14)
+        if (Port::LowMemoryStop() || Port::MissingDataStop()) {
             // The end of the main loop's teardown for what is up by now (RenderDevice::Init started the audio too):
             // leaving with them running crashed in the audio thread (ndspSync), as in ../legend-of-doom-3ds.
             ReleaseInputDevices();
