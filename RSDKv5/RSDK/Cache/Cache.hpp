@@ -33,11 +33,11 @@ namespace RSDK {
           hash[2] == staticVarRefs[i].hash[2] &&
           hash[3] == staticVarRefs[i].hash[3]) {
         *ptr = &staticVarRefs[i];
-        break;
+        return;
       }
     }
 
-    ptr = NULL;
+    *ptr = NULL; // not cached (it was left unset: the caller read whatever its stack held)
   }
 
   void InitCache(uint8_t cacheFlags);

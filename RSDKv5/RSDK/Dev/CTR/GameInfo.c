@@ -35,6 +35,34 @@ void PortGame_GetInfo(PortGameInfo *out)
     }
 }
 
+void PortGame_Immortal(int on)
+{
+    static int wasOn;
+    if (!Player || !Player->classID) { // no Player here (menus, Special Stage, Blue Spheres)
+        wasOn = 0;
+        return;
+    }
+    EntityPlayer *p = RSDK_GET_ENTITY(SLOT_PLAYER1, Player);
+    if (p->classID != Player->classID)
+        return;
+    if (on) {
+        if (p->invincibleTimer < 600) { // topped up (the item box gives 1260)
+            p->invincibleTimer = 1260;
+            if (InvincibleStars && InvincibleStars->classID && p->superState == SUPERSTATE_NONE) {
+                EntityInvincibleStars *stars = RSDK_GET_ENTITY(Player->playerCount + RSDK.GetEntitySlot(p), InvincibleStars);
+                if (stars->classID != InvincibleStars->classID)
+                    RSDK.ResetEntity(stars, InvincibleStars->classID, p);
+            }
+        }
+        wasOn = 1;
+    }
+    else if (wasOn) {
+        if (p->invincibleTimer > 1)
+            p->invincibleTimer = 1;
+        wasOn = 0;
+    }
+}
+
 // One bit per entity slot: that slot's box was already reported (or found open). Cleared again when the slot holds a
 // closed box, so a box restored by a checkpoint counts anew when it is opened again.
 static uint8 sBoxKnown[ENTITY_COUNT / 8 + 1];

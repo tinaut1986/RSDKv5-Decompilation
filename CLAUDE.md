@@ -33,7 +33,7 @@ Game data is **never committed**: `Data.rsdk` from the owner's Steam copy
 goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`). Without it there, the engine reads the original port's
 `/3ds/SonicMania/Data.rsdk` in place, and at the first boot it offers to copy that folder's saves (`*.bin`) into ours
 (`Dev/CTR/Upstream.cpp`; the answer is kept in `save-import.txt`). In the emulator the question is answered from a file:
-`debug/ask.txt` with `s` (bottom screen to `debug/shot-bottom.raw`), `1` or `0` (`DevTools::AskFromFile`).
+`debug/ask.txt` with `s` / `t` (bottom / top screen to `debug/shot-bottom.raw` / `shot-top.raw`), `1` or `0` (`DevTools::AskFromFile`).
 
 ## Build
 
@@ -69,7 +69,7 @@ goes to `sdmc:/3ds/Sonic Mania 3DS/` on the console (`UserStorage.cpp`). Without
   history and we do not use it.
 - Releases: `tools/version.sh` gives the version from git; a tag `vX.Y.Z` runs `.github/workflows/build-release.yml`, which
   builds the CIA and publishes it (beta = pre-release, built with the dev tools, off a `release/*` branch; stable on
-  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.2.4` since 2026-10-24, after the `v0.2.3` stable) and the open feature branches are on `origin`.
+  `main`). Notes for the updater: `docs/release-notes/vX.Y.Z.md` (see its README). The in-game updater reads them. `main`, the release branch (`release/v0.3.1` since 2026-10-26, after the `v0.3.0` stable) and the open feature branches are on `origin`.
 - Commit only when the owner asks; the owner asked for commits at the end of each long task.
 - **Issues** are enabled on `origin` (2026-10-22): pending work, bugs and the owner's requests go there (English, label
   `bug`/`enhancement`, sections Seen / Likely cause / To try / To check, as in sm-3ds); docs keep the technical record.
@@ -125,8 +125,8 @@ name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/lu
 `arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
 `crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).
 
-- The owner's consoles: an **Old 2DS** (Old 3DS CPU; 192.168.1.133 on 2026-10-24, .141 before) and a **New 3DS**
-  (192.168.1.139 on 2026-10-24; 3D screen: check stereo there). Both got the v0.2.2 stable that day (no FTP: FBI to
+- The owner's consoles: an **Old 2DS** (Old 3DS CPU; 192.168.1.139 on 2026-10-26, .133 on 2026-10-24) and a **New 3DS**
+  (192.168.1.133 on 2026-10-26, .139 on 2026-10-24; 3D screen: check stereo there). Both got the v0.2.2 stable that day (no FTP: FBI to
   put a dev build back): the bottom screen's DEBUG tab shows the IP. IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
 - **FRAME SKIP is on by default** (`Port::frameSkip = true` in the code; `port-settings.ini` overrides it): with it on, the
   `fps` of `SITE STATE` counts logic passes, not drawn frames. Turn it off (`SET frameskip 0`) before any measurement,
@@ -135,6 +135,11 @@ name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/lu
 - After the game freezes the console needs a manual power cycle; the first install of a build that cannot be
   installed over FTP (a bug in the installer) is manual: upload to `/cias/` and install with FBI.
 - `DEV_TOOLS=0 ./build_3ds.sh` builds without the dev tools (production).
+- **Production builds** have no FTP unless `dev-ftp.txt` (any content) is in `sdmc:/3ds/Sonic Mania 3DS/`: then an
+  install-only server starts once Wi-Fi is up (only `/3ds/Sonic Mania 3DS/update` reachable, of `SITE` only INSTALL), so
+  `--install` works over a production install too. The bottom screen shows `FTP (INSTALL ONLY)`, the address and a
+  CANCEL (off until the game is opened again). Create the file from a dev build:
+  `curl -T /dev/null "ftp://IP:5000/3ds/Sonic%20Mania%203DS/dev-ftp.txt"`; delete it to turn it off.
 - **No console at hand**: `tools/azahar.sh` runs the build in the owner's Azahar (Flatpak) and the same tools work with
   `-i 127.0.0.1` (`tools/site.sh -i 127.0.0.1 STATE`, `tools/shot.sh -i 127.0.0.1 top x.png`). Good for pictures, crashes
   and libctru panics (PC/LR in Azahar's log, resolve with addr2line); useless for timings; it does not reproduce the

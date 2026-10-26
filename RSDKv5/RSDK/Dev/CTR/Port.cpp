@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/Port.hpp"
+#include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/Updater.hpp"
 #include "RSDK/Dev/CTR/PortText.hpp"
@@ -107,6 +108,34 @@ bool Port::DataHasPlus()
     if (!LoadFile(&info, "Data/Sprites/Players/Mighty.bin", FMODE_RB))
         return false;
     CloseFile(&info);
+    return true;
+}
+
+// Reopening the game from HOME keeps the smaller mode, only powering the console off and on restores it (seen in
+// ../legend-of-doom-3ds as a New 3DS in 64 MB instead of 124), and the engine runs out of memory at startup: a black
+// top screen and a bottom screen that answers nothing. Each model against its own mode: 124 MB on the New 3DS family,
+// 80 MB on the Old 3DS / 2DS. Dev builds show it once when force-low-memory.txt is in the data folder.
+bool Port::LowMemoryStop()
+{
+    bool isNew = false;
+    APT_CheckNew3DS(&isNew);
+    const u32 expected = (isNew ? 124u : 80u) << 20;
+    const u32 actual   = osGetMemRegionSize(MEMREGION_APPLICATION);
+    bool low           = actual < expected;
+#if MANIA_DEV_TOOLS
+    if (FILE *forced = fopen("sdmc:/3ds/Sonic Mania 3DS/force-low-memory.txt", "rb")) {
+        fclose(forced);
+        remove("sdmc:/3ds/Sonic Mania 3DS/force-low-memory.txt");
+        low = true;
+    }
+#endif
+    if (!low)
+        return false;
+    char mode[200];
+    snprintf(mode, sizeof(mode), Tr("THE CONSOLE STARTED THE GAME IN ITS %u MB MODE INSTEAD OF %u MB."), (unsigned)(actual >> 20),
+             (unsigned)(expected >> 20));
+    const char *lines[3] = { mode, Tr("TURN THE CONSOLE OFF AND ON, THEN OPEN THE GAME AGAIN."), "" };
+    BottomUi::Ask(Tr("NOT ENOUGH MEMORY"), lines, 3, Tr("EXIT"), NULL);
     return true;
 }
 
@@ -277,6 +306,8 @@ bool Port::FrameEnd()
     }
 #if !MANIA_DEV_TOOLS
     BottomUi::Update(); // the dev tools call it from their own frame end
+    if (DevFtp::Tick()) // an install over the install-only FTP: relaunch into it
+        return true;
 #endif
     if (Updater_ShouldClose()) // a 3DSX update: back to the Homebrew Launcher, which starts the new file
         return true;

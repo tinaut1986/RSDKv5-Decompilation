@@ -156,13 +156,13 @@ static void Panel(float x, float y, float z, float w, float h, u32 edge, u32 fil
 }
 
 // MANIA's background: the diagonal stripes of the game's menus, a shade lighter than the navy.
-static void DrawBackdrop(float top)
+static void DrawBackdrop(float top, float width = 320)
 {
     if (!T().multi) // the MANIA themes
         return;
     const u32 c = Hex(Mix(0x0A1438, 0x2A6CF0, 0.14f));
     const float h = 240 - top;
-    for (float k = -h; k < 320; k += 44)
+    for (float k = -h; k < width; k += 44)
     { // one band at 45 degrees, two triangles
         C2D_DrawTriangle(k, 240, c, k + 20, 240, c, k + h, top, c, 0.05f);
         C2D_DrawTriangle(k + 20, 240, c, k + h + 20, top, c, k + h, top, c, 0.05f);
@@ -270,12 +270,18 @@ static void ValFtp(char *o, unsigned c, bool *on)
 }
 // OFF -> ON; ON -> OFF; a failed start (FAILED) -> tries again
 static void TapFtp() { DevTools::SetFtp(!DevTools::FtpRunning()); }
+static void ValImmortal(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::immortal ? "ON" : "OFF"); *on = DevTools::immortal; }
+static void TapImmortal() { DevTools::immortal = !DevTools::immortal; }
+static int sPick; // the STAGES list: 0 closed, 1 the scene list's categories, 2 the scenes of one (below)
+static void ValStages(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", "LIST"); *on = sPick != 0; }
+static void TapStages() { sPick = 1; }
 
 static const Button kButtons[] = {
     { "RENDERER", TapRenderer, ValRenderer }, { "FRAME SKIP", TapFrameSkip, ValFrameSkip }, { "MAX SKIP", TapMaxSkip, ValMaxSkip },
     { "LOG MARK", TapMark, ValMark },         { "DRAW LISTS", TapDraw, ValDraw },            { "FLIP COPY", TapFlip, ValFlip },
     { "3D SCENES", TapGpu3D, ValGpu3D },      { "FORCE 3D", TapForce3D, ValForce3D },    { "DEPTH TINT", TapDepthTint, ValDepthTint },
-    { "CAPTURE", TapCapture, ValCapture },    { "FTP", TapFtp, ValFtp },
+    { "CAPTURE", TapCapture, ValCapture },    { "FTP", TapFtp, ValFtp },                 { "STAGES", TapStages, ValStages },
+    { "IMMORTAL", TapImmortal, ValImmortal },
 };
 
 #endif // MANIA_DEV_TOOLS
@@ -1035,7 +1041,9 @@ static void DrawGameTab()
     static const u32 kEmerald[7] = { Rgb(60, 200, 90),  Rgb(240, 210, 60), Rgb(70, 120, 240), Rgb(170, 90, 220),
                                      Rgb(190, 195, 205), Rgb(80, 220, 230), Rgb(235, 70, 70) };
     for (int i = 0; i < 7; ++i) {
-        const float ex = 84 + i * 26, ey = y + 8; // the save select's icons are 24 px wide at twice their size
+        // Right-aligned with the boxes above (the label is longer in some languages); the save select's icons are 24 px
+        // wide at twice their size
+        const float ex = W - 8 - 12 - (6 - i) * 26, ey = y + 8;
         const bool got = gi.emeralds > 0 && (gi.emeralds & (1 << i));
         if (sEmeraldReady) { // the save select's: each one, or the empty slot, centred on its place
             const ArtFrame &a = sEmerald[got ? i : 7];
@@ -1905,11 +1913,197 @@ static void DrawDebugTab()
     (void)line;
 }
 
+// ---------------------------------------------------------------- DEBUG > STAGES
+
+// Over the DEBUG tab: the scene list's categories (Mania Mode, Encore Mode, Special Stage...), two to a row; one
+// tapped shows its scenes, and a scene tapped is loaded (DevTools::LoadScene). The list scrolls by dragging; a tap
+// is a release without a drag, as in ACHIEVEMENTS. Hits: 200 BACK, 201 CLOSE, 300 + i a row.
+static int sPickCat;
+static float sPickScroll;
+static int sPickTouchX, sPickTouchY = -1, sPickTouchStart; // the touch as last held (a release reads no position)
+static bool sPickDrag;
+enum {
+    PICK_TOP = HEADER_H + 30,
+    PICK_ROW = 26,
+    PICK_GAP = 4,
+    PICK_W   = (W - 20 - PICK_GAP) / 2,
+    PICK_BTN_W = 70,
+};
+
+static int PickCount()
+{
+    if (sPick == 1)
+        return sceneInfo.categoryCount;
+    if (sPick == 2 && sPickCat < sceneInfo.categoryCount)
+        return sceneInfo.listCategory[sPickCat].sceneCount;
+    return 0;
+}
+
+static float PickMaxScroll()
+{
+    const float content = ((PickCount() + 1) / 2) * PICK_ROW + 4, view = H - PICK_TOP;
+    return content > view ? content - view : 0;
+}
+
+static void PickRowRect(int i, float *x, float *y)
+{
+    *x = 6 + (i % 2) * (PICK_W + PICK_GAP);
+    *y = PICK_TOP + 2 + (i / 2) * PICK_ROW - sPickScroll;
+}
+
+// A row's text: the category and its scene count, or the scene's name. The scene list names a zone's later acts
+// by the act alone ("2", "2M", "1K"): those get the name of the zone above them.
+static void PickLabel(int i, char *out, unsigned cap)
+{
+    if (sPick == 1) {
+        snprintf(out, cap, "%s (%d)", sceneInfo.listCategory[i].name, (int)sceneInfo.listCategory[i].sceneCount);
+        return;
+    }
+    const int first  = sceneInfo.listCategory[sPickCat].sceneOffsetStart;
+    const char *name = sceneInfo.listData[first + i].name;
+    if (!strchr(name, ' '))
+        for (int k = i - 1; k >= 0; --k) {
+            const char *zone = sceneInfo.listData[first + k].name;
+            const char *act  = strrchr(zone, ' ');
+            if (act) {
+                snprintf(out, cap, "%.*s %s", (int)(act - zone), zone, name);
+                return;
+            }
+        }
+    snprintf(out, cap, "%s", name);
+}
+
+static void DrawStagePicker()
+{
+    char line[96];
+    if (sPickScroll > PickMaxScroll())
+        sPickScroll = PickMaxScroll();
+    if (sPickScroll < 0)
+        sPickScroll = 0;
+    const int n = PickCount();
+    for (int i = 0; i < n; ++i) {
+        float x, y;
+        PickRowRect(i, &x, &y);
+        if (y + PICK_ROW < PICK_TOP || y > H)
+            continue;
+        const bool pressed = sPressed == 300 + i;
+        const bool here    = sPick == 2 && sceneInfo.activeCategory == sPickCat
+                          && sceneInfo.listPos == sceneInfo.listCategory[sPickCat].sceneOffsetStart + i;
+        Panel(x, y, 0.3f, PICK_W, PICK_ROW - 4, pressed ? T().pressEdge : CellEdge(i), pressed ? T().pressFill : CellFill(i), 1);
+        PickLabel(i, line, sizeof(line));
+        TextFit(line, x + 6, y + 3, 0.42f, here ? T().accent : T().text, PICK_W - 10, 0.33f);
+    }
+    if (PickMaxScroll() > 0) {
+        const float view = H - PICK_TOP, total = view + PickMaxScroll(), thumb = view * view / total;
+        C2D_DrawRectSolid(W - 7, PICK_TOP, 0.4f, 4, view, T().tabOffFill);
+        C2D_DrawRectSolid(W - 7, PICK_TOP + (view - thumb) * sPickScroll / PickMaxScroll(), 0.41f, 4, thumb,
+                          sPickDrag ? T().pressFill : T().cellLine);
+    }
+    // Header row, over what scrolls up past it: the title, BACK (in a category) and CLOSE
+    C2D_DrawRectSolid(0, HEADER_H, 0.5f, W, PICK_TOP - HEADER_H, T().bg);
+    Text(sPick == 1 ? "STAGES" : sceneInfo.listCategory[sPickCat].name, 10, HEADER_H + 7, 0.5f, T().accent, 0, 0.55f);
+    if (sPick == 2)
+        Button(W - 2 * PICK_BTN_W - 10, HEADER_H + 3, PICK_BTN_W, 24, "BACK", sPressed == 200, T().cellEdge, T().text, 0.55f);
+    Button(W - PICK_BTN_W - 6, HEADER_H + 3, PICK_BTN_W, 24, "CLOSE", sPressed == 201, T().cellEdge, T().text, 0.55f);
+}
+
+// Touch on the list; returns what is pressed, for the highlight.
+static int PickInput(u32 held, u32 down, const touchPosition &t)
+{
+    if (down & KEY_TOUCH) {
+        if (t.py < PICK_TOP) {
+            if (sPick == 2 && Inside(t.px, t.py, W - 2 * PICK_BTN_W - 10, HEADER_H + 3, PICK_BTN_W, 24)) {
+                sPick       = 1;
+                sPickScroll = 0;
+                sDirty      = true;
+                return 200;
+            }
+            if (Inside(t.px, t.py, W - PICK_BTN_W - 6, HEADER_H + 3, PICK_BTN_W, 24)) {
+                sPick  = 0;
+                sDirty = true;
+                return 201;
+            }
+            return -1;
+        }
+        sPickTouchX = t.px;
+        sPickTouchY = sPickTouchStart = t.py;
+        sPickDrag   = false;
+    }
+    if ((held & KEY_TOUCH) && sPickTouchY >= 0) {
+        if (t.py - sPickTouchStart > 4 || sPickTouchStart - t.py > 4)
+            sPickDrag = true;
+        if (sPickDrag) {
+            sPickScroll += sPickTouchY - t.py;
+            sDirty = true;
+        }
+        sPickTouchX = t.px;
+        sPickTouchY = t.py;
+    }
+    int row = -1;
+    if (sPickTouchY >= 0 && !sPickDrag)
+        for (int i = 0; i < PickCount() && row < 0; ++i) {
+            float x, y;
+            PickRowRect(i, &x, &y);
+            if (Inside(sPickTouchX, sPickTouchY, x, y, PICK_W, PICK_ROW - 4))
+                row = i;
+        }
+    if (!(held & KEY_TOUCH) && sPickTouchY >= 0) { // released
+        if (row >= 0) {
+            if (sPick == 1) {
+                sPick       = 2;
+                sPickCat    = row;
+                sPickScroll = 0;
+            }
+            else {
+                DevTools::LoadScene(sPickCat, row);
+                sPick = 0;
+            }
+        }
+        sPickTouchY = -1;
+        sPickDrag   = false;
+        sDirty      = true;
+        return -1;
+    }
+    return (held & KEY_TOUCH) && row >= 0 ? 300 + row : -1;
+}
+
 #endif // MANIA_DEV_TOOLS
+
+// The install-only FTP server of a production build (dev-ftp.txt, DevFtp): a strip over every tab with its address and
+// a CANCEL that stops it until the game is opened again.
+enum { DEVFTP_X = 236, DEVFTP_Y = 208, DEVFTP_W = 78, DEVFTP_H = 28 };
+
+static void DrawDevFtp()
+{
+    if (!DevFtp::InstallOnly())
+        return;
+    C2D_DrawRectSolid(0, DEVFTP_Y - 4, 0.76f, W, H - DEVFTP_Y + 4, C2D_Color32(0, 0, 0, 200));
+    Text("FTP (INSTALL ONLY)", 8, DEVFTP_Y, 0.42f, T().accent, 0, 0.78f);
+    Text(DevFtp::Address(), 8, DEVFTP_Y + 14, 0.42f, T().text, 0, 0.78f);
+    Button(DEVFTP_X, DEVFTP_Y, DEVFTP_W, DEVFTP_H - 4, "CANCEL", false, T().cellEdge, T().text, 0.78f);
+}
+
+static unsigned sDrawCount;
+static u64 sDrawTicks;
+
+void BottomUi::DrawStats(unsigned *count, float *ms)
+{
+    *count = sDrawCount;
+    *ms    = sDrawTicks * (1000.0f / SYSCLOCK_ARM11);
+}
 
 static void Draw()
 {
     char val[32];
+    const u64 tDraw = svcGetSystemTick();
+    ++sDrawCount;
+    // Any full redraw shows the updater's state as it is now. Only the UPDATES tab and the prompt took it before, so
+    // after the boot's update check every other tab was redrawn every frame (7-11 ms a frame on the New 3DS).
+    {
+        UpdateStatus st;
+        Updater_GetStatus(&st);
+        sDrawnRevision = st.revision;
+    }
 
     C2D_TextBufClear(sTextBuf);
     C3D_FrameBegin(0); // SYNCDRAW would wait for a vblank: up to 16 ms of the game's frame, four times a second
@@ -1925,22 +2119,26 @@ static void Draw()
         case TAB_UPDATES: DrawUpdatesTab(); break;
         case TAB_ACH: DrawAchievementsTab(); break;
 #if MANIA_DEV_TOOLS
-        case TAB_DEBUG: DrawDebugTab(); break;
+        case TAB_DEBUG:
+            if (sPick)
+                DrawStagePicker();
+            else
+                DrawDebugTab();
+            break;
 #endif
         default: DrawGameTab(); break;
     }
     DrawTabBar();
     DrawAchToast();
     DrawUpdatePrompt();
-
-#if MANIA_DEV_TOOLS
+    DrawDevFtp();
 
     // An install in progress is a modal message: the screen is dimmed and a box with the step, a bar and the
     // percentage (or the seconds left before the restart) in it takes the middle.
     float progress;
     unsigned seconds;
     char title[48];
-    const int phase = DevTools::InstallNotice(title, sizeof(title), &progress, &seconds);
+    const int phase = DevFtp::InstallNotice(title, sizeof(title), &progress, &seconds);
     if (phase) {
         C2D_DrawRectSolid(0, 0, 0.8f, W, H, C2D_Color32(0, 0, 0, 170));
         const float bx = 30, by = 80, bw = W - 60, bh = 84;
@@ -1958,9 +2156,9 @@ static void Draw()
             snprintf(val, sizeof(val), "...");
         Text(val, W / 2.0f, py + 3, 0.55f, Rgb(255, 255, 255), C2D_AlignCenter, 0.95f);
     }
-#endif
 
     C3D_FrameEnd(0);
+    sDrawTicks += svcGetSystemTick() - tDraw;
 }
 
 // ---------------------------------------------------------------- top-screen FPS counter
@@ -2023,11 +2221,13 @@ void BottomUi::DrawInTopFrame()
     // And the RINGS box while there are none, at each turn of its label's blink.
     if (!sReady || !(sTimeBox.shown || sRingsBox.shown) || Port::tab != TAB_GAME || UpdatePromptShown())
         return;
-#if MANIA_DEV_TOOLS
     float p;
     unsigned secs;
     char notice[8];
-    if (!DevTools::swBottomUi || DevTools::InstallNotice(notice, sizeof(notice), &p, &secs))
+    if (DevFtp::InstallNotice(notice, sizeof(notice), &p, &secs))
+        return;
+#if MANIA_DEV_TOOLS
+    if (!DevTools::swBottomUi)
         return;
 #endif
     const bool timeMoved = sTimeBox.shown && (sTimeBox.m != sceneInfo.minutes || sTimeBox.sec != sceneInfo.seconds || sTimeBox.ms != sceneInfo.milliseconds);
@@ -2264,7 +2464,7 @@ void BottomUi::Init()
 
 bool BottomUi::Ready() { return sReady; }
 
-int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, const char *yes, const char *no)
+int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, const char *yes, const char *no, const char *topLine)
 {
     if (!sReady)
         return -1;
@@ -2302,17 +2502,41 @@ int BottomUi::Ask(const char *title, const char *const *lines, int lineCount, co
         C2D_TextBufClear(sTextBuf);
         C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
         C2D_Prepare();
+        // As the loading box: the top screen's target has a depth buffer, and on the console (not in Azahar) its
+        // uncleared contents failed every pixel with the test on: the HOME menu's banner stayed on the top screen.
+        C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+        C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF);
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
         C2D_TargetClear(sTarget, T().bg);
         C2D_SceneBegin(sTarget);
         DrawBackdrop(0);
         Panel(bx - 2, by - 2, 0.82f, bw + 4, bh + 4, T().popEdge, T().popFill, 2);
         Text(title, W / 2.0f, by + 10, 0.6f, T().accent, C2D_AlignCenter, 0.95f);
-        for (int i = 0; i < lineCount; ++i)
-            Text(lines[i], bx + 12, by + 38 + i * 34, 0.45f, i == lineCount - 1 && lineCount > 1 ? T().dim : T().text, C2D_WordWrap, 0.95f, bw - 24);
+        // Each line below the one before, as tall as it wraps (rows are guessed from its width: word breaks waste some)
+        float ly = by + 38;
+        for (int i = 0; i < lineCount; ++i) {
+            Text(lines[i], bx + 12, ly, 0.45f, i == lineCount - 1 && lineCount > 1 ? T().dim : T().text, C2D_WordWrap, 0.95f, bw - 24);
+            C2D_Text t;
+            C2D_TextParse(&t, sTextBuf, lines[i]);
+            float tw = 0, th = 0;
+            C2D_TextGetDimensions(&t, 0.45f, 0.45f, &tw, &th);
+            const float rows = (float)(int)(tw / ((bw - 24) * 0.85f)) + 1;
+            ly += rows * th + 8 > 34 ? rows * th + 8 : 34;
+        }
         Button(yesX, cy, btnW, 24, yes, pressed == 1, T().cellEdge, T().text, 0.9f);
         if (no)
             Button(noX, cy, btnW, 24, no, pressed == 0, T().cellEdge, T().text, 0.9f);
+        // The top screen in the same style: the boot's navy, the menus' stripes, the question's title
+        if (DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init())) {
+            C2D_SceneBegin((C3D_RenderTarget *)C3DPresent::Target());
+            C2D_DrawRectSolid(0, 0, 0.01f, 400, 240, Hex(kBootTop)); // not C2D_TargetClear: wrong colour on this RGB565 target
+            DrawBackdrop(0, 400);
+            Text(title, 200, 104, 0.8f, T().accent, C2D_AlignCenter, 0.5f);
+            if (topLine)
+                Text(topLine, 200, 140, 0.55f, T().text, C2D_AlignCenter, 0.5f);
+            Text("SONIC MANIA 3DS", 200, 240 - 22, 0.45f, T().footer, C2D_AlignCenter, 0.5f);
+        }
         C3D_FrameEnd(0);
     }
     return -1;
@@ -2349,9 +2573,31 @@ void BottomUi::Update()
         down |= KEY_TOUCH;
         held |= KEY_TOUCH;
     }
+#if !MANIA_DEV_TOOLS
+    // The install-only FTP strip's CANCEL takes its touch before the tabs (DrawDevFtp)
+    static bool devFtpSeen;
+    if (DevFtp::InstallOnly() != devFtpSeen) {
+        devFtpSeen = !devFtpSeen;
+        sDirty     = true;
+    }
+    if (devFtpSeen && (down & KEY_TOUCH) && Inside(t.px, t.py, DEVFTP_X, DEVFTP_Y, DEVFTP_W, DEVFTP_H)) {
+        DevFtp::Cancel();
+        sDirty = true;
+        down &= ~KEY_TOUCH;
+        held &= ~KEY_TOUCH;
+    }
+#endif
     // ACHIEVEMENTS handles its own touches (a drag scrolls, a release opens), except on the tab bar and under a prompt
     const bool achTab = Port::tab == TAB_ACH && !UpdatePromptShown() && !((down & KEY_TOUCH) && t.py < HEADER_H);
     const int achHit  = achTab ? AchInput(held, down, t) : -1;
+#if MANIA_DEV_TOOLS
+    // The STAGES list, the same way (its own touches but the tab bar's)
+    const bool pickOpen = debugTab && sPick && !UpdatePromptShown() && !((down & KEY_TOUCH) && t.py < HEADER_H);
+    const int pickHit   = pickOpen ? PickInput(held, down, t) : -1;
+#else
+    const bool pickOpen = false;
+    const int pickHit   = -1;
+#endif
     int hit = -1;
     if (held & KEY_TOUCH) {
         if (UpdatePromptShown()) {
@@ -2376,6 +2622,8 @@ void BottomUi::Update()
             sDragBar = false;
 #endif
         }
+        else if (pickOpen)
+            ; // PickInput took it
 #if MANIA_DEV_TOOLS
         else if (debugTab) {
             if (down & KEY_TOUCH) {
@@ -2443,6 +2691,8 @@ void BottomUi::Update()
     }
     if (achTab)
         hit = achHit;
+    if (pickOpen)
+        hit = pickHit;
     if (hit != sPressed) {
         sPressed = hit;
         sDirty   = true;
@@ -2451,12 +2701,10 @@ void BottomUi::Update()
     const u64 now = svcGetSystemTick();
     // Quicker while something moves (an install, a download, the restart countdown), so the bar moves.
     bool busy = UpdatesBusy();
-#if MANIA_DEV_TOOLS
     float p;
     unsigned secs;
     char notice[8];
-    busy = busy || DevTools::InstallNotice(notice, sizeof(notice), &p, &secs) != 0;
-#endif
+    busy = busy || DevFtp::InstallNotice(notice, sizeof(notice), &p, &secs) != 0;
     if (sDirty || UpdatesChanged() || now - sLastDraw > (busy ? SYSCLOCK_ARM11 / 10 : SYSCLOCK_ARM11 / 4)) {
         Draw();
         sLastDraw = now;

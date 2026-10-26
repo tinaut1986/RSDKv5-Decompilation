@@ -13,6 +13,28 @@
 
 #include "RSDK/Dev/CTR/Port.hpp"
 
+#if RETRO_PLATFORM == RETRO_3DS
+namespace RSDK
+{
+// The FTP server, in every build. Dev builds run it in full (DevTools); a production build runs it install-only when
+// dev-ftp.txt is in sdmc:/3ds/Sonic Mania 3DS/ (any content): only /3ds/Sonic Mania 3DS/update can be listed, read or
+// written, and of the remote control only SITE INSTALL is left, so build_3ds.sh --install works on it too. The
+// bottom screen shows its address and a CANCEL, which stops it for the session. Players never see it.
+namespace DevFtp
+{
+// An install in progress, for the bottom screen: 0 none, 1 receiving, 2 installing, 3 restart countdown
+int InstallNotice(char *title, unsigned cap, float *progress, unsigned *secondsLeft);
+bool InstallOnly();     // serving in the install-only mode now
+const char *Address();  // "ip:port", or why it is not serving
+#if !MANIA_DEV_TOOLS
+bool Tick();            // main thread, every frame: starts it when dev-ftp.txt is there; true: relaunching
+void Cancel();
+void Shutdown();
+#endif
+} // namespace DevFtp
+} // namespace RSDK
+#endif
+
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
 
 namespace RSDK
@@ -35,6 +57,7 @@ enum Stage {
     STAGE_PXFER,   // ... display transfer into the texture
     STAGE_PFRAME,  // ... citro3d frame (wait for the previous one, draw, queue)
     STAGE_WAIT,    // idle time the pacing waits for the next tick: the headroom of the frame
+    STAGE_BOTTOM,  // the bottom screen (BottomUi::Update and its redraws)
     STAGE_COUNT
 };
 
@@ -63,7 +86,7 @@ void SetFtp(bool on);
 extern bool heapCheck;
 void HeapCheck(const char *where);
 // A question of BottomUi::Ask (before the FTP server runs) driven from a file, for the emulator: debug/ask.txt holding
-// "s" saves the bottom screen as debug/shot-bottom.raw (tools/shot.sh's format), "1" / "0" answers. -1: nothing asked.
+// "s" / "t" saves the bottom / top screen as debug/shot-bottom.raw / shot-top.raw (tools/shot.sh's format), "1" / "0" answers. -1: nothing asked.
 int AskFromFile();
 // The same for the loading box (the boot has no FTP yet): debug/shot.txt holding "top" or "bottom" saves that screen
 // as debug/shot-<which>.raw. Checked at most twice a second.
@@ -113,7 +136,10 @@ void RunKeys(uint32 *held, uint32 *down);
 // again, carry on. CaptureNumber: the last capture's number (-1: none yet).
 void TapCapture();
 int CaptureNumber();
+// The DEBUG tab's STAGES list: scene `scene` of category `category` is loaded at the end of the frame (as SITE SCENE).
+void LoadScene(int category, int scene);
 extern bool freeze;       // skip the objects' update, keep drawing (SITE FREEZE): the same frame in both renderers
+extern bool immortal;     // the DEBUG tab's IMMORTAL: player 1 kept invincible (PortGame_Immortal); not saved
 extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy (part of the GPU mode)
 extern bool swGpuRender;   // execute recorded frames on the GPU (needs swRecord and swGpuPresent)
 extern bool swRecord;      // record draw calls per frame and execute them at the flip (GpuFrame)

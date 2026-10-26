@@ -63,6 +63,10 @@ unsigned TakeC3DTimes(float avg[5]);
 const char *ReasonName();
 // The last refused command with its parameters ("#12 type 7 kind 0 clip ... | p0 p1 ..."), for SITE STATE.
 const char *LastRefusal();
+// The last frame's batches, one a line (texture, blend, first quad, quads, depth, scissor), for a CAPTURE's info file.
+void DumpBatches(void *file); // FILE*
+// SITE CONV: the last frame's atlas conversions (time, unchanged ones, the biggest sprites, the groups that changed).
+const char *ConvReport();
 // The depth set-up of the 3D scenes, to find the PICA's convention on the console: bit 0 nearer = lower z/w, bit 1
 // GPU_GREATER instead of GPU_LESS, bit 2 clear the depth buffer to 0 instead of the maximum. SITE SET depthmode N.
 extern unsigned depthMode;

@@ -23,6 +23,11 @@ typedef struct {
 
 void PortGame_GetInfo(PortGameInfo *out);
 
+// The DEBUG tab's IMMORTAL (dev builds): called every frame. On, player 1 keeps the item box's invincibility (its
+// stars too, made again when the scene has none): enemies and spikes do not hurt, touching enemies breaks them. Pits,
+// crushes and drowning still kill. Off, the invincibility runs out at once.
+void PortGame_Immortal(int on);
+
 // Item boxes opened since the last call: their contents (the game's ITEMBOX_* numbering, which is also the frame of
 // the contents icon in Global/ItemBox.bin animation 2), at most `max`; returns how many. `reset` after a scene load:
 // the boxes already open in it (reloaded from a checkpoint) are taken as known, not as news.

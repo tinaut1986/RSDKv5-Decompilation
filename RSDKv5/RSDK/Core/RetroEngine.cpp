@@ -104,6 +104,17 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         const bool renderOk = RenderDevice::Init();
         DEV_LOG("RenderDevice::Init (early) done, ok=%d", (int)renderOk);
         BottomUi::Init();
+        // A smaller memory mode than the RSF's: power the console off and on (#18); no game data: where it goes (#14)
+        if (Port::LowMemoryStop() || Port::MissingDataStop()) {
+            // The end of the main loop's teardown for what is up by now (RenderDevice::Init started the audio too):
+            // leaving with them running crashed in the audio thread (ndspSync), as in ../legend-of-doom-3ds.
+            ReleaseInputDevices();
+            AudioDevice::Release();
+            RenderDevice::Release(false);
+            SKU::ReleaseUserCore();
+            ReleaseStorage();
+            return 0;
+        }
         Port::OfferSaveImport(); // before the game reads its saves (Upstream.hpp)
         Port::OfferPlus();       // once, when the data has the Plus content
         Port::ApplyPlus();       // OPTIONS > PLUS (off by default), before the game starts
@@ -387,6 +398,8 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
     // Shutdown
 #if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
     DevTools::Shutdown(); // the FTP thread ends before the services under it go
+#elif RETRO_PLATFORM == RETRO_3DS
+    DevFtp::Shutdown(); // the install-only FTP server of a production build (dev-ftp.txt)
 #endif
 #if RETRO_PLATFORM == RETRO_3DS
     Updater_Shutdown();

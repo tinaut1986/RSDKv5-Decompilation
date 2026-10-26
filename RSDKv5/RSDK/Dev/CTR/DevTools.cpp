@@ -1,11 +1,13 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
+#include "RSDK/Dev/CTR/GameInfo.h"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 #include "RSDK/Graphics/CTR/GpuRender.hpp"
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
 
-#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+// Production builds (MANIA_DEV_TOOLS=0) keep only the FTP server, in its install-only mode (DevFtp, DevTools.hpp).
+#if RETRO_PLATFORM == RETRO_3DS
 
 #include <3ds.h>
 #include <arpa/inet.h>
@@ -62,6 +64,20 @@ static volatile int sPhase; // 1 receiving, 2 installing, 3 restart countdown
 static volatile unsigned long long sAllo, sRecvDone, sRecvTotal, sCiaDone, sCiaTotal;
 static volatile unsigned long long sRelaunchAt; // osGetTime() the countdown ends at
 
+// Install-only mode (production builds, started by dev-ftp.txt): only the update folder is reachable and the remote
+// control is off but for SITE INSTALL. A CANCEL on the bottom screen stops it for the rest of the session.
+static const bool sRestricted = !MANIA_DEV_TOOLS;
+static bool sCancelled;
+#define FTP_RESTRICTED_ROOT "/3ds/Sonic Mania 3DS/update"
+static bool Allowed(const char *vpath)
+{
+    if (!sRestricted)
+        return true;
+    const size_t n = sizeof(FTP_RESTRICTED_ROOT) - 1;
+    return !strncasecmp(vpath, FTP_RESTRICTED_ROOT, n) && (vpath[n] == 0 || vpath[n] == '/');
+}
+
+#if MANIA_DEV_TOOLS
 static float sLastFps, sLastFrameMs, sLastStageMs[DevTools::STAGE_COUNT];
 static unsigned sLastSkipped;
 
@@ -151,6 +167,7 @@ static void RunSave()
     fclose(f);
 }
 static volatile int sShotRequest; // 1 top screen, 2 bottom screen, 3 top screen's right eye
+#endif // MANIA_DEV_TOOLS
 
 struct Session {
     int ctrl;
@@ -454,7 +471,7 @@ static void CmdList(Session *s, const char *arg, int kind /* 0 LIST, 1 NLST, 2 M
     char vpath[FTP_PATH_MAX], rpath[FTP_PATH_MAX + 8];
     ResolvePath(s, arg, vpath, sizeof(vpath));
     RealPath(vpath, rpath, sizeof(rpath));
-    DIR *dir = opendir(rpath);
+    DIR *dir = Allowed(vpath) ? opendir(rpath) : NULL;
     if (!dir) {
         ClosePasv(s);
         Reply(s, "550 No such directory.");
@@ -498,7 +515,7 @@ static void CmdRetr(Session *s, const char *arg)
     char vpath[FTP_PATH_MAX], rpath[FTP_PATH_MAX + 8];
     ResolvePath(s, arg, vpath, sizeof(vpath));
     RealPath(vpath, rpath, sizeof(rpath));
-    FILE *f = fopen(rpath, "rb");
+    FILE *f = Allowed(vpath) ? fopen(rpath, "rb") : NULL;
     if (!f) {
         ClosePasv(s);
         Reply(s, "550 Cannot open the file.");
@@ -525,7 +542,7 @@ static void CmdStor(Session *s, const char *arg, bool append)
     char vpath[FTP_PATH_MAX], rpath[FTP_PATH_MAX + 8];
     ResolvePath(s, arg, vpath, sizeof(vpath));
     RealPath(vpath, rpath, sizeof(rpath));
-    FILE *f = fopen(rpath, append ? "ab" : "wb");
+    FILE *f = Allowed(vpath) ? fopen(rpath, append ? "ab" : "wb") : NULL;
     if (!f) {
         ClosePasv(s);
         Reply(s, "553 Cannot create the file.");
@@ -579,7 +596,10 @@ static void HandleSession(int ctrl)
     s->ctrl = ctrl;
     s->pasv = -1;
     snprintf(s->cwd, sizeof(s->cwd), "/");
-    Reply(s, "220 Sonic Mania 3DS dev FTP. SD card root; the game's files are in /3ds/Sonic Mania 3DS/.");
+    if (sRestricted)
+        Reply(s, "220 Sonic Mania 3DS FTP (install only: " FTP_RESTRICTED_ROOT ").");
+    else
+        Reply(s, "220 Sonic Mania 3DS dev FTP. SD card root; the game's files are in /3ds/Sonic Mania 3DS/.");
     char line[FTP_LINE_MAX];
     for (;;) {
         if (!sRun || !ReadLine(s, line, sizeof(line)))
@@ -652,7 +672,7 @@ static void HandleSession(int ctrl)
         else if (!strcmp(line, "SIZE") || !strcmp(line, "MDTM")) {
             ResolvePath(s, arg, vpath, sizeof(vpath));
             RealPath(vpath, rpath, sizeof(rpath));
-            if (stat(rpath, &st) != 0 || S_ISDIR(st.st_mode))
+            if (!Allowed(vpath) || stat(rpath, &st) != 0 || S_ISDIR(st.st_mode))
                 Reply(s, "550 No such file.");
             else if (line[0] == 'S')
                 Reply(s, "213 %llu", (unsigned long long)st.st_size);
@@ -662,7 +682,7 @@ static void HandleSession(int ctrl)
         else if (!strcmp(line, "DELE") || !strcmp(line, "RMD") || !strcmp(line, "XRMD") || !strcmp(line, "MKD") || !strcmp(line, "XMKD")) {
             ResolvePath(s, arg, vpath, sizeof(vpath));
             RealPath(vpath, rpath, sizeof(rpath));
-            int r = line[0] == 'D' ? remove(rpath) : strstr(line, "RMD") ? rmdir(rpath) : mkdir(rpath, 0777);
+            int r = !Allowed(vpath) ? -1 : line[0] == 'D' ? remove(rpath) : strstr(line, "RMD") ? rmdir(rpath) : mkdir(rpath, 0777);
             if (r != 0)
                 Reply(s, "550 Failed.");
             else if (strstr(line, "MKD"))
@@ -679,7 +699,7 @@ static void HandleSession(int ctrl)
             RealPath(s->rnfr, from, sizeof(from));
             ResolvePath(s, arg, vpath, sizeof(vpath));
             RealPath(vpath, rpath, sizeof(rpath));
-            Reply(s, s->rnfr[0] && rename(from, rpath) == 0 ? "250 Renamed." : "550 Rename failed.");
+            Reply(s, s->rnfr[0] && Allowed(s->rnfr) && Allowed(vpath) && rename(from, rpath) == 0 ? "250 Renamed." : "550 Rename failed.");
             s->rnfr[0] = 0;
         }
         else if (!strcmp(line, "SITE")) {
@@ -694,6 +714,10 @@ static void HandleSession(int ctrl)
                     *c = (char)(*c - 32);
             if (!strcmp(sub, "INSTALL") && path && *path) {
                 ResolvePath(s, path, vpath, sizeof(vpath));
+                if (!Allowed(vpath)) {
+                    Reply(s, "550 Not allowed.");
+                    continue;
+                }
                 char error[96];
                 sNotice = "INSTALLING NEW BUILD";
                 sPhase  = 2;
@@ -711,6 +735,7 @@ static void HandleSession(int ctrl)
             }
             else if (!strcmp(sub, "INSTALL"))
                 Reply(s, "501 SITE INSTALL <path to a .cia of this game>");
+#if MANIA_DEV_TOOLS
             else if (!strcmp(sub, "SCENES")) {
                 // "0 Presentation(3) 1 Mania Mode(42) ...": category index, name and scene count.
                 char list[FTP_LINE_MAX - 8];
@@ -773,6 +798,8 @@ static void HandleSession(int ctrl)
                     DevTools::swFlipCopy = v != 0;
                 else if (!strncmp(path, "gpu3d", 5))
                     DevTools::swGpu3D = v != 0;
+                else if (!strncmp(path, "gpuskip", 7)) // before "gpu": it took gpuskip for gpu (0 turned the GPU renderer off)
+                    GpuRender::gpuSkip = (unsigned)v;
                 else if (!strncmp(path, "depthmode", 9))
                     GpuRender::depthMode = (unsigned)v & 2047;
                 else if (!strncmp(path, "gpurender", 9))
@@ -803,8 +830,6 @@ static void HandleSession(int ctrl)
                     engine.streamsEnabled = v != 0;
                 else if (!strncmp(path, "force3d", 7))
                     DevTools::swForce3D = v != 0;
-                else if (!strncmp(path, "gpuskip", 7))
-                    GpuRender::gpuSkip = (unsigned)v;
                 else if (!strncmp(path, "floorwin", 8))
                     GpuRender::floorWindows = v != 0;
                 else if (!strncmp(path, "floorfogavg", 11)) {
@@ -891,6 +916,14 @@ static void HandleSession(int ctrl)
                     fwrite("LINE", 1, 4, f), fwrite(gfxLineBuffer, 1, SCREEN_YSIZE, f);
                     fwrite("SCAN", 1, 4, f), fwrite(lines, sizeof(ScanlineInfo), SCREEN_YSIZE, f);
                     fwrite("TILE", 1, 4, f), fwrite(tilesetPixels, 1, TILESET_SIZE, f);
+                    // Then every rotozoom layer's own lines: "SCNL", the layer, its scanlines
+                    for (int l = 0; l < LAYER_COUNT; ++l) {
+                        if (!tileLayers[l].layout || tileLayers[l].type != LAYER_ROTOZOOM || !tileLayers[l].scanlineCallback)
+                            continue;
+                        tileLayers[l].scanlineCallback(lines);
+                        const uint8 id = (uint8)l;
+                        fwrite("SCNL", 1, 4, f), fwrite(&id, 1, 1, f), fwrite(lines, sizeof(ScanlineInfo), SCREEN_YSIZE, f);
+                    }
                     fclose(f);
                     Reply(s, "200 debug/layers.bin");
                 }
@@ -984,6 +1017,33 @@ static void HandleSession(int ctrl)
                 else
                     Reply(s, "550 no %s in this scene", name);
             }
+            else if (!strcmp(sub, "CONV")) {
+                // The last GPU frame's atlas conversions: which ones really changed colour
+                Reply(s, "200 %s", GpuRender::ConvReport());
+            }
+            else if (!strcmp(sub, "SVAR") && path) {
+                // SITE SVAR <Class> <byte offset> [n]: n int32 of a stage object's static variables (debug)
+                char name[48];
+                int off = 0, n = 8;
+                name[0] = 0;
+                sscanf(path, "%47s %d %d", name, &off, &n);
+                n = n < 1 ? 1 : n > 32 ? 32 : n;
+                uint32 hash[4];
+                GEN_HASH_MD5(name, hash);
+                const uint8 *vars = NULL;
+                for (int i = 0; i < sceneInfo.classCount && !vars; ++i)
+                    if (HASH_MATCH_MD5(objectClassList[stageObjectIDs[i]].hash, hash) && objectClassList[stageObjectIDs[i]].staticVars)
+                        vars = (const uint8 *)*objectClassList[stageObjectIDs[i]].staticVars;
+                if (!vars)
+                    Reply(s, "550 no %s in this scene", name);
+                else {
+                    char line[400];
+                    int len = 0;
+                    for (int k = 0; k < n && len < (int)sizeof(line) - 16; ++k)
+                        len += snprintf(line + len, sizeof(line) - len, " %ld", (long)*(const int32 *)(vars + off + k * 4));
+                    Reply(s, "200 %s +%d:%s", name, off, line);
+                }
+            }
             else if (!strcmp(sub, "REFUSED")) {
                 // The last command the GPU executor refused (SITE STATE's line is cut by the FTP line limit)
                 Reply(s, "200 %s | why %s | roto to software: runs %u quads %u, soft layers %u, roto texture %s, vram free %u KB", GpuRender::LastRefusal(), sLastWhy ? sLastWhy : "-", GpuRender::GetStats().rotoSoftRuns, GpuRender::GetStats().rotoSoftQuads, GpuRender::GetStats().softLayers, GpuRender::RotoTexWhy(), (unsigned)(vramSpaceFree() >> 10));
@@ -1051,9 +1111,12 @@ static void HandleSession(int ctrl)
                 // The frame's costs in one short line (ms; STATE's is cut by the FTP limit): logic, recording, flip
                 // (pcopy geometry, pframe citro3d frame), wait, and the GPU's own drawing time.
                 const GpuRender::Stats &g = GpuRender::GetStats();
-                Reply(s, "200 frame %.1f upd %.1f draw %.1f flip %.1f pcopy %.1f pframe %.1f wait %.1f | gpu draw %.1f submit %.1f | quads %u batches %u cmdbuf %u%% eye %u KB 3d %u KB (%u models in %u scenes) dropped %u",
+                unsigned bottomDraws;
+                float bottomMs;
+                BottomUi::DrawStats(&bottomDraws, &bottomMs);
+                Reply(s, "200 frame %.1f upd %.1f draw %.1f flip %.1f pcopy %.1f pframe %.1f wait %.1f bottom %.1f (redraws %u, %.0f ms) | gpu draw %.1f submit %.1f | quads %u batches %u cmdbuf %u%% eye %u KB 3d %u KB (%u models in %u scenes) dropped %u",
                       sLastFrameMs, sLastStageMs[DevTools::STAGE_UPDATE], sLastStageMs[DevTools::STAGE_DRAW], sLastStageMs[DevTools::STAGE_FLIP], sLastStageMs[DevTools::STAGE_PCOPY],
-                      sLastStageMs[DevTools::STAGE_PFRAME], sLastStageMs[DevTools::STAGE_WAIT], g.gpuDrawMs, g.gpuProcMs, g.quads, g.batches, g.cmdBufPct, g.cmdEyeKB, g.cmd3dKB, g.instances3d, g.scenes3d, g.eyesDropped);
+                      sLastStageMs[DevTools::STAGE_PFRAME], sLastStageMs[DevTools::STAGE_WAIT], sLastStageMs[DevTools::STAGE_BOTTOM], bottomDraws, bottomMs, g.gpuDrawMs, g.gpuProcMs, g.quads, g.batches, g.cmdBufPct, g.cmdEyeKB, g.cmd3dKB, g.instances3d, g.scenes3d, g.eyesDropped);
             }
             else if (!strcmp(sub, "C3D")) {
                 // pframe split, averages since the last C3D (ms a frame): FrameBegin's wait, each eye's commands, the
@@ -1118,6 +1181,10 @@ static void HandleSession(int ctrl)
             }
             else
                 Reply(s, "504 Unknown SITE command.");
+#else
+            else
+                Reply(s, "504 Unknown SITE command.");
+#endif
         }
         else if (!strcmp(line, "QUIT")) {
             Reply(s, "221 Bye.");
@@ -1154,6 +1221,7 @@ static bool StartServer()
     }
     if (!Port::WifiConnected()) {
         snprintf(sStatus, sizeof(sStatus), "NO WI-FI");
+        Port::NetRelease();
         return false;
     }
     sIo     = (char *)malloc(FTP_IO_SIZE);
@@ -1170,13 +1238,18 @@ static bool StartServer()
     if (!sIo || sListen < 0 || bind(sListen, (struct sockaddr *)&addr, sizeof(addr)) != 0 || listen(sListen, 1) != 0) {
         snprintf(sStatus, sizeof(sStatus), "PORT %d BUSY", FTP_PORT);
         CloseSocket(&sListen);
+        free(sIo);
+        sIo = NULL;
+        Port::NetRelease();
         return false;
     }
     sIp  = (uint32_t)gethostid();
     sRun = true;
     s32 priority = 0x30;
     svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+#if MANIA_DEV_TOOLS
     sMainPrio = priority;
+#endif
     priority = priority + 4 <= 0x3F ? priority + 4 : 0x3F;
     sThread  = threadCreate(FtpMain, NULL, 64 * 1024, priority, 0, false);
     if (!sThread) {
@@ -1206,6 +1279,75 @@ static void StopServer()
     snprintf(sStatus, sizeof(sStatus), "OFF");
 }
 
+// ---------------------------------------------------------------- DevFtp (every build)
+
+int DevFtp::InstallNotice(char *title, unsigned cap, float *progress, unsigned *secondsLeft)
+{
+    const int phase = sPhase;
+    if (!sNotice || !phase)
+        return 0;
+    snprintf(title, cap, "%s", sNotice);
+    *progress    = -1;
+    *secondsLeft = 0;
+    if (phase == 1 && sRecvTotal)
+        *progress = (float)sRecvDone / (float)sRecvTotal;
+    else if (phase == 2 && sCiaTotal)
+        *progress = (float)sCiaDone / (float)sCiaTotal;
+    else if (phase == 3) {
+        u64 now = osGetTime(), at = sRelaunchAt;
+        *progress    = now >= at ? 1.0f : 1.0f - (float)(at - now) / (float)RELAUNCH_MS;
+        *secondsLeft = now >= at ? 0 : (unsigned)((at - now + 999) / 1000);
+    }
+    return phase;
+}
+
+bool DevFtp::InstallOnly() { return sRestricted && sRun; }
+
+const char *DevFtp::Address() { return sStatus; }
+
+#if !MANIA_DEV_TOOLS
+// dev-ftp.txt in the game's folder: the install-only server, so a new build can be sent over FTP to a production
+// install (build_3ds.sh --install). Tried every ~2 s until Wi-Fi is up; never again after a CANCEL.
+bool DevFtp::Tick()
+{
+    static int marker = -1;
+    static unsigned wait;
+    if (marker < 0)
+        marker = access("sdmc:/3ds/Sonic Mania 3DS/dev-ftp.txt", F_OK) == 0;
+    if (marker && !sRun && !sCancelled && ++wait >= 120) {
+        wait = 0;
+        if (osGetWifiStrength() > 0)
+            StartServer();
+    }
+    // SITE INSTALL put a new build in place: the countdown has run out, start it (as HOME -> close)
+    if (sPhase == 3 && osGetTime() >= sRelaunchAt) {
+        aptSetChainloaderToSelf();
+        return true;
+    }
+    return false;
+}
+
+void DevFtp::Cancel()
+{
+    sCancelled = true;
+    if (sRun)
+        StopServer();
+}
+
+void DevFtp::Shutdown()
+{
+    // As DevTools::Shutdown: the thread ends within a nap; one still alive is left alone
+    sRun = false;
+    if (sThread) {
+        if (threadJoin(sThread, 3000000000ULL) == 0)
+            threadFree(sThread);
+        sThread = NULL;
+    }
+    CloseSocket(&sListen);
+}
+#endif
+
+#if MANIA_DEV_TOOLS
 bool DevTools::FtpRunning() { return sRun; }
 
 void DevTools::SetFtp(bool on)
@@ -1221,7 +1363,7 @@ void DevTools::SetFtp(bool on)
 
 // ---------------------------------------------------------------- perf timing
 
-static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes", "pcopy", "pxfer", "pframe", "wait" };
+static const char *kStageName[DevTools::STAGE_COUNT] = { "update", "draw", "flip", "layers", "sprites", "roto", "faces", "3d", "shapes", "pcopy", "pxfer", "pframe", "wait", "bottom" };
 static const char *kDir                              = "sdmc:/3ds/Sonic Mania 3DS/debug";
 
 static uint64 sStageTicks[DevTools::STAGE_COUNT];
@@ -1261,7 +1403,7 @@ void DevTools::OrderNote(char kind)
 
 DevTools::StageScope::StageScope(Stage s) : stage(s), start(svcGetSystemTick())
 {
-    static const char kinds[STAGE_COUNT] = { 0, 0, 0, 'L', 'S', 'R', 'F', '3', 'P', 0, 0, 0, 0 };
+    static const char kinds[STAGE_COUNT] = { 0, 0, 0, 'L', 'S', 'R', 'F', '3', 'P', 0, 0, 0, 0, 0 };
     if (kinds[s])
         OrderNote(kinds[s]);
 }
@@ -1332,6 +1474,7 @@ bool DevTools::swGpuPresent = true; // the renderer starts in GPU mode (SetGpuMo
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 bool DevTools::freeze         = false;
+bool DevTools::immortal       = false;
 bool DevTools::swForce3D      = false;
 bool DevTools::swFtp          = true;
 
@@ -1623,22 +1766,7 @@ void DevTools::Mark() { TapMark(); }
 
 int DevTools::InstallNotice(char *title, unsigned cap, float *progress, unsigned *secondsLeft)
 {
-    const int phase = sPhase;
-    if (!sNotice || !phase)
-        return 0;
-    snprintf(title, cap, "%s", sNotice);
-    *progress    = -1;
-    *secondsLeft = 0;
-    if (phase == 1 && sRecvTotal)
-        *progress = (float)sRecvDone / (float)sRecvTotal;
-    else if (phase == 2 && sCiaTotal)
-        *progress = (float)sCiaDone / (float)sCiaTotal;
-    else if (phase == 3) {
-        u64 now = osGetTime(), at = sRelaunchAt;
-        *progress    = now >= at ? 1.0f : 1.0f - (float)(at - now) / (float)RELAUNCH_MS;
-        *secondsLeft = now >= at ? 0 : (unsigned)((at - now + 999) / 1000);
-    }
-    return phase;
+    return DevFtp::InstallNotice(title, cap, progress, secondsLeft);
 }
 
 // The switches share the port's file (port-settings.ini, Port::Save) with the player's options; dev-settings.ini is
@@ -1726,6 +1854,14 @@ static int sCaptureNumber = -1;
 static volatile bool sCaptureTap;
 
 void DevTools::TapCapture() { sCaptureTap = true; }
+
+void DevTools::LoadScene(int category, int scene)
+{
+    if (category < 0 || category >= sceneInfo.categoryCount || scene < 0 || scene >= sceneInfo.listCategory[category].sceneCount)
+        return;
+    sPendingScene    = scene;
+    sPendingCategory = category;
+}
 int DevTools::CaptureNumber() { return sCaptureNumber; }
 
 static void Capture()
@@ -1782,6 +1918,17 @@ static void Capture()
         fprintf(f, "fps %.1f frame %.1f ms, heap used %u KB, linear free %u KB, vram free %u KB\n", sLastFps, sLastFrameMs,
                 (unsigned)(mallinfo().uordblks >> 10), (unsigned)(linearSpaceFree() >> 10), (unsigned)(vramSpaceFree() >> 10));
         fprintf(f, "depths: %s\n", GpuRender::DepthSummary());
+        fprintf(f, "times: frame %.1f update %.1f draw %.1f flip %.1f (pcopy %.1f pframe %.1f), gpu draw %.1f\n", sLastFrameMs,
+                sLastStageMs[DevTools::STAGE_UPDATE], sLastStageMs[DevTools::STAGE_DRAW], sLastStageMs[DevTools::STAGE_FLIP],
+                sLastStageMs[DevTools::STAGE_PCOPY], sLastStageMs[DevTools::STAGE_PFRAME], g.gpuDrawMs);
+        {
+            using namespace GpuFrame;
+            fprintf(f, "emit: pre %.2f layer %.2f roto-spr %.2f sprite %.2f 3d %.2f faces %.2f rect %.2f other %.2f\n", g.preMs,
+                    g.emitMs[CMD_LAYER], g.emitMs[CMD_ROTO], g.emitMs[CMD_SPRITE], g.emitMs[CMD_SCENE3D],
+                    g.emitMs[CMD_FACES] + g.emitMs[CMD_BLENDED_FACES] + g.emitMs[CMD_FACE] + g.emitMs[CMD_BLENDED_FACE],
+                    g.emitMs[CMD_RECT] + g.emitMs[CMD_FILL], g.emitMs[CMD_LINEBUF] + g.emitMs[CMD_PALETTE]);
+        }
+        GpuRender::DumpBatches(f);
         fclose(f);
     }
     sStep = 1;
@@ -1856,9 +2003,9 @@ int DevTools::AskFromFile()
     const int c = fgetc(f);
     fclose(f);
     remove(path);
-    if (c == 's') {
-        snprintf(path, sizeof(path), "%s/shot-bottom.raw", kDir);
-        WriteShot(2, path);
+    if (c == 's' || c == 't') {
+        snprintf(path, sizeof(path), "%s/shot-%s.raw", kDir, c == 's' ? "bottom" : "top");
+        WriteShot(c == 's' ? 2 : 1, path);
         return -1;
     }
     return c == '1' ? 1 : c == '0' ? 0 : -1;
@@ -1872,6 +2019,8 @@ void DevTools::HeapCheck(const char *where)
 
 bool DevTools::FrameEnd()
 {
+    // Whether this frame ran frozen, before CAPTURE (below) can change it: the input is read for the frame that was
+    const bool frozenFrame = freeze;
     HeapCheck("frame end");
     if (sShotRequest) {
         const int request = sShotRequest;
@@ -1965,11 +2114,16 @@ bool DevTools::FrameEnd()
     else if (!BottomUi::Ready() && ((sPhase == 3 && (sFrames & 15) == 0) || sMenuDirty))
         DrawStatus();
     // Frozen, the game's ProcessInput (the only hidScanInput) does not run: read the touch screen here, or the
-    // bottom screen (CAPTURE again) never sees a tap.
-    if (freeze)
+    // bottom screen (CAPTURE again) never sees a tap. By whether this frame was frozen: on the frame the second tap
+    // unfreezes, a test of `freeze` skipped the read and the bottom screen saw the same tap as new (CAPTURE again,
+    // frozen again, every tap).
+    if (frozenFrame)
         hidScanInput();
-    if (BottomUi::Ready())
+    PortGame_Immortal(DevTools::immortal);
+    if (BottomUi::Ready()) {
+        DEV_STAGE(STAGE_BOTTOM);
         BottomUi::Update();
+    }
     else
         PollTouch();
 
@@ -1999,5 +2153,7 @@ void DevTools::Shutdown()
         fclose(sCsv), sCsv = NULL;
     Log("exit: dev tools stopped");
 }
+
+#endif // MANIA_DEV_TOOLS
 
 #endif
