@@ -1808,6 +1808,13 @@ static void Capture()
         fprintf(f, "times: frame %.1f update %.1f draw %.1f flip %.1f (pcopy %.1f pframe %.1f), gpu draw %.1f\n", sLastFrameMs,
                 sLastStageMs[DevTools::STAGE_UPDATE], sLastStageMs[DevTools::STAGE_DRAW], sLastStageMs[DevTools::STAGE_FLIP],
                 sLastStageMs[DevTools::STAGE_PCOPY], sLastStageMs[DevTools::STAGE_PFRAME], g.gpuDrawMs);
+        {
+            using namespace GpuFrame;
+            fprintf(f, "emit: pre %.2f layer %.2f roto-spr %.2f sprite %.2f 3d %.2f faces %.2f rect %.2f other %.2f\n", g.preMs,
+                    g.emitMs[CMD_LAYER], g.emitMs[CMD_ROTO], g.emitMs[CMD_SPRITE], g.emitMs[CMD_SCENE3D],
+                    g.emitMs[CMD_FACES] + g.emitMs[CMD_BLENDED_FACES] + g.emitMs[CMD_FACE] + g.emitMs[CMD_BLENDED_FACE],
+                    g.emitMs[CMD_RECT] + g.emitMs[CMD_FILL], g.emitMs[CMD_LINEBUF] + g.emitMs[CMD_PALETTE]);
+        }
         GpuRender::DumpBatches(f);
         fclose(f);
     }
