@@ -4328,6 +4328,19 @@ bool GpuRender::Render(const Stream &stream)
                 curTint = -2000;
             }
         }
+        else if (!tinted && bt.blend == BLEND_SUB) {
+            // INK_SUB takes away the colour's complement, alpha * (31 - c) a channel (subtractLookupTable), not the
+            // colour: Green Hill's water pool (0xA0E8F0) leaves the blue, where subtracting the colour went black.
+            if (curTint != -3000) {
+                ResetTexEnv();
+                C3D_TexEnv *env = C3D_GetTexEnv(1);
+                C3D_TexEnvInit(env);
+                C3D_TexEnvSrc(env, C3D_Both, GPU_PREVIOUS, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+                C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR);
+                C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+                curTint = -3000;
+            }
+        }
         else if (!tinted && curTint != -1000) {
             ResetTexEnv();
             curTint = -1000;
