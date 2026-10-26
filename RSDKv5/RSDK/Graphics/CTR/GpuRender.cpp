@@ -836,8 +836,11 @@ void ConvertSprite(const Pending &p)
     const GFXSurface &g  = gfxSurface[sheet];
     const u16 *tex       = sTexPal[p.bank]; // the bank as the frame used it (a virtual one: a snapshot)
     // The part of the cell the sheet covers; the rest stays transparent
+    // (DrawTile draws a tile as a sprite of sheet 0 at row 16 * (tile & 0xFFF): the flip bits put it past the sheet's
+    // height, in the flipped copies tilesetPixels keeps after the plain ones: Stardust Speedway's frames.)
+    const int gHeight = sheet == 0 ? g.height * 4 : g.height;
     const unsigned w = (int)(sprX + s.srcW) <= g.width ? s.srcW : g.width > (int)sprX ? g.width - sprX : 0;
-    const unsigned h = (int)(sprY + s.srcH) <= g.height ? s.srcH : g.height > (int)sprY ? g.height - sprY : 0;
+    const unsigned h = (int)(sprY + s.srcH) <= gHeight ? s.srcH : gHeight > (int)sprY ? gHeight - sprY : 0;
     static const uint8 my[8] = { 0, 2, 8, 10, 32, 34, 40, 42 };
     static const uint8 mx[8] = { 0, 1, 4, 5, 16, 17, 20, 21 };
     unsigned written = 0;
