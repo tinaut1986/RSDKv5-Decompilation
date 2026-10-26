@@ -1489,6 +1489,7 @@ template <typename F> bool UploadVram(void *dst, u32 bytes, F fill)
     const u32 chunk = SOFT_W * SOFT_H * 2;
     for (u32 off = 0; off < bytes; off += chunk) {
         const u32 n = bytes - off < chunk ? bytes - off : chunk;
+        C3DPresent::StagingWait(); // the last chunk's copy may still be reading it
         fill(off, n, staging);
         CopyToVram(staging, (u8 *)dst + off, (n + 15) & ~15u);
     }
@@ -1995,6 +1996,7 @@ bool EmitSoftLayer(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl, int k
 void ConvertSoft(const SoftJob &j)
 {
     const ScreenInfo &scr = screens[1];
+    C3DPresent::StagingWait();
     u16 *staging          = (u16 *)C3DPresent::Staging();
     for (int y = j.y1; y < j.y2; ++y) {
         const uint16 *src = &scr.frameBuffer[y * scr.pitch];
@@ -2646,6 +2648,7 @@ bool FloorWriteColumn(FloorLevel &l, const TileLayer *layer, int ox, int oy, uns
         staging = (u8 *)C3DPresent::Staging();
     if (!staging)
         return false;
+    C3DPresent::StagingWait();
     u16 *col = (u16 *)staging;
     const int cx = ox + (int)((sx - (unsigned)ox) & (cells - 1));
     for (unsigned sy = 0; sy < cells; ++sy) {
@@ -2666,6 +2669,7 @@ bool FloorWriteRow(FloorLevel &l, const TileLayer *layer, int ox, int oy, unsign
         staging = (u8 *)C3DPresent::Staging();
     if (!staging)
         return false;
+    C3DPresent::StagingWait();
     u16 *col = (u16 *)staging;
     const int cy = oy + (int)((sy - (unsigned)oy) & (cells - 1));
     for (unsigned sx = 0; sx < cells; ++sx) {
@@ -3263,6 +3267,7 @@ void UploadStrips()
     for (Strip &st : sStrips) {
         if (!st.layer || !st.dirty || !staging)
             continue;
+        C3DPresent::StagingWait(); // the other strip's copies read the same rows of it
         st.dirty = false;
         st.rowsUp = 0;
         u64 tConv = 0, tCopy = 0;

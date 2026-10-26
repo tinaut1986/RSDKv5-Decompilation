@@ -37,6 +37,11 @@ void SetStereo(bool on);
 bool Stereo();
 // The 512x256 linear staging buffer (16-bit texels): free for the GPU renderer, which does not present through it.
 void *Staging();
+// Waits until the copies already sent from the staging buffer are done: call it before the CPU writes the buffer again,
+// outside a citro3d frame. C3D_SyncTextureCopy / C3D_SyncDisplayTransfer end in gspWaitForEvent(PPF, false), which
+// returns at once when an earlier PPF (the last frame's display transfer) was never waited for: the copy was still
+// reading the buffer while the next chunk was written into it (a model's triangles got its colours, #10's floor lines).
+void StagingWait();
 
 // Draws `src` (400x240 RGB565 with `pitch` pixels per row) on the top screen and presents it.
 void Present(const unsigned short *src, int pitch);

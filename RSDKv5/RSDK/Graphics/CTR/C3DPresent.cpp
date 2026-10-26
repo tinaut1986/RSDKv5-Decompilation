@@ -81,6 +81,20 @@ void C3DPresent::ShutdownCore()
 
 void *C3DPresent::Staging() { return sStaging; }
 
+void C3DPresent::StagingWait()
+{
+    // A 16-byte copy between two buffers nobody else touches: citro3d waits for its queue (gxCmdQueueWait: the
+    // earlier copies' real completion) before sending it, which is the wait wanted; the copy itself may still be
+    // running on return, harmlessly.
+    static void *src, *dst;
+    if (!src) {
+        src = linearAlloc(16);
+        dst = vramAlloc(16);
+    }
+    if (src && dst)
+        C3D_SyncTextureCopy((u32 *)src, 0, (u32 *)dst, 0, 16, 8);
+}
+
 bool C3DPresent::InitCore()
 {
     if (sCore)
@@ -213,6 +227,7 @@ void C3DPresent::Present(const unsigned short *src, int pitch)
     // with equal input and output dimensions; the picture is copied into its top-left corner.
     {
         DEV_STAGE(STAGE_PCOPY);
+        StagingWait();
         unsigned short *dst = (unsigned short *)sStaging;
         for (int y = 0; y < SCREEN_H; ++y)
             memcpy(dst + y * TEX_W, src + y * pitch, SCREEN_W * 2);
