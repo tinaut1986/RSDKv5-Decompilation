@@ -1021,6 +1021,48 @@ static void HandleSession(int ctrl)
                 }
                 Reply(s, f ? "200 debug/floor.txt" : "550 cannot write debug/floor.txt");
             }
+            else if (!strcmp(sub, "READTEST")) {
+                // The SD card's read speed on the data pack: 4 MB at 100 MB in one fread, in 64 KB freads, and with
+                // FSFILE_Read (no stdio) into linear and into heap memory
+                const char *pack = dataPackCount ? dataPacks[0].name : "";
+                const u32 n = 4 << 20;
+                u8 *heap = (u8 *)malloc(n), *lin = (u8 *)linearAlloc(64 * 1024);
+                unsigned long ms[4] = {};
+                auto now = []() { return svcGetSystemTick(); };
+                const u64 k = SYSCLOCK_ARM11 / 1000;
+                if (heap) {
+                    if (FILE *f = fopen(pack, "rb")) {
+                        fseek(f, 100 << 20, SEEK_SET);
+                        u64 t = now();
+                        fread(heap, 1, n, f);
+                        ms[0] = (unsigned long)((now() - t) / k);
+                        fseek(f, 108 << 20, SEEK_SET);
+                        t = now();
+                        for (u32 o = 0; o < n; o += 64 * 1024)
+                            fread(heap + o, 1, 64 * 1024, f);
+                        ms[1] = (unsigned long)((now() - t) / k);
+                        fclose(f);
+                    }
+                    Handle h;
+                    const char *rel = !strncmp(pack, "sdmc:", 5) ? pack + 5 : pack;
+                    if (R_SUCCEEDED(FSUSER_OpenFileDirectly(&h, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, rel), FS_OPEN_READ, 0))) {
+                        u32 got = 0;
+                        u64 t = now();
+                        FSFILE_Read(h, &got, 116ULL << 20, heap, n);
+                        ms[2] = (unsigned long)((now() - t) / k);
+                        t = now();
+                        for (u32 o = 0; lin && o < n; o += 64 * 1024)
+                            FSFILE_Read(h, &got, (124ULL << 20) + o, lin, 64 * 1024);
+                        ms[3] = (unsigned long)((now() - t) / k);
+                        FSFILE_Close(h);
+                    }
+                }
+                free(heap);
+                if (lin)
+                    linearFree(lin);
+                Reply(s, "200 %s: 4 MB fread %lu ms, 64 KB freads %lu ms, FSFILE_Read %lu ms, 64 KB FSFILE_Reads (linear) %lu ms", pack, ms[0], ms[1],
+                      ms[2], ms[3]);
+            }
             else if (!strcmp(sub, "ORDER")) {
                 Reply(s, "200 %s", sOrderLast);
             }
