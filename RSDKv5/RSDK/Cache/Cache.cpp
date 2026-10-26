@@ -1,4 +1,5 @@
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RSDK/Dev/CTR/DevTools.hpp"
 
 #include "CacheFiles.cpp"
 
@@ -50,6 +51,12 @@ void RSDK::InitCache(uint8_t cacheFlags) {
       }
     }
 
+    {
+      int loaded = 0;
+      for (int i = 0; i < STATIC_VAR_FILE_COUNT; i++)
+        loaded += staticVarRefs[i].ref != NULL;
+      DEV_LOG("static cache: %d of %d files, %d bytes", loaded, STATIC_VAR_FILE_COUNT, (int)(ptr - staticVarCache));
+    }
     // set flag
     cachesEnabled |= ENABLE_STATIC_CACHE; 
   }
