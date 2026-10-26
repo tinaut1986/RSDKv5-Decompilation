@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 ARGS=(); [ "${1:-}" = "-i" ] && { ARGS=(-i "$2"); shift 2; }
 IP=${ARGS[1]:-$(cat .3ds_ftp_ip)}
 D="ftp://$IP:5000/3ds/Sonic%20Mania%203DS/debug/"
-N=${1:-$(curl -s --max-time 20 "$D" | grep -o 'capture-[0-9]*-info.txt' | sort | tail -1 | grep -o '[0-9][0-9]*')}
+N=${1:-$(curl -s -l --max-time 60 "$D" | grep -o 'capture-[0-9]*-info.txt' | sort | tail -1 | grep -o '[0-9][0-9]*')}
 [ -z "$N" ] && { echo "no capture on the console"; exit 1; }
 N=$(printf %03d "$((10#$N))")
 OUT=${2:-debug/captures}

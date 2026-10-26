@@ -65,6 +65,12 @@ const char *ReasonName();
 const char *LastRefusal();
 // The last frame's batches, one a line (texture, blend, first quad, quads, depth, scissor), for a CAPTURE's info file.
 void DumpBatches(void *file); // FILE*
+// SITE FLOOR: the last frame's floor lines as the windows drew them (level, map ends, texel coordinates), its windows.
+void DumpFloor(void *file); // FILE*
+// SITE MODELCHECK: the 3D models' VRAM compared with what was uploaded, and the renderer's VRAM blocks.
+void CheckModels(void *file); // FILE*
+// Bytes of the models' VRAM that differ from what was uploaded (SITE SET modelcheck 1).
+unsigned ModelDamage();
 // SITE CONV: the last frame's atlas conversions (time, unchanged ones, the biggest sprites, the groups that changed).
 const char *ConvReport();
 // The depth set-up of the 3D scenes, to find the PICA's convention on the console: bit 0 nearer = lower z/w, bit 1
