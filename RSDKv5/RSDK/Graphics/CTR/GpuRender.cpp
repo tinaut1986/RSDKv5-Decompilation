@@ -2092,6 +2092,10 @@ bool EmitLayerBasic(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
             return false;
         line += n;
         layerY += n;
+        // The software wraps at the layer's last row: a screen that crosses the layer's bottom continues at its top (Press
+        // Garden's far background when the camera is high; the rows past the end drew nothing, the sky showed through).
+        if (layerY >= layer->ysize << 4)
+            layerY -= layer->ysize << 4;
     }
     return true;
 }
