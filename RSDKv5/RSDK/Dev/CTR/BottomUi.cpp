@@ -270,6 +270,8 @@ static void ValFtp(char *o, unsigned c, bool *on)
 }
 // OFF -> ON; ON -> OFF; a failed start (FAILED) -> tries again
 static void TapFtp() { DevTools::SetFtp(!DevTools::FtpRunning()); }
+static void ValImmortal(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::immortal ? "ON" : "OFF"); *on = DevTools::immortal; }
+static void TapImmortal() { DevTools::immortal = !DevTools::immortal; }
 static int sPick; // the STAGES list: 0 closed, 1 the scene list's categories, 2 the scenes of one (below)
 static void ValStages(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", "LIST"); *on = sPick != 0; }
 static void TapStages() { sPick = 1; }
@@ -279,6 +281,7 @@ static const Button kButtons[] = {
     { "LOG MARK", TapMark, ValMark },         { "DRAW LISTS", TapDraw, ValDraw },            { "FLIP COPY", TapFlip, ValFlip },
     { "3D SCENES", TapGpu3D, ValGpu3D },      { "FORCE 3D", TapForce3D, ValForce3D },    { "DEPTH TINT", TapDepthTint, ValDepthTint },
     { "CAPTURE", TapCapture, ValCapture },    { "FTP", TapFtp, ValFtp },                 { "STAGES", TapStages, ValStages },
+    { "IMMORTAL", TapImmortal, ValImmortal },
 };
 
 #endif // MANIA_DEV_TOOLS
