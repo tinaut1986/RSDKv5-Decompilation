@@ -1180,8 +1180,8 @@ static void HandleSession(int ctrl)
                 // pcopy split: before the commands, then the geometry building per command type (ms, last frame).
                 const GpuRender::Stats &g = GpuRender::GetStats();
                 using namespace GpuFrame;
-                Reply(s, "200 pre %.2f | layer %.2f roto-spr %.2f sprite %.2f 3d %.2f faces %.2f face %.2f line %.2f rect %.2f fill %.2f circle %.2f other %.2f",
-                      g.preMs, g.emitMs[CMD_LAYER], g.emitMs[CMD_ROTO], g.emitMs[CMD_SPRITE], g.emitMs[CMD_SCENE3D],
+                Reply(s, "200 pre %.2f | layer %.2f (roto: texture way %.2f, strips %.2f, floor %.2f; roto textures %.2f, floor moves %.2f in %u writes) roto-spr %.2f sprite %.2f 3d %.2f faces %.2f face %.2f line %.2f rect %.2f fill %.2f circle %.2f other %.2f",
+                      g.preMs, g.emitMs[CMD_LAYER], g.rotoTexUs / 1000.0f, g.rotoStripUs / 1000.0f, g.rotoFloorUs / 1000.0f, g.rotoBuildUs / 1000.0f, g.floorMoveUs / 1000.0f, g.floorWrites, g.emitMs[CMD_ROTO], g.emitMs[CMD_SPRITE], g.emitMs[CMD_SCENE3D],
                       g.emitMs[CMD_FACES] + g.emitMs[CMD_BLENDED_FACES], g.emitMs[CMD_FACE] + g.emitMs[CMD_BLENDED_FACE], g.emitMs[CMD_LINE],
                       g.emitMs[CMD_RECT], g.emitMs[CMD_FILL], g.emitMs[CMD_CIRCLE] + g.emitMs[CMD_CIRCLE_OUTLINE],
                       g.emitMs[CMD_LINEBUF] + g.emitMs[CMD_PALETTE]);
