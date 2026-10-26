@@ -446,6 +446,17 @@ void RSDK::LoadSfxToSlot(char *filename, uint8 slot, uint8 plays, uint8 scope)
 #endif
                     }
                 }
+#if RETRO_PLATFORM == RETRO_3DS && SAMPLE_USE_S16
+                else if (info.usingFileBuffer && !info.encrypted) {
+                    // The samples are already the buffer's format (16-bit, little-endian; the loop below copies them one
+                    // ReadInt16 at a time): one copy from the file in memory, zeros past its end as ReadInt16 gives
+                    const int32 have = MIN(length, (info.fileSize - info.readPos) / 2);
+                    if (have > 0)
+                        memcpy(buffer, info.fileBuffer, (size_t)have * 2);
+                    if (have < length)
+                        memset(buffer + (have > 0 ? have : 0), 0, (size_t)(length - (have > 0 ? have : 0)) * 2);
+                }
+#endif
                 else {
                     for (int32 s = 0; s < length; ++s) {
 #if SAMPLE_USE_FLOAT
