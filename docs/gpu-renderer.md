@@ -683,6 +683,11 @@ Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); 
 
 ## Lessons (read before touching this)
 
+- **`C3D_SyncTextureCopy` / `C3D_SyncDisplayTransfer` are not synchronous** outside a frame: they end in
+  `gspWaitForEvent(PPF, false)`, which returns at once when an earlier PPF (the last frame's display transfer) was never
+  waited for. Before the CPU writes the staging buffer again, `C3DPresent::StagingWait()` (2026-10-26, #10): without it
+  a model's triangles got its colours, Special Stage 4's fish became spikes, floor lines went missing, now and then and
+  never in Azahar. Found with `SITE MODELCHECK` (VRAM against what was uploaded) on a loop of scene reloads.
 - **Linear memory is the scarcest thing** (240 KB free with the 256 KB GPU command buffer): new GPU buffers go to VRAM
   when only the GPU and the transfer engine touch them (the soft-layer texture moved there). The heap is ~51.8 MB used
   in a stage: avoid big mallocs at run time (the CIA installer now uses a static buffer).

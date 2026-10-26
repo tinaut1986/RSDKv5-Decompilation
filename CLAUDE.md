@@ -110,6 +110,10 @@ tools/site.sh "RUNREC 1800" | RUNSTOP | "RUNPLAY [N] [F]" | RUN  # record keys f
                                             # (N passes, then frozen), save debug/run.bin, replay it (F: freeze at the end);
                                             # RUN: the result (real drawn fps). Saved runs and tools/runs/play.sh: tools/runs/
 tools/site.sh "SET ufonofall 1"             # debug: the Special Stage's holes are ground (blind test routes); not saved
+tools/site.sh MODELCHECK                    # 3D models' VRAM against what was uploaded -> debug/models.txt (damage, VRAM blocks)
+tools/site.sh "SET modelcheck 1"            # the same every 120 frames, the first damage to the log; not saved
+tools/site.sh FLOOR                         # last frame's Special Stage floor lines (window level, map ends, texels) -> debug/floor.txt
+tools/site.sh "MODELS 13"                   # the model list from model 13 (the reply is cut at the FTP line limit)
 tools/site.sh EMIT                          # pcopy split by command type (layers, sprites, 3D, lines...)
 tools/shot.sh top|bottom|right out.png      # screenshot (reads what the GPU drew too; right = right eye in 3D)
 tools/perf-sweep.sh "1 0 GHZ1" ...          # visit scenes, run right, log SITE STATE
