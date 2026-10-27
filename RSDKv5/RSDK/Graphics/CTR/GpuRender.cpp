@@ -2330,8 +2330,14 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
                 FreeRotoTex(sRotoTex[i]);
                 r = &sRotoTex[i];
             }
-        if (!r)
+        if (!r) {
+            static char why[96];
+            int n = snprintf(why, sizeof(why), "slots (wanted %ux%u):", w, h);
+            for (unsigned i = 0; i < ROTO_TEX_SLOTS; ++i)
+                n += snprintf(why + n, sizeof(why) - n, " %ux%u age %u", sRotoTex[i].w, sRotoTex[i].h, (unsigned)(sRotoFrame - sRotoTex[i].lastUsed));
+            sRotoTexWhy = why;
             return true;
+        }
         r->key = key, r->w = w, r->h = h;
         memset(r->used, 0xFF, sizeof(r->used));
     }
@@ -2390,7 +2396,8 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
                 else
                     changed[n++] = (uint8)i;
             }
-            if (few && n && blend0 == BLEND_NORMAL) { // (a sheet in an ink: a hot pass would paint over it opaque)
+            if (few && n && blend0 == BLEND_NORMAL && !src.sheet) { // (a sheet has no hot mask: BuildRotoMask refuses it; Oil Ocean's smog cycled
+                // a few colours, went hot and was refused every frame, the whole frame to the CPU at ~20 fps)
                 const unsigned keep = r->hotCount;
                 memcpy(r->hot + r->hotCount, changed, n);
                 r->hotCount += n;
