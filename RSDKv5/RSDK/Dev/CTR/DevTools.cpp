@@ -1103,6 +1103,31 @@ static void HandleSession(int ctrl)
                 else
                     Reply(s, "550 no %s in this scene", name);
             }
+            else if (!strcmp(sub, "OBJTIME")) {
+                // The eight object classes whose update took the most since the last call (ms a second of play), then reset
+                static u64 last = 0;
+                const u64 now   = svcGetSystemTick();
+                const float sec = last ? (now - last) / (float)SYSCLOCK_ARM11 : 1.0f;
+                last            = now;
+                int top[8];
+                int n = 0;
+                for (int c = 0; c < OBJECT_COUNT; ++c) {
+                    if (!DevTools::objTicks[c])
+                        continue;
+                    if (n == 8 && DevTools::objTicks[top[7]] >= DevTools::objTicks[c])
+                        continue;
+                    int k = n < 8 ? n++ : 7;
+                    top[k] = c;
+                    for (; k > 0 && DevTools::objTicks[top[k - 1]] < DevTools::objTicks[top[k]]; --k)
+                        std::swap(top[k], top[k - 1]);
+                }
+                char buf[400] = "";
+                int len       = 0;
+                for (int i = 0; i < n; ++i)
+                    len += snprintf(buf + len, sizeof(buf) - len, " %s %.2f", objectClassList[top[i]].name, DevTools::objTicks[top[i]] * 1000.0f / SYSCLOCK_ARM11 / sec);
+                memset(DevTools::objTicks, 0, sizeof(DevTools::objTicks));
+                Reply(s, "200 ms/second:%s", buf);
+            }
             else if (!strcmp(sub, "CONV")) {
                 // The last GPU frame's atlas conversions: which ones really changed colour
                 Reply(s, "200 %s", GpuRender::ConvReport());
@@ -1559,6 +1584,7 @@ bool DevTools::swVblankWait = false; // the clock paces the loop now (RenderDevi
 bool DevTools::swGpuPresent = true; // the renderer starts in GPU mode (SetGpuMode, the RENDERER button)
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
+uint32 DevTools::objTicks[0x400];
 bool DevTools::freeze         = false;
 bool DevTools::immortal       = false;
 bool DevTools::swForce3D      = false;
