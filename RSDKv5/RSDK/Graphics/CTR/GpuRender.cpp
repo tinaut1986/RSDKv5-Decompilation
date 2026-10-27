@@ -267,7 +267,7 @@ DVLB_s *s3Dvlb;
 shaderProgram_s s3Prog;
 bool s3Ready;
 struct {
-    int proj, wrow, nrow, lerp, scr, band, lit, dif, difs, spcs, eye;
+    int proj, wrow, nrow, lerp, scr, ortho, band, lit, dif, difs, spcs, eye;
 } s3Loc;
 C3D_AttrInfo s3AttrCol, s3AttrFixed;
 struct Draw3D {
@@ -465,6 +465,7 @@ bool Setup()
         s3Loc.nrow = shaderInstanceGetUniformLocation(vs, "nrow");
         s3Loc.lerp = shaderInstanceGetUniformLocation(vs, "lerp");
         s3Loc.scr  = shaderInstanceGetUniformLocation(vs, "scr");
+        s3Loc.ortho = shaderInstanceGetUniformLocation(vs, "ortho");
         s3Loc.band = shaderInstanceGetUniformLocation(vs, "band");
         s3Loc.lit  = shaderInstanceGetUniformLocation(vs, "lit");
         s3Loc.dif  = shaderInstanceGetUniformLocation(vs, "dif");
@@ -1656,12 +1657,20 @@ void Draw3DSceneGpu(unsigned k, bool follows)
 {
     const Draw3D &d           = sDraw3D[k];
     const GpuScene3D::Head *h = d.h;
-    const bool shaded         = h->drawMode == S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN;
+    const bool ortho          = h->drawMode == S3D_SOLIDCOLOR_SHADED_BLENDED;
+    const bool shaded         = h->drawMode == S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN || ortho;
     if (!follows) {
         C3D_BindProgram(&s3Prog);
         C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s3Loc.proj, (C3D_Mtx *)C3DPresent::Projection());
     }
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, (float)(1 << h->projX), -(float)(1 << h->projY), (float)h->centerX, (float)h->centerY);
+    if (ortho) {
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, 1.0f / 256, 1.0f / 256, -(float)h->posX, -(float)h->posY);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.ortho, 1, 0, 0, 0);
+    }
+    else {
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, (float)(1 << h->projX), -(float)(1 << h->projY), (float)h->centerX, (float)h->centerY);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.ortho, 0, 1, 0, 0);
+    }
     // z / w linear in Z inside the scene's band (1/Z left the near and far sides of a model a few 16-bit steps apart
     // and the last triangle drawn won); later scenes in nearer bands, as the software draws them over the earlier ones.
     // The band spans the scene's own depth, its instances' Z +- their models' reach: a fixed 0..65536 clamped every
@@ -1676,7 +1685,7 @@ void Draw3DSceneGpu(unsigned k, bool follows)
         zmin              = z - reach < zmin ? z - reach : zmin;
         zmax              = z + reach > zmax ? z + reach : zmax;
     }
-    zmin = zmin < 1.0f ? 1.0f : zmin;
+    zmin = zmin < 1.0f && !ortho ? 1.0f : zmin; // (an orthographic model may reach behind Z = 0)
     zmax = zmax < zmin + 1.0f ? zmin + 1.0f : zmax;
     // Bands of the frame's scene count, not MAX_DRAW3D: the shader's 24-bit floats leave only a few hundred steps in a
     // band of 1/256 of the range.
