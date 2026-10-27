@@ -212,6 +212,18 @@ extern int32 globalObjectIDs[OBJECT_COUNT];
 extern int32 stageObjectIDs[OBJECT_COUNT];
 
 extern EntityBase objectEntityList[ENTITY_COUNT];
+// The class of each entity slot, in 2 KB instead of 2300 entities 1 KB apart: foreach_all (GetAllEntities) searches this
+// and checks the hit against the entity. The engine keeps it current at every place it writes a classID and
+// ProcessObjects refreshes it each frame (a game that writes a classID itself shows up a frame late; see shadowMiss).
+extern uint16 entityClassShadow[ENTITY_COUNT];
+extern uint32 entityShadowMiss;
+extern bool entityShadowValid; // false from a scene's load until its first frame's update: foreach_all searches the entities
+inline void ShadowClass(const void *entity, uint16 classID)
+{
+    const uint32 slot = (uint32)((const EntityBase *)entity - objectEntityList);
+    if (slot < ENTITY_COUNT)
+        entityClassShadow[slot] = classID;
+}
 
 extern EditableVarInfo *editableVarList;
 extern int32 editableVarCount;
@@ -302,9 +314,12 @@ inline void CopyEntity(void *destEntity, void *srcEntity, bool32 clearSrcEntity)
 {
     if (destEntity && srcEntity) {
         memcpy(destEntity, srcEntity, sizeof(EntityBase));
+        ShadowClass(destEntity, ((Entity *)destEntity)->classID);
 
-        if (clearSrcEntity)
+        if (clearSrcEntity) {
             memset(srcEntity, 0, sizeof(EntityBase));
+            ShadowClass(srcEntity, 0);
+        }
     }
 }
 

@@ -294,6 +294,8 @@ void RSDK::LoadSceneAssets()
 #endif
 
     memset(objectEntityList, 0, ENTITY_COUNT * sizeof(EntityBase));
+    memset(entityClassShadow, 0, sizeof(entityClassShadow));
+    entityShadowValid = false;
     BottomUi::LoadPhase("Scene layout", 0.45f, 0.5f);
 
     SceneListEntry *sceneEntry = &sceneInfo.listData[sceneInfo.listPos];
@@ -546,6 +548,7 @@ void RSDK::LoadSceneAssets()
 #endif
 
                 entity->classID = classID;
+                ShadowClass(entity, classID);
 #if RETRO_REV02
                 entity->filter = 0xFF;
 #endif
@@ -712,6 +715,8 @@ void RSDK::LoadSceneAssets()
         RemoveStorageEntry((void **)&tempEntityList);
 #endif
         tempEntityList = NULL;
+        for (int32 e = 0; e < ENTITY_COUNT; ++e) // the loads above copied whole entities
+            entityClassShadow[e] = objectEntityList[e].classID;
 #endif
 
 #if !RETRO_USE_ORIGINAL_CODE

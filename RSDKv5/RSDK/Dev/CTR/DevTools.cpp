@@ -1126,7 +1126,7 @@ static void HandleSession(int ctrl)
                 for (int i = 0; i < n; ++i)
                     len += snprintf(buf + len, sizeof(buf) - len, " %s %.2f", objectClassList[top[i]].name, DevTools::objTicks[top[i]] * 1000.0f / SYSCLOCK_ARM11 / sec);
                 memset(DevTools::objTicks, 0, sizeof(DevTools::objTicks));
-                Reply(s, "200 ms/second:%s", buf);
+                Reply(s, "200 ms/second:%s | shadow misses %u", buf, (unsigned)entityShadowMiss);
             }
             else if (!strcmp(sub, "CONV")) {
                 // The last GPU frame's atlas conversions: which ones really changed colour
