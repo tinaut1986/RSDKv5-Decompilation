@@ -1104,28 +1104,32 @@ static void HandleSession(int ctrl)
                     Reply(s, "550 no %s in this scene", name);
             }
             else if (!strcmp(sub, "OBJTIME")) {
-                // The eight object classes whose update took the most since the last call (ms a second of play), then reset
+                // The eight object classes whose update, and whose draw, took the most since the last call (ms a second of
+                // play), then reset
                 static u64 last = 0;
                 const u64 now   = svcGetSystemTick();
                 const float sec = last ? (now - last) / (float)SYSCLOCK_ARM11 : 1.0f;
                 last            = now;
-                int top[8];
-                int n = 0;
-                for (int c = 0; c < OBJECT_COUNT; ++c) {
-                    if (!DevTools::objTicks[c])
-                        continue;
-                    if (n == 8 && DevTools::objTicks[top[7]] >= DevTools::objTicks[c])
-                        continue;
-                    int k = n < 8 ? n++ : 7;
-                    top[k] = c;
-                    for (; k > 0 && DevTools::objTicks[top[k - 1]] < DevTools::objTicks[top[k]]; --k)
-                        std::swap(top[k], top[k - 1]);
-                }
-                char buf[400] = "";
+                char buf[800] = "";
                 int len       = 0;
-                for (int i = 0; i < n; ++i)
-                    len += snprintf(buf + len, sizeof(buf) - len, " %s %.2f", objectClassList[top[i]].name, DevTools::objTicks[top[i]] * 1000.0f / SYSCLOCK_ARM11 / sec);
-                memset(DevTools::objTicks, 0, sizeof(DevTools::objTicks));
+                uint32 *const lists[2] = { DevTools::objTicks, DevTools::objDrawTicks };
+                for (int l = 0; l < 2; ++l) {
+                    uint32 *t = lists[l];
+                    int top[8];
+                    int n = 0;
+                    for (int c = 0; c < OBJECT_COUNT; ++c) {
+                        if (!t[c] || (n == 8 && t[top[7]] >= t[c]))
+                            continue;
+                        int k  = n < 8 ? n++ : 7;
+                        top[k] = c;
+                        for (; k > 0 && t[top[k - 1]] < t[top[k]]; --k)
+                            std::swap(top[k], top[k - 1]);
+                    }
+                    len += snprintf(buf + len, sizeof(buf) - len, l ? " | draw:" : " update:");
+                    for (int i = 0; i < n; ++i)
+                        len += snprintf(buf + len, sizeof(buf) - len, " %s %.2f", objectClassList[top[i]].name, t[top[i]] * 1000.0f / SYSCLOCK_ARM11 / sec);
+                    memset(t, 0, sizeof(DevTools::objTicks));
+                }
                 Reply(s, "200 ms/second:%s | shadow misses %u", buf, (unsigned)entityShadowMiss);
             }
             else if (!strcmp(sub, "CONV")) {
@@ -1585,6 +1589,7 @@ bool DevTools::swGpuPresent = true; // the renderer starts in GPU mode (SetGpuMo
 unsigned DevTools::skipCount = 0;
 uint32 DevTools::injectKeys  = 0;
 uint32 DevTools::objTicks[0x400];
+uint32 DevTools::objDrawTicks[0x400];
 bool DevTools::freeze         = false;
 bool DevTools::immortal       = false;
 bool DevTools::swForce3D      = false;
