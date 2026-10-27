@@ -15,6 +15,7 @@
 .fvec dif       ; diffuse colour (rgb)
 .fvec difs      ; 2^-diffuse intensity (rgb)
 .fvec spcs      ; specular scale 1 / (1024 * 2^specular intensity) (rgb), 0 unlit
+.fvec ortho    ; (1, 0, 0, 0) for the orthographic modes (w = 1, scr = (1/256, 1/256, -screen x, -screen y)), else (0, 1, 0, 0): w = Z
 .fvec eye       ; stereoscopic 3D: (shift in pixels at the far end for this eye, Zc, lowest, highest): the screen x moves by
                 ; shift * clamp(1 - Zc / Z, lowest, highest); Zc (the player's depth) stays on the screen plane. 0: no 3D
 .constf k(0.0, 1.0, 255.0, 0.003921569)
@@ -43,11 +44,15 @@
     dp4 r4.y, wrow[1], r0
     dp4 r4.z, wrow[2], r0
 
-    ; homogeneous screen position (centre * Z + X * kx, centre * Z - Y * ky, ., Z): the projection divides by Z
+    ; w: Z for the perspective modes, 1 for the orthographic ones
+    mov r9, ortho
+    mul r13.x, r9.yyyy, r4.zzzz
+    add r13.x, r13.xxxx, r9.xxxx
+    ; homogeneous screen position (centre * w + X * kx, centre * w - Y * ky, ., w): the projection divides by w
     mov r6, scr
     mul r7.x, r6.xxxx, r4.xxxx
     mul r7.y, r6.yyyy, r4.yyyy
-    mul r8.xy, r6.zwzw, r4.zzzz
+    mul r8.xy, r6.zwzw, r13.xxxx
     add r7.xy, r7.xyxy, r8.xyxy
     ; stereo: x' += shift * clamp(1 - Zc / Z) * Z (x' is homogeneous: the projection divides by Z)
     mov r9, eye
@@ -57,10 +62,10 @@
     max r8.z, r9.zzzz, r8.zzzz
     min r8.z, r9.wwww, r8.zzzz
     mul r8.z, r9.xxxx, r8.zzzz
-    mul r8.z, r8.zzzz, r4.zzzz
+    mul r8.z, r8.zzzz, r13.xxxx
     add r7.x, r7.xxxx, r8.zzzz
     mov r7.z, zero
-    mov r7.w, r4.zzzz
+    mov r7.w, r13.xxxx
     dp4 outpos.x, projection[0], r7
     dp4 outpos.y, projection[1], r7
     dp4 outpos.w, projection[3], r7
@@ -68,7 +73,7 @@
     min r8.w, r9.zzzz, r4.zzzz
     mul r8.w, r9.yyyy, r8.wwww
     add r8.w, r9.xxxx, r8.wwww
-    mul outpos.z, r8.wwww, r4.zzzz
+    mul outpos.z, r8.wwww, r13.xxxx
 
     ; lighting: n = the transformed normal's y
     dp3 r5.x, nrow, r2

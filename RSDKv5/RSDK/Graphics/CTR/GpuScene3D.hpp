@@ -23,6 +23,7 @@ struct Head {
     int32 projX, projY;
     int32 diffuse[3], diffuseIntensity[3], specularIntensity[3];
     int32 centerX, centerY;
+    int32 posX, posY; // the screen's position (the orthographic modes draw relative to it)
     int32 alpha, ink;
 };
 struct Inst {
