@@ -1314,6 +1314,8 @@ void RSDK::InitGameLink()
     objectClassCount = 0;
     memset(globalObjectIDs, 0, sizeof(globalObjectIDs));
     memset(objectEntityList, 0, sizeof(objectEntityList));
+    memset(entityClassShadow, 0, sizeof(entityClassShadow));
+    entityShadowValid = false;
     editableVarCount = 0;
     foreachStackPtr  = foreachStackList;
     currentMod       = NULL;

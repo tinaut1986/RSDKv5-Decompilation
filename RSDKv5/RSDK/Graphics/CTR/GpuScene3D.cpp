@@ -67,11 +67,14 @@ bool GpuScene3D::AddModel(uint16 model, uint16 scene, uint8 drawMode, Matrix *ma
 {
     if (!GpuFrame::active || !DEV_SW_GPURENDER || !DEV_SW_GPU3D || model >= MODEL_COUNT || scene >= SCENE3D_COUNT || !matWorld || sPoolCount >= POOL)
         return false;
-    if (drawMode != S3D_SOLIDCOLOR_SCREEN && drawMode != S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN)
+    // S3D_SOLIDCOLOR_SHADED_BLENDED: the same without perspective (Stardust Speedway's EggTower, 1458 faces: ~10 ms a frame
+    // in software). It passes no normal matrix, so the software lights it with the scene's untouched zero normals.
+    const bool ortho = drawMode == S3D_SOLIDCOLOR_SHADED_BLENDED;
+    if (drawMode != S3D_SOLIDCOLOR_SCREEN && drawMode != S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN && !ortho)
         return false;
     const Model &md = modelList[model];
-    const bool shaded = drawMode == S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN;
-    if (shaded && (!(md.flags & 1) || !matNormals)) // 1: MODEL_USENORMALS (Scene3D.cpp)
+    const bool shaded = drawMode != S3D_SOLIDCOLOR_SCREEN;
+    if (shaded && !ortho && (!(md.flags & 1) || !matNormals)) // 1: MODEL_USENORMALS (Scene3D.cpp)
         return false; // the software lights with normals left from an earlier model: not reproduced
     if (scene3DList[scene].vertexCount || !ModelFits(model))
         return false; // the scene already holds CPU faces: keep it all on the CPU (one sort)
@@ -117,6 +120,7 @@ void GpuScene3D::OnDraw(uint16 scene)
     h->diffuseIntensity[0] = scn.diffuseIntensityX, h->diffuseIntensity[1] = scn.diffuseIntensityY, h->diffuseIntensity[2] = scn.diffuseIntensityZ;
     h->specularIntensity[0] = scn.specularIntensityX, h->specularIntensity[1] = scn.specularIntensityY, h->specularIntensity[2] = scn.specularIntensityZ;
     h->centerX = currentScreen->center.x, h->centerY = currentScreen->center.y;
+    h->posX = currentScreen->position.x, h->posY = currentScreen->position.y;
     h->alpha = sceneInfo.entity ? sceneInfo.entity->alpha : 0xFF;
     h->ink   = sceneInfo.entity ? sceneInfo.entity->inkEffect : INK_NONE;
     Inst *out = (Inst *)(h + 1);

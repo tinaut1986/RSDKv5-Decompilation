@@ -305,28 +305,32 @@ enum {
 
 #if MANIA_DEV_TOOLS
 
-// DEBUG layout: the tab bar, the buttons fixed at the bottom (four to a row) and between them the information,
-// which scrolls: drag it, or touch the bar on the right to jump.
+// DEBUG layout: the tab bar, the information fixed under it (sInfoH) and, in the band at the bottom, the buttons (four to
+// a row), which scroll: drag them, or touch the bar on the right to jump.
 enum {
     BTN_COUNT = sizeof(kButtons) / sizeof(kButtons[0]),
     BTN_COLS  = 4,
     BTN_GAP   = 4,
-    BTN_W     = (W - (BTN_COLS + 1) * BTN_GAP) / BTN_COLS,
+    BAR_W     = 4,
+    BTN_W     = (W - BAR_W - 3 - (BTN_COLS + 1) * BTN_GAP) / BTN_COLS,
     BTN_H     = 28,
     BTN_ROWS  = (BTN_COUNT + BTN_COLS - 1) / BTN_COLS,
-    BTN_TOP   = H - BTN_ROWS * (BTN_H + BTN_GAP),
     VIEW_TOP  = HEADER_H,
-    VIEW_H    = BTN_TOP - VIEW_TOP,
-    BAR_W     = 4,
-    BAR_HIT_X = W - 20, // touches right of this in the view move the bar
+    BTN_CONTENT_H = BTN_ROWS * (BTN_H + BTN_GAP) + BTN_GAP / 2,
+    BAR_HIT_X = W - 20, // touches right of this in the band move the bar
 };
 
-static float sScroll;       // pixels of the information scrolled off the top
-static float sContentH = 1; // height of the information, measured by the last draw
-static int sDragY = -1;     // touch y of the drag in progress (-1: none)
+static float sInfoH = 98; // height of the information, measured by the last draw: the buttons' band is what is under it
+static float BtnTop() { return VIEW_TOP + sInfoH; }
+static float BtnViewH() { return H - BtnTop(); }
+static float sScroll;   // pixels of the buttons scrolled off the top of the band
+static int sDragY = -1; // touch y of the drag in progress (-1: none)
+static int sDragStart;  // where the touch began (a tap is a touch that did not move)
+static int sBtnDown = -1; // the button under the touch that began in the band
+static bool sDragMoved;
 static bool sDragBar;
 
-static float MaxScroll() { return sContentH > VIEW_H ? sContentH - VIEW_H : 0; }
+static float MaxScroll() { return BTN_CONTENT_H > BtnViewH() ? BTN_CONTENT_H - BtnViewH() : 0; }
 static void ClampScroll()
 {
     if (sScroll > MaxScroll())
@@ -338,21 +342,17 @@ static void ClampScroll()
 static void ButtonRect(int i, float *x, float *y)
 {
     *x = BTN_GAP + (i % BTN_COLS) * (BTN_W + BTN_GAP);
-    *y = BTN_TOP + (i / BTN_COLS) * (BTN_H + BTN_GAP);
+    *y = BtnTop() + BTN_GAP / 2 + (i / BTN_COLS) * (BTN_H + BTN_GAP) - sScroll;
 }
 
-// The scrolling information, drawn from y = `top` (the view's top minus the scroll); z stays below the header and
-// the button panel, which are drawn after it and cover what overflows the view. Returns the content's height.
+// The information, drawn from y = `top`, in sInfoH pixels; z is above the cover that hides the buttons scrolled under it.
+// Returns the content's height.
 static float DrawInfo(float top)
 {
     DevTools::Stats st;
     DevTools::GetStats(&st);
     char line[96];
     float y = top + 2;
-
-    snprintf(line, sizeof(line), "FTP %s", DevTools::FtpStatus());
-    Text(line, 8, y, 0.42f, Rgb(170, 220, 190));
-    y += 13;
 
     // Frame rate: green at 59+, yellow from 50, red below
     const u32 fpsColor = st.fps >= 59 ? Rgb(90, 220, 110) : st.fps >= 50 ? Rgb(240, 210, 70) : Rgb(235, 90, 80);
@@ -361,13 +361,13 @@ static float DrawInfo(float top)
     Text("fps", 74, y + 18, 0.5f, Rgb(160, 170, 180));
     snprintf(line, sizeof(line), "frame %.1f ms   skipped %u/s", st.frameMs, st.skipped);
     Text(line, 118, y + 4, 0.45f, Rgb(210, 215, 220));
-    snprintf(line, sizeof(line), "scene %d", st.scene);
-    Text(line, 118, y + 18, 0.45f, Rgb(160, 170, 180));
-    y += 38;
+    snprintf(line, sizeof(line), "scene %d   FTP %s", st.scene, DevTools::FtpStatus());
+    Text(line, 118, y + 18, 0.4f, Rgb(160, 170, 180));
+    y += 36;
 
     // Stacked bar of one 16.7 ms frame: update | draw | flip, the rest idle; each figure below in its segment's colour
     const float budget = 16.7f, barX = 8, barW = W - 16 - BAR_W - 4, barH = 12;
-    C2D_DrawRectSolid(barX, y, 0.2f, barW, barH, Rgb(34, 40, 48));
+    C2D_DrawRectSolid(barX, y, 0.42f, barW, barH, Rgb(34, 40, 48));
     const u32 colors[3] = { Rgb(80, 140, 235), Rgb(240, 150, 60), Rgb(150, 160, 170) };
     float x = barX;
     for (int i = 0; i < 3; ++i) {
@@ -375,7 +375,7 @@ static float DrawInfo(float top)
         if (x + w > barX + barW)
             w = barX + barW - x;
         if (w > 0)
-            C2D_DrawRectSolid(x, y, 0.3f, w, barH, colors[i]);
+            C2D_DrawRectSolid(x, y, 0.43f, w, barH, colors[i]);
         x += w;
     }
     y += 14;
@@ -398,39 +398,23 @@ static float DrawInfo(float top)
     snprintf(line, sizeof(line), "flip: geometry %.1f  textures %.1f  GPU frame %.1f", st.stageMs[DevTools::STAGE_PCOPY], st.stageMs[DevTools::STAGE_PXFER],
              st.stageMs[DevTools::STAGE_PFRAME]);
     Text(line, 8, y, 0.38f, Rgb(125, 135, 145));
-    y += 15;
+    y += 12;
 
-    // Renderer: the mode, who drew the last frame, frames per renderer, and why the CPU drew them in GPU mode.
+    // Renderer: frames per renderer (the mode is the RENDERER button's value), and, when the CPU drew frames in GPU
+    // mode, which commands made it.
     DevTools::RenderStats rs;
     DevTools::GetRenderStats(&rs);
     const u32 gpuCol = Rgb(90, 220, 110), cpuCol = Rgb(240, 170, 70);
-    C2D_DrawRectSolid(0, y - 1, 0.1f, W - BAR_W - 4, 41, Rgb(22, 28, 36));
-    snprintf(line, sizeof(line), "RENDERER %s", rs.gpuMode ? "GPU" : "CPU");
-    Text(line, 8, y, 0.5f, rs.gpuMode ? gpuCol : Rgb(200, 205, 210));
-    if (rs.lastFrameGpu)
-        snprintf(line, sizeof(line), "last frame GPU");
-    else if (rs.gpuMode && rs.lastWhy)
-        snprintf(line, sizeof(line), "last frame CPU: %s", rs.lastWhy);
-    else
-        snprintf(line, sizeof(line), "last frame CPU");
-    Text(line, W - BAR_W - 10, y + 1, 0.45f, rs.lastFrameGpu ? gpuCol : cpuCol, C2D_AlignRight);
-    y += 14;
     snprintf(line, sizeof(line), "1 s: GPU %u  CPU %u     total: GPU %u  CPU %u", rs.secGpu, rs.secCpu, rs.totalGpu, rs.totalCpu);
-    Text(line, 8, y, 0.4f, Rgb(200, 205, 210));
+    Text(line, 8, y, 0.4f, rs.lastFrameGpu ? gpuCol : cpuCol);
     y += 12;
-    if (rs.gpuMode) {
-        if (rs.top[0].why) {
-            int n = snprintf(line, sizeof(line), "CPU:");
-            for (int i = 0; i < 3 && rs.top[i].why && n < (int)sizeof(line); ++i)
-                n += snprintf(line + n, sizeof(line) - n, " %s %u", rs.top[i].why, rs.top[i].count);
-            Text(line, 8, y, 0.38f, cpuCol);
-        }
-        else
-            Text("every frame on the GPU", 8, y, 0.38f, gpuCol);
+    if (rs.gpuMode && rs.top[0].why) {
+        int n = snprintf(line, sizeof(line), "CPU:");
+        for (int i = 0; i < 3 && rs.top[i].why && n < (int)sizeof(line); ++i)
+            n += snprintf(line + n, sizeof(line) - n, " %s %u", rs.top[i].why, rs.top[i].count);
+        Text(line, 8, y, 0.38f, cpuCol);
+        y += 12;
     }
-    else
-        Text("software renderer, CPU copy to the screen", 8, y, 0.38f, Rgb(140, 150, 160));
-    y += 14;
     return y - top;
 }
 
@@ -1895,37 +1879,38 @@ static void DrawAchToast()
 
 static void DrawDebugTab()
 {
-    char line[96], val[32];
-    ClampScroll();
-    sContentH = DrawInfo(VIEW_TOP - sScroll);
+    char val[32];
     ClampScroll();
 
-    // Scroll bar, only when the information does not fit
-    if (sContentH > VIEW_H) {
-        const float bx = W - BAR_W - 2, thumbH = VIEW_H * VIEW_H / sContentH;
-        const float thumbY = VIEW_TOP + (VIEW_H - thumbH) * (sScroll / MaxScroll());
-        C2D_DrawRectSolid(bx, VIEW_TOP, 0.55f, BAR_W, VIEW_H, Rgb(34, 40, 48));
-        C2D_DrawRectSolid(bx, thumbY, 0.56f, BAR_W, thumbH, sDragBar || sDragY >= 0 ? Rgb(150, 190, 240) : Rgb(100, 120, 150));
-    }
-
-    // Button panel, over what scrolled under it
-    C2D_DrawRectSolid(0, BTN_TOP - BTN_GAP / 2, 0.7f, W, H - BTN_TOP + BTN_GAP / 2, T().bg);
-    C2D_DrawRectSolid(0, BTN_TOP - BTN_GAP / 2, 0.71f, W, 1, T().barLine);
+    // The buttons, scrolled; those that went up past the band are under the information's cover (z 0.4) and the tab bar
     for (int i = 0; i < BTN_COUNT; ++i) {
         float bx, by;
         ButtonRect(i, &bx, &by);
+        if (by + BTN_H < VIEW_TOP || by >= H)
+            continue;
         bool on = false;
         val[0] = 0;
         kButtons[i].value(val, sizeof(val), &on);
         u32 fill = on ? Rgb(28, 88, 52) : Rgb(40, 46, 56);
         if (i == sPressed)
             fill = on ? Rgb(50, 130, 80) : Rgb(70, 82, 100);
-        C2D_DrawRectSolid(bx, by, 0.72f, BTN_W, BTN_H, fill);
-        C2D_DrawRectSolid(bx, by, 0.73f, 3, BTN_H, on ? Rgb(90, 220, 110) : Rgb(90, 100, 115));
-        Text(kButtons[i].label, bx + 7, by + 2, 0.36f, Rgb(190, 198, 206), 0, 0.74f);
-        Text(val, bx + 7, by + 12, 0.5f, Rgb(255, 255, 255), 0, 0.74f);
+        C2D_DrawRectSolid(bx, by, 0.32f, BTN_W, BTN_H, fill);
+        C2D_DrawRectSolid(bx, by, 0.33f, 3, BTN_H, on ? Rgb(90, 220, 110) : Rgb(90, 100, 115));
+        Text(kButtons[i].label, bx + 7, by + 2, 0.36f, Rgb(190, 198, 206), 0, 0.34f);
+        Text(val, bx + 7, by + 12, 0.5f, Rgb(255, 255, 255), 0, 0.34f);
     }
-    (void)line;
+
+    // Scroll bar, only when the buttons do not all fit
+    if (MaxScroll() > 0) {
+        const float bx = W - BAR_W - 2, thumbH = BtnViewH() * (float)BtnViewH() / BTN_CONTENT_H;
+        const float thumbY = BtnTop() + (BtnViewH() - thumbH) * (sScroll / MaxScroll());
+        C2D_DrawRectSolid(bx, BtnTop(), 0.55f, BAR_W, BtnViewH(), Rgb(34, 40, 48));
+        C2D_DrawRectSolid(bx, thumbY, 0.56f, BAR_W, thumbH, sDragBar || sDragY >= 0 ? Rgb(150, 190, 240) : Rgb(100, 120, 150));
+    }
+
+    // The information's cover, then the information over it
+    C2D_DrawRectSolid(0, VIEW_TOP, 0.4f, W, sInfoH, T().bg);
+    sInfoH = DrawInfo(VIEW_TOP) + 2;
 }
 
 // ---------------------------------------------------------------- DEBUG > STAGES
@@ -2686,29 +2671,37 @@ void BottomUi::Update()
             ; // PickInput took it
 #if MANIA_DEV_TOOLS
         else if (debugTab) {
+            // The information is fixed. A touch that starts in the buttons' band scrolls it when it moves (on the bar: jumps
+            // to that place) and presses the button under it when it does not; the press acts on release.
             if (down & KEY_TOUCH) {
-                // A touch that starts in the view scrolls it (on the bar: jumps to that place); on a button it presses.
-                sDragY   = t.py >= VIEW_TOP && t.py < BTN_TOP ? t.py : -1;
-                sDragBar = sDragY >= 0 && t.px >= BAR_HIT_X && sContentH > VIEW_H;
+                const bool inBand = t.py >= BtnTop();
+                sDragY     = inBand ? t.py : -1;
+                sDragStart = t.py;
+                sDragMoved = false;
+                sDragBar   = inBand && t.px >= BAR_HIT_X && MaxScroll() > 0;
+                sBtnDown   = -1;
+                if (inBand && !sDragBar)
+                    for (int i = 0; i < BTN_COUNT; ++i) {
+                        float bx, by;
+                        ButtonRect(i, &bx, &by);
+                        if (t.px >= bx && t.px < bx + BTN_W && t.py >= by && t.py < by + BTN_H && by >= BtnTop() - BTN_H / 2)
+                            sBtnDown = i;
+                    }
             }
             if (sDragBar) {
-                sScroll = (t.py - VIEW_TOP) * MaxScroll() / VIEW_H;
+                sScroll = (t.py - BtnTop()) * MaxScroll() / BtnViewH();
                 sDirty  = true;
             }
             else if (sDragY >= 0) {
-                if (t.py != sDragY) {
+                if (!sDragMoved && abs(t.py - sDragStart) > 5)
+                    sDragMoved = true;
+                if (sDragMoved && t.py != sDragY) {
                     sScroll += sDragY - t.py;
-                    sDragY  = t.py;
-                    sDirty  = true;
+                    sDirty = true;
                 }
-            }
-            else {
-                for (int i = 0; i < BTN_COUNT; ++i) {
-                    float bx, by;
-                    ButtonRect(i, &bx, &by);
-                    if (t.px >= bx && t.px < bx + BTN_W && t.py >= by && t.py < by + BTN_H)
-                        hit = i;
-                }
+                sDragY = t.py;
+                if (!sDragMoved)
+                    hit = sBtnDown; // highlighted while pressed
             }
             ClampScroll();
         }
@@ -2728,7 +2721,12 @@ void BottomUi::Update()
     }
 #if MANIA_DEV_TOOLS
     else if (sDragY >= 0 || sDragBar) {
+        if (debugTab && !sDragBar && !sDragMoved && sBtnDown >= 0) {
+            kButtons[sBtnDown].tap(); // released without a drag: the button was tapped
+            SaveAll();
+        }
         sDragY   = -1;
+        sBtnDown = -1;
         sDragBar = false;
         sDirty   = true;
     }
@@ -2740,7 +2738,7 @@ void BottomUi::Update()
             ; // AchInput acted already
 #if MANIA_DEV_TOOLS
         else if (debugTab)
-            kButtons[hit].tap();
+            ; // the DEBUG buttons act on release (above)
 #endif
         else if (Port::tab == TAB_UPDATES)
             UpdatesTap(hit);

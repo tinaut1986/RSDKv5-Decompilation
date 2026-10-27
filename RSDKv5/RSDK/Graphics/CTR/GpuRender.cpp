@@ -267,7 +267,7 @@ DVLB_s *s3Dvlb;
 shaderProgram_s s3Prog;
 bool s3Ready;
 struct {
-    int proj, wrow, nrow, lerp, scr, band, lit, dif, difs, spcs, eye;
+    int proj, wrow, nrow, lerp, scr, ortho, band, lit, dif, difs, spcs, eye;
 } s3Loc;
 C3D_AttrInfo s3AttrCol, s3AttrFixed;
 struct Draw3D {
@@ -465,6 +465,7 @@ bool Setup()
         s3Loc.nrow = shaderInstanceGetUniformLocation(vs, "nrow");
         s3Loc.lerp = shaderInstanceGetUniformLocation(vs, "lerp");
         s3Loc.scr  = shaderInstanceGetUniformLocation(vs, "scr");
+        s3Loc.ortho = shaderInstanceGetUniformLocation(vs, "ortho");
         s3Loc.band = shaderInstanceGetUniformLocation(vs, "band");
         s3Loc.lit  = shaderInstanceGetUniformLocation(vs, "lit");
         s3Loc.dif  = shaderInstanceGetUniformLocation(vs, "dif");
@@ -1656,12 +1657,20 @@ void Draw3DSceneGpu(unsigned k, bool follows)
 {
     const Draw3D &d           = sDraw3D[k];
     const GpuScene3D::Head *h = d.h;
-    const bool shaded         = h->drawMode == S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN;
+    const bool ortho          = h->drawMode == S3D_SOLIDCOLOR_SHADED_BLENDED;
+    const bool shaded         = h->drawMode == S3D_SOLIDCOLOR_SHADED_BLENDED_SCREEN || ortho;
     if (!follows) {
         C3D_BindProgram(&s3Prog);
         C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s3Loc.proj, (C3D_Mtx *)C3DPresent::Projection());
     }
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, (float)(1 << h->projX), -(float)(1 << h->projY), (float)h->centerX, (float)h->centerY);
+    if (ortho) {
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, 1.0f / 256, 1.0f / 256, -(float)h->posX, -(float)h->posY);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.ortho, 1, 0, 0, 0);
+    }
+    else {
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, (float)(1 << h->projX), -(float)(1 << h->projY), (float)h->centerX, (float)h->centerY);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.ortho, 0, 1, 0, 0);
+    }
     // z / w linear in Z inside the scene's band (1/Z left the near and far sides of a model a few 16-bit steps apart
     // and the last triangle drawn won); later scenes in nearer bands, as the software draws them over the earlier ones.
     // The band spans the scene's own depth, its instances' Z +- their models' reach: a fixed 0..65536 clamped every
@@ -1676,7 +1685,7 @@ void Draw3DSceneGpu(unsigned k, bool follows)
         zmin              = z - reach < zmin ? z - reach : zmin;
         zmax              = z + reach > zmax ? z + reach : zmax;
     }
-    zmin = zmin < 1.0f ? 1.0f : zmin;
+    zmin = zmin < 1.0f && !ortho ? 1.0f : zmin; // (an orthographic model may reach behind Z = 0)
     zmax = zmax < zmin + 1.0f ? zmin + 1.0f : zmax;
     // Bands of the frame's scene count, not MAX_DRAW3D: the shader's 24-bit floats leave only a few hundred steps in a
     // band of 1/256 of the range.
@@ -2114,6 +2123,61 @@ bool EmitLayerBasic(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     return true;
 }
 
+// DrawLayerVScroll: the recorded entries are per screen column (position.x: the layer's pixel column, advancing a pixel a
+// column; position.y: the band's vertical scroll). A run of columns inside one tile column with the same y is a strip of
+// tile pieces, as many quads as the strip has tile rows. (The software drew every such layer: ~14 ms a frame on the 2DS in
+// Metallic Madness 2.)
+bool EmitLayerVScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
+{
+    const int x1 = c.clip[0], x2 = c.clip[2], y1 = c.clip[1] < 0 ? 0 : c.clip[1], y2 = c.clip[3] > SCREEN_YSIZE ? SCREEN_YSIZE : c.clip[3];
+    if (x1 >= x2 || y1 >= y2 || !layer->xsize || !layer->ysize)
+        return true;
+    const int height   = (int)layer->ysize << 4;
+    const unsigned bank = sLineBuf[0] & 7; // the software draws the whole layer with the palette of line 0's bank
+    int cx             = x1;
+    while (cx < x2) {
+        const ScanlineInfo &s0 = sl[cx - x1];
+        const int xp           = FROM_FIXED(s0.position.x);
+        int w                  = 1;
+        while (cx + w < x2 && ((xp + w) & 15) && sl[cx + w - x1].position.y == s0.position.y && FROM_FIXED(sl[cx + w - x1].position.x) == xp + w)
+            ++w;
+        int yp = FROM_FIXED(s0.position.y);
+        if (yp >= height)
+            yp -= height;
+        else if (yp < 0)
+            yp += height;
+        const int col = xp >> 4, inX = xp & 15;
+        if (col < 0 || col >= layer->xsize || yp < 0 || yp >= height)
+            return Refuse(GpuRender::REASON_TILE_RANGE);
+        int row  = yp >> 4;
+        int srcY = yp & 15;
+        for (int dy = 0; dy < y2;) {
+            const int n = 16 - srcY < y2 - dy ? 16 - srcY : y2 - dy;
+            const int a = dy > y1 ? dy : y1, b = dy + n;
+            const uint16 t = layer->layout[col + (row << layer->widthShift)];
+            if (a < b && t < 0xFFFF) {
+                ++sStats.tileQuads;
+                const int cell = EnsureTile(t & 0xFFF, bank);
+                if (cell == -2)
+                    return Refuse(GpuRender::REASON_ATLAS_FULL);
+                if (cell < 0)
+                    return Refuse(GpuRender::REASON_TILE_RANGE);
+                const int tx = (cell % (TILE_ATLAS_W / 16)) * 16 + inX, ty = (cell / (TILE_ATLAS_W / 16)) * 16 + srcY + (a - dy);
+                if (!AddTileQuad(cx, a, cx + w, b, tx, ty, tx + w, ty + (b - a)))
+                    return Refuse(GpuRender::REASON_QUAD_LIMIT);
+            }
+            else if (t >= 0xFFFF)
+                ++sStats.emptyTiles;
+            dy += n;
+            srcY = 0;
+            if (++row == (int)layer->ysize)
+                row = 0;
+        }
+        cx += w;
+    }
+    return true;
+}
+
 // A rotozoom layer (the Special Stage floor, the title's island): per line the software walks the layer from
 // scanline.position by scanline.deform a pixel, so each line is cut into the runs of pixels that stay in one tile, and
 // each run is a 1-pixel-high quad of that tile with affine texel coordinates (1/32 texel, TEX_TILE_FINE). The ends of
@@ -2330,8 +2394,14 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
                 FreeRotoTex(sRotoTex[i]);
                 r = &sRotoTex[i];
             }
-        if (!r)
+        if (!r) {
+            static char why[96];
+            int n = snprintf(why, sizeof(why), "slots (wanted %ux%u):", w, h);
+            for (unsigned i = 0; i < ROTO_TEX_SLOTS; ++i)
+                n += snprintf(why + n, sizeof(why) - n, " %ux%u age %u", sRotoTex[i].w, sRotoTex[i].h, (unsigned)(sRotoFrame - sRotoTex[i].lastUsed));
+            sRotoTexWhy = why;
             return true;
+        }
         r->key = key, r->w = w, r->h = h;
         memset(r->used, 0xFF, sizeof(r->used));
     }
@@ -2390,7 +2460,8 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
                 else
                     changed[n++] = (uint8)i;
             }
-            if (few && n && blend0 == BLEND_NORMAL) { // (a sheet in an ink: a hot pass would paint over it opaque)
+            if (few && n && blend0 == BLEND_NORMAL && !src.sheet) { // (a sheet has no hot mask: BuildRotoMask refuses it; Oil Ocean's smog cycled
+                // a few colours, went hot and was refused every frame, the whole frame to the CPU at ~20 fps)
                 const unsigned keep = r->hotCount;
                 memcpy(r->hot + r->hotCount, changed, n);
                 r->hotCount += n;
@@ -3512,7 +3583,20 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     const uint32 maskX = (uint32)((TILE_SIZE << layer->widthShift) - 1) >> 4, maskY = (uint32)((TILE_SIZE << layer->heightShift) - 1) >> 4;
     const unsigned wShift = layer->widthShift;
     const uint16 *layout  = layer->layout;
-    for (int y = y1; y < y2; ++y) {
+    // A layer that is scaled but not turned and whose lines all share one x and the same size of step (Metallic Madness
+    // 1's level layer drawn at half size: 3100 quads, 6 ms): the runs of a line are the same on every line of a tile row,
+    // so one quad takes all of them (u as before, v from the first line's sample to the last's).
+    bool merge = !(GpuRender::depthMode & 64) && y2 - y1 >= 2 && !(sDepths && feet > 0);
+    int32 sv   = merge ? first[1].position.y - first[0].position.y : 0;
+    uint8 mbank;
+    merge = merge && sv > 0 && UniformBank(y1, y2, &mbank);
+    for (int y = y1; merge && y < y2; ++y) {
+        const ScanlineInfo &a = first[y - y1];
+        merge = !sLineDone[y - y1] && a.deform.y == 0 && a.deform.x == first[0].deform.x && a.position.x == first[0].position.x &&
+                (y == y1 || a.position.y - first[y - y1 - 1].position.y == sv);
+    }
+    for (int y = y1, step = 1; y < y2; y += step) {
+        step = 1;
         if (sLineDone[y - y1]) // drawn from the floor window
             continue;
         const ScanlineInfo &s = first[y - y1];
@@ -3538,7 +3622,15 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
             }
         }
         uint32 px = (uint32)s.position.x, py = (uint32)s.position.y; // wraps as the software's int32 does
-        const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
+        int m = 1;
+        if (merge) {
+            const uint32 row = py >> 20;
+            while (y + m < y2 && ((py + (uint32)(m * sv)) >> 20) == row)
+                ++m;
+        }
+        step            = m;
+        const int hvy   = merge ? sv >> 12 : hy;
+        const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + m) << 2) << 16;
         RotoAxis ax, ay;
         ax.Init(px, dx), ay.Init(py, dy);
         int cx = 0;
@@ -3579,17 +3671,38 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
                 const uint32 org = memoOrg[slot];
                 const int cu = (int)(org & 0xFFFF), cv = (int)(org >> 16);
                 const uint32 fx = px & 0xFFFFF, fy = py & 0xFFFFF;
-                const uint32 lx = (px + (uint32)((n - 1) * dx)) & 0xFFFFF, ly = (py + (uint32)((n - 1) * dy)) & 0xFFFFF;
+                const uint32 lx = (px + (uint32)((n - 1) * dx)) & 0xFFFFF, ly = (py + (uint32)((n - 1) * dy) + (uint32)((m - 1) * (merge ? sv : 0))) & 0xFFFFF;
                 auto in = [](uint32 f) { const int v = (int)(f >> 11); return v < 2 ? 2 : v > 509 ? 509 : v; };
-                const uint32 uv0 = (uint16)(cu + in(fx) - hx) | ((uint32)(uint16)(cv + in(fy) - hy) << 16);
-                const uint32 uv1 = (uint16)(cu + in(lx) + hx) | ((uint32)(uint16)(cv + in(ly) + hy) << 16);
+                int v0 = in(fy), v1 = in(ly);
+                if (merge) {
+                    // The lines' samples keep their exact spacing (clamping the ends alone skews the ones between them, one
+                    // texel off in some columns), a 2/32 texel off the edges as the single lines are.
+                    const int first = (int)(fy >> 11), last = first + (m - 1) * (sv >> 11);
+                    if (!(sv & 0xFFFF)) {
+                        // Whole texels a line: sample the middle of each line's texel, far from the edge the GPU's
+                        // interpolation over a tall quad could tip over (a column a texel off, see the 2/32 below).
+                        v0 = ((first >> 5) << 5) + 16;
+                        v1 = v0 + (m - 1) * (sv >> 11);
+                    }
+                    else {
+                        const int bias = last + 2 <= 511 ? 2 : 511 - last;
+                        v0 = first + bias, v1 = last + bias;
+                    }
+                }
+                const int uA = cu + in(fx) - hx, uB = cu + in(lx) + hx;
+                // A single line's quad runs along its line (u and v both change from end to end); a merged quad has v
+                // changing down the lines and u along the run.
+                const uint32 uv0 = (uint16)uA | ((uint32)(uint16)(cv + (merge ? v0 - hvy : v0 - hvy)) << 16);
+                const uint32 uv1 = (uint16)uB | ((uint32)(uint16)(cv + (merge ? v0 - hvy : v1 + hvy)) << 16);
+                const uint32 uv2 = (uint16)uB | ((uint32)(uint16)(cv + v1 + hvy) << 16);
+                const uint32 uv3 = (uint16)uA | ((uint32)(uint16)(cv + (merge ? v1 + hvy : v0 - hvy)) << 16);
                 const uint32 X0 = (uint32)((x1 + cx) << 2), X1 = (uint32)((x1 + end) << 2);
                 // Whole words (x y | u v | rgba): the vertex buffer is written through to memory, and the byte and
                 // halfword stores of Vtx initialisers (32 a quad) cost most of this loop's time.
                 w[0] = X0 | Y0, w[1] = uv0, w[2] = 0xFFFFFFFFu;
                 w[3] = X1 | Y0, w[4] = uv1, w[5] = 0xFFFFFFFFu;
-                w[6] = X1 | Y1, w[7] = uv1, w[8] = 0xFFFFFFFFu;
-                w[9] = X0 | Y1, w[10] = uv0, w[11] = 0xFFFFFFFFu;
+                w[6] = X1 | Y1, w[7] = merge ? uv2 : uv1, w[8] = 0xFFFFFFFFu;
+                w[9] = X0 | Y1, w[10] = merge ? uv3 : uv0, w[11] = 0xFFFFFFFFu;
                 w += 12, ++q;
             }
             else
@@ -4220,6 +4333,8 @@ bool GpuRender::Render(const Stream &stream)
                     ok = EmitLayerBasic(c, layer, sl);
                 else if (c.kind == LAYER_HSCROLL)
                     ok = EmitLayerHScroll(c, layer, sl);
+                else if (c.kind == LAYER_VSCROLL)
+                    ok = EmitLayerVScroll(c, layer, sl);
                 else if (c.kind == LAYER_ROTOZOOM && !(GpuRender::depthMode & 256) && !sRotoSoft) {
                     const u64 t0 = svcGetSystemTick();
                     const unsigned q0 = sQuadCount;

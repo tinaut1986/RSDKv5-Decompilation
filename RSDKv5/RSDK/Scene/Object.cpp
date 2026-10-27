@@ -17,6 +17,10 @@ int32 RSDK::globalObjectIDs[OBJECT_COUNT];
 int32 RSDK::stageObjectIDs[OBJECT_COUNT];
 
 EntityBase RSDK::objectEntityList[ENTITY_COUNT];
+uint16 RSDK::entityClassShadow[ENTITY_COUNT];
+uint32 RSDK::entityShadowMiss;
+bool RSDK::entityShadowValid;
+bool RSDK::entityShadowOff; // SITE SHADOW 0: foreach_all searches the entities (to tell a fault of the shadow from others)
 
 EditableVarInfo *RSDK::editableVarList;
 int32 RSDK::editableVarCount = 0;
@@ -454,6 +458,15 @@ void RSDK::ProcessObjects()
     sceneInfo.entitySlot = 0;
     for (int32 e = 0; e < ENTITY_COUNT; ++e) {
         sceneInfo.entity = &objectEntityList[e];
+        if (entityClassShadow[e] != sceneInfo.entity->classID && sceneInfo.entity->classID)
+        {
+            ++entityShadowMiss; // a classID written behind the engine's back: the frame's foreach_all missed it
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+            if (entityShadowMiss <= 32)
+                DevTools::Log("shadow miss: slot %d class %s (shadow %d)", e, objectClassList[stageObjectIDs[sceneInfo.entity->classID]].name, entityClassShadow[e]);
+#endif
+        }
+        entityClassShadow[e] = sceneInfo.entity->classID;
         if (sceneInfo.entity->classID) {
             switch (sceneInfo.entity->active) {
                 default:
@@ -522,8 +535,14 @@ void RSDK::ProcessObjects()
             }
 
             if (sceneInfo.entity->inRange) {
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+                const u64 tObj = svcGetSystemTick();
+#endif
                 if (objectClassList[stageObjectIDs[sceneInfo.entity->classID]].update)
                     objectClassList[stageObjectIDs[sceneInfo.entity->classID]].update();
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+                DevTools::objTicks[stageObjectIDs[sceneInfo.entity->classID]] += (uint32)(svcGetSystemTick() - tObj);
+#endif
 
                 if (sceneInfo.entity->drawGroup < DRAWGROUP_COUNT)
                     drawGroups[sceneInfo.entity->drawGroup].entries[drawGroups[sceneInfo.entity->drawGroup].entityCount++] = sceneInfo.entitySlot;
@@ -535,6 +554,7 @@ void RSDK::ProcessObjects()
 
         sceneInfo.entitySlot++;
     }
+    entityShadowValid = true; // from here the shadow has seen every slot (the load and the first frame search the entities)
 
 #if RETRO_USE_MOD_LOADER
     RunModCallbacks(MODCB_ONUPDATE, INT_TO_VOID(ENGINESTATE_REGULAR));
@@ -852,8 +872,14 @@ void RSDK::ProcessObjectDrawLists()
 #else
                         if (sceneInfo.entity->visible) {
 #endif
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+                            const u64 tDraw = svcGetSystemTick();
+#endif
                             if (objectClassList[stageObjectIDs[sceneInfo.entity->classID]].draw)
                                 objectClassList[stageObjectIDs[sceneInfo.entity->classID]].draw();
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+                            DevTools::objDrawTicks[stageObjectIDs[sceneInfo.entity->classID]] += (uint32)(svcGetSystemTick() - tDraw);
+#endif
 
 #if RETRO_VER_EGS || RETRO_USE_DUMMY_ACHIEVEMENTS
                             if (i == list->entityCount - 1)
@@ -1146,11 +1172,13 @@ void RSDK::ResetEntity(Entity *entity, uint16 classID, void *data)
             superLevels[inheritLevel] = superStore;
 #endif
             sceneInfo.entity->classID = classID;
+            ShadowClass(sceneInfo.entity, classID);
 
             sceneInfo.entity = curEnt;
         }
 
         entity->classID = classID;
+        ShadowClass(entity, classID);
     }
 }
 
@@ -1176,11 +1204,13 @@ void RSDK::ResetEntitySlot(uint16 slot, uint16 classID, void *data)
         superLevels[inheritLevel] = superStore;
 #endif
         entity->classID = classID;
+        ShadowClass(entity, classID);
 
         sceneInfo.entity = curEnt;
     }
     else {
         entity->classID = classID;
+        ShadowClass(entity, classID);
     }
 }
 
@@ -1231,11 +1261,13 @@ Entity *RSDK::CreateEntity(uint16 classID, void *data, int32 x, int32 y)
         superLevels[inheritLevel] = superStore;
 #endif
         entity->classID = classID;
+        ShadowClass(entity, classID);
 
         sceneInfo.entity = curEnt;
     }
     else {
         entity->classID = classID;
+        ShadowClass(entity, classID);
         entity->active  = ACTIVE_NORMAL;
         entity->visible = true;
     }
@@ -1288,6 +1320,8 @@ bool32 RSDK::GetAllEntities(uint16 classID, Entity **entity)
     }
 
     for (; foreachStackPtr->id < ENTITY_COUNT; ++foreachStackPtr->id) {
+        if (entityShadowValid && !entityShadowOff && entityClassShadow[foreachStackPtr->id] != classID)
+            continue;
         Entity *nextEntity = &objectEntityList[foreachStackPtr->id];
         if (nextEntity->classID == classID) {
             *entity = nextEntity;
