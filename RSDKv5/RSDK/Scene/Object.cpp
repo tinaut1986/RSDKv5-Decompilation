@@ -522,8 +522,14 @@ void RSDK::ProcessObjects()
             }
 
             if (sceneInfo.entity->inRange) {
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+                const u64 tObj = svcGetSystemTick();
+#endif
                 if (objectClassList[stageObjectIDs[sceneInfo.entity->classID]].update)
                     objectClassList[stageObjectIDs[sceneInfo.entity->classID]].update();
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+                DevTools::objTicks[stageObjectIDs[sceneInfo.entity->classID]] += (uint32)(svcGetSystemTick() - tObj);
+#endif
 
                 if (sceneInfo.entity->drawGroup < DRAWGROUP_COUNT)
                     drawGroups[sceneInfo.entity->drawGroup].entries[drawGroups[sceneInfo.entity->drawGroup].entityCount++] = sceneInfo.entitySlot;
