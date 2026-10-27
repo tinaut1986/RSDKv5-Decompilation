@@ -2114,6 +2114,61 @@ bool EmitLayerBasic(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     return true;
 }
 
+// DrawLayerVScroll: the recorded entries are per screen column (position.x: the layer's pixel column, advancing a pixel a
+// column; position.y: the band's vertical scroll). A run of columns inside one tile column with the same y is a strip of
+// tile pieces, as many quads as the strip has tile rows. (The software drew every such layer: ~14 ms a frame on the 2DS in
+// Metallic Madness 2.)
+bool EmitLayerVScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
+{
+    const int x1 = c.clip[0], x2 = c.clip[2], y1 = c.clip[1] < 0 ? 0 : c.clip[1], y2 = c.clip[3] > SCREEN_YSIZE ? SCREEN_YSIZE : c.clip[3];
+    if (x1 >= x2 || y1 >= y2 || !layer->xsize || !layer->ysize)
+        return true;
+    const int height   = (int)layer->ysize << 4;
+    const unsigned bank = sLineBuf[0] & 7; // the software draws the whole layer with the palette of line 0's bank
+    int cx             = x1;
+    while (cx < x2) {
+        const ScanlineInfo &s0 = sl[cx - x1];
+        const int xp           = FROM_FIXED(s0.position.x);
+        int w                  = 1;
+        while (cx + w < x2 && ((xp + w) & 15) && sl[cx + w - x1].position.y == s0.position.y && FROM_FIXED(sl[cx + w - x1].position.x) == xp + w)
+            ++w;
+        int yp = FROM_FIXED(s0.position.y);
+        if (yp >= height)
+            yp -= height;
+        else if (yp < 0)
+            yp += height;
+        const int col = xp >> 4, inX = xp & 15;
+        if (col < 0 || col >= layer->xsize || yp < 0 || yp >= height)
+            return Refuse(GpuRender::REASON_TILE_RANGE);
+        int row  = yp >> 4;
+        int srcY = yp & 15;
+        for (int dy = 0; dy < y2;) {
+            const int n = 16 - srcY < y2 - dy ? 16 - srcY : y2 - dy;
+            const int a = dy > y1 ? dy : y1, b = dy + n;
+            const uint16 t = layer->layout[col + (row << layer->widthShift)];
+            if (a < b && t < 0xFFFF) {
+                ++sStats.tileQuads;
+                const int cell = EnsureTile(t & 0xFFF, bank);
+                if (cell == -2)
+                    return Refuse(GpuRender::REASON_ATLAS_FULL);
+                if (cell < 0)
+                    return Refuse(GpuRender::REASON_TILE_RANGE);
+                const int tx = (cell % (TILE_ATLAS_W / 16)) * 16 + inX, ty = (cell / (TILE_ATLAS_W / 16)) * 16 + srcY + (a - dy);
+                if (!AddTileQuad(cx, a, cx + w, b, tx, ty, tx + w, ty + (b - a)))
+                    return Refuse(GpuRender::REASON_QUAD_LIMIT);
+            }
+            else if (t >= 0xFFFF)
+                ++sStats.emptyTiles;
+            dy += n;
+            srcY = 0;
+            if (++row == (int)layer->ysize)
+                row = 0;
+        }
+        cx += w;
+    }
+    return true;
+}
+
 // A rotozoom layer (the Special Stage floor, the title's island): per line the software walks the layer from
 // scanline.position by scanline.deform a pixel, so each line is cut into the runs of pixels that stay in one tile, and
 // each run is a 1-pixel-high quad of that tile with affine texel coordinates (1/32 texel, TEX_TILE_FINE). The ends of
@@ -4227,6 +4282,8 @@ bool GpuRender::Render(const Stream &stream)
                     ok = EmitLayerBasic(c, layer, sl);
                 else if (c.kind == LAYER_HSCROLL)
                     ok = EmitLayerHScroll(c, layer, sl);
+                else if (c.kind == LAYER_VSCROLL)
+                    ok = EmitLayerVScroll(c, layer, sl);
                 else if (c.kind == LAYER_ROTOZOOM && !(GpuRender::depthMode & 256) && !sRotoSoft) {
                     const u64 t0 = svcGetSystemTick();
                     const unsigned q0 = sQuadCount;
