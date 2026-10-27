@@ -871,8 +871,14 @@ void RSDK::ProcessObjectDrawLists()
 #else
                         if (sceneInfo.entity->visible) {
 #endif
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+                            const u64 tDraw = svcGetSystemTick();
+#endif
                             if (objectClassList[stageObjectIDs[sceneInfo.entity->classID]].draw)
                                 objectClassList[stageObjectIDs[sceneInfo.entity->classID]].draw();
+#if RETRO_PLATFORM == RETRO_3DS && MANIA_DEV_TOOLS
+                            DevTools::objDrawTicks[stageObjectIDs[sceneInfo.entity->classID]] += (uint32)(svcGetSystemTick() - tDraw);
+#endif
 
 #if RETRO_VER_EGS || RETRO_USE_DUMMY_ACHIEVEMENTS
                             if (i == list->entityCount - 1)
