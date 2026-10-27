@@ -1103,6 +1103,10 @@ static void HandleSession(int ctrl)
                 else
                     Reply(s, "550 no %s in this scene", name);
             }
+            else if (!strcmp(sub, "SHADOW")) {
+                entityShadowOff = path && atoi(path) == 0;
+                Reply(s, "200 foreach shadow %s", entityShadowOff ? "off (searches the entities)" : "on");
+            }
             else if (!strcmp(sub, "OBJTIME")) {
                 // The eight object classes whose update, and whose draw, took the most since the last call (ms a second of
                 // play), then reset
