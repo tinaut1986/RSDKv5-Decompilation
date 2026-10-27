@@ -20,6 +20,7 @@ EntityBase RSDK::objectEntityList[ENTITY_COUNT];
 uint16 RSDK::entityClassShadow[ENTITY_COUNT];
 uint32 RSDK::entityShadowMiss;
 bool RSDK::entityShadowValid;
+bool RSDK::entityShadowOff; // SITE SHADOW 0: foreach_all searches the entities (to tell a fault of the shadow from others)
 
 EditableVarInfo *RSDK::editableVarList;
 int32 RSDK::editableVarCount = 0;
@@ -1319,7 +1320,7 @@ bool32 RSDK::GetAllEntities(uint16 classID, Entity **entity)
     }
 
     for (; foreachStackPtr->id < ENTITY_COUNT; ++foreachStackPtr->id) {
-        if (entityShadowValid && entityClassShadow[foreachStackPtr->id] != classID)
+        if (entityShadowValid && !entityShadowOff && entityClassShadow[foreachStackPtr->id] != classID)
             continue;
         Entity *nextEntity = &objectEntityList[foreachStackPtr->id];
         if (nextEntity->classID == classID) {

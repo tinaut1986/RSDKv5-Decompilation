@@ -217,6 +217,7 @@ extern EntityBase objectEntityList[ENTITY_COUNT];
 // ProcessObjects refreshes it each frame (a game that writes a classID itself shows up a frame late; see shadowMiss).
 extern uint16 entityClassShadow[ENTITY_COUNT];
 extern uint32 entityShadowMiss;
+extern bool entityShadowOff;
 extern bool entityShadowValid; // false from a scene's load until its first frame's update: foreach_all searches the entities
 inline void ShadowClass(const void *entity, uint16 classID)
 {

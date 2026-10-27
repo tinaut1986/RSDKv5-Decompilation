@@ -3583,7 +3583,20 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
     const uint32 maskX = (uint32)((TILE_SIZE << layer->widthShift) - 1) >> 4, maskY = (uint32)((TILE_SIZE << layer->heightShift) - 1) >> 4;
     const unsigned wShift = layer->widthShift;
     const uint16 *layout  = layer->layout;
-    for (int y = y1; y < y2; ++y) {
+    // A layer that is scaled but not turned and whose lines all share one x and the same size of step (Metallic Madness
+    // 1's level layer drawn at half size: 3100 quads, 6 ms): the runs of a line are the same on every line of a tile row,
+    // so one quad takes all of them (u as before, v from the first line's sample to the last's).
+    bool merge = !(GpuRender::depthMode & 64) && y2 - y1 >= 2 && !(sDepths && feet > 0);
+    int32 sv   = merge ? first[1].position.y - first[0].position.y : 0;
+    uint8 mbank;
+    merge = merge && sv > 0 && UniformBank(y1, y2, &mbank);
+    for (int y = y1; merge && y < y2; ++y) {
+        const ScanlineInfo &a = first[y - y1];
+        merge = !sLineDone[y - y1] && a.deform.y == 0 && a.deform.x == first[0].deform.x && a.position.x == first[0].position.x &&
+                (y == y1 || a.position.y - first[y - y1 - 1].position.y == sv);
+    }
+    for (int y = y1, step = 1; y < y2; y += step) {
+        step = 1;
         if (sLineDone[y - y1]) // drawn from the floor window
             continue;
         const ScanlineInfo &s = first[y - y1];
@@ -3609,7 +3622,15 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
             }
         }
         uint32 px = (uint32)s.position.x, py = (uint32)s.position.y; // wraps as the software's int32 does
-        const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
+        int m = 1;
+        if (merge) {
+            const uint32 row = py >> 20;
+            while (y + m < y2 && ((py + (uint32)(m * sv)) >> 20) == row)
+                ++m;
+        }
+        step            = m;
+        const int hvy   = merge ? sv >> 12 : hy;
+        const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + m) << 2) << 16;
         RotoAxis ax, ay;
         ax.Init(px, dx), ay.Init(py, dy);
         int cx = 0;
@@ -3650,17 +3671,38 @@ bool EmitLayerRotozoom(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
                 const uint32 org = memoOrg[slot];
                 const int cu = (int)(org & 0xFFFF), cv = (int)(org >> 16);
                 const uint32 fx = px & 0xFFFFF, fy = py & 0xFFFFF;
-                const uint32 lx = (px + (uint32)((n - 1) * dx)) & 0xFFFFF, ly = (py + (uint32)((n - 1) * dy)) & 0xFFFFF;
+                const uint32 lx = (px + (uint32)((n - 1) * dx)) & 0xFFFFF, ly = (py + (uint32)((n - 1) * dy) + (uint32)((m - 1) * (merge ? sv : 0))) & 0xFFFFF;
                 auto in = [](uint32 f) { const int v = (int)(f >> 11); return v < 2 ? 2 : v > 509 ? 509 : v; };
-                const uint32 uv0 = (uint16)(cu + in(fx) - hx) | ((uint32)(uint16)(cv + in(fy) - hy) << 16);
-                const uint32 uv1 = (uint16)(cu + in(lx) + hx) | ((uint32)(uint16)(cv + in(ly) + hy) << 16);
+                int v0 = in(fy), v1 = in(ly);
+                if (merge) {
+                    // The lines' samples keep their exact spacing (clamping the ends alone skews the ones between them, one
+                    // texel off in some columns), a 2/32 texel off the edges as the single lines are.
+                    const int first = (int)(fy >> 11), last = first + (m - 1) * (sv >> 11);
+                    if (!(sv & 0xFFFF)) {
+                        // Whole texels a line: sample the middle of each line's texel, far from the edge the GPU's
+                        // interpolation over a tall quad could tip over (a column a texel off, see the 2/32 below).
+                        v0 = ((first >> 5) << 5) + 16;
+                        v1 = v0 + (m - 1) * (sv >> 11);
+                    }
+                    else {
+                        const int bias = last + 2 <= 511 ? 2 : 511 - last;
+                        v0 = first + bias, v1 = last + bias;
+                    }
+                }
+                const int uA = cu + in(fx) - hx, uB = cu + in(lx) + hx;
+                // A single line's quad runs along its line (u and v both change from end to end); a merged quad has v
+                // changing down the lines and u along the run.
+                const uint32 uv0 = (uint16)uA | ((uint32)(uint16)(cv + (merge ? v0 - hvy : v0 - hvy)) << 16);
+                const uint32 uv1 = (uint16)uB | ((uint32)(uint16)(cv + (merge ? v0 - hvy : v1 + hvy)) << 16);
+                const uint32 uv2 = (uint16)uB | ((uint32)(uint16)(cv + v1 + hvy) << 16);
+                const uint32 uv3 = (uint16)uA | ((uint32)(uint16)(cv + (merge ? v1 + hvy : v0 - hvy)) << 16);
                 const uint32 X0 = (uint32)((x1 + cx) << 2), X1 = (uint32)((x1 + end) << 2);
                 // Whole words (x y | u v | rgba): the vertex buffer is written through to memory, and the byte and
                 // halfword stores of Vtx initialisers (32 a quad) cost most of this loop's time.
                 w[0] = X0 | Y0, w[1] = uv0, w[2] = 0xFFFFFFFFu;
                 w[3] = X1 | Y0, w[4] = uv1, w[5] = 0xFFFFFFFFu;
-                w[6] = X1 | Y1, w[7] = uv1, w[8] = 0xFFFFFFFFu;
-                w[9] = X0 | Y1, w[10] = uv0, w[11] = 0xFFFFFFFFu;
+                w[6] = X1 | Y1, w[7] = merge ? uv2 : uv1, w[8] = 0xFFFFFFFFu;
+                w[9] = X0 | Y1, w[10] = merge ? uv3 : uv0, w[11] = 0xFFFFFFFFu;
                 w += 12, ++q;
             }
             else
