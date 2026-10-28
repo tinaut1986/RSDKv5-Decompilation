@@ -259,7 +259,7 @@ Ignored/
 android/local.properties
 
 *.res
-.deps/
+.deps
 
 # Local build outputs and game data (never commit these)
 3ds/out/
