@@ -1140,6 +1140,11 @@ static void HandleSession(int ctrl)
                 // The last GPU frame's atlas conversions: which ones really changed colour
                 Reply(s, "200 %s", GpuRender::ConvReport());
             }
+            else if (!strcmp(sub, "ENTS")) {
+                char buf[400];
+                PortGame_Describe(buf, sizeof(buf));
+                Reply(s, "200 %s", buf);
+            }
             else if (!strcmp(sub, "SVAR") && path) {
                 // SITE SVAR <Class> <byte offset> [n]: n int32 of a stage object's static variables (debug)
                 char name[48];
@@ -1596,6 +1601,7 @@ uint32 DevTools::objTicks[0x400];
 uint32 DevTools::objDrawTicks[0x400];
 bool DevTools::freeze         = false;
 bool DevTools::immortal       = false;
+bool DevTools::airJump        = false;
 bool DevTools::swForce3D      = false;
 bool DevTools::swFtp          = true;
 
@@ -2193,6 +2199,7 @@ bool DevTools::FrameEnd()
             ForceHardReset(true);
             sPendingHard = false;
         }
+        PortGame_SceneMode(l->name);
         DevTools::Log("scene request: category %d scene %d", sPendingCategory, sPendingScene);
         sPendingScene = sPendingCategory = -1;
     }
@@ -2261,6 +2268,7 @@ bool DevTools::FrameEnd()
     if (frozenFrame)
         hidScanInput();
     PortGame_Immortal(DevTools::immortal);
+    PortGame_AirJump(DevTools::airJump);
     if (BottomUi::Ready()) {
         DEV_STAGE(STAGE_BOTTOM);
         BottomUi::Update();

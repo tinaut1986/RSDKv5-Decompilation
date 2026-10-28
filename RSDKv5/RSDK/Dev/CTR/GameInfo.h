@@ -24,9 +24,27 @@ typedef struct {
 void PortGame_GetInfo(PortGameInfo *out);
 
 // The DEBUG tab's IMMORTAL (dev builds): called every frame. On, player 1 keeps the item box's invincibility (its
-// stars too, made again when the scene has none): enemies and spikes do not hurt, touching enemies breaks them. Pits,
-// crushes and drowning still kill. Off, the invincibility runs out at once.
+// stars too, made again when the scene has none): enemies and spikes do not hurt, touching enemies breaks them. It also
+// keeps the Special Stage's rings up, and there is no drowning or crushing. Pits and other deaths still kill. Off, the invincibility runs out at once.
 void PortGame_Immortal(int on);
+
+// The DEBUG tab's AIR JUMP (dev builds): called every frame. On, player 1 in the air rises while the 3DS Y button is held
+// (jumping again and again, to reach high places quickly).
+void PortGame_AirJump(int on);
+
+// SITE ENTS: the players' states, the ActClear entity and the cutscene sequences, as raw function pointers (resolve them
+// with addr2line on the ELF), to find what a stuck cutscene waits for.
+void PortGame_Describe(char *out, unsigned cap);
+
+// Every frame, before the objects update, in every build: game logic quirks that cost the 3DS what a PC does not notice.
+// The credits' text lines that fade out (UICreditsText_State_FadeOut) are never destroyed by the game: at alpha 0 they
+// go back to SetupIdleDelay and straight to FadeOut again, for good, so the entities pile up as the credits go on and
+// each is still updated and drawn (the credits ran slower and slower on the 2DS). They are destroyed here.
+void PortGame_Tick(void);
+
+// A scene picked from the STAGES list: the game mode follows its category ("Encore Mode" -> Encore, "Mania Mode" ->
+// Mania), as the menus would have set it; the other categories leave it.
+void PortGame_SceneMode(const char *category);
 
 // Item boxes opened since the last call: their contents (the game's ITEMBOX_* numbering, which is also the frame of
 // the contents icon in Global/ItemBox.bin animation 2), at most `max`; returns how many. `reset` after a scene load:

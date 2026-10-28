@@ -68,13 +68,33 @@ static bool FindOtherPack(const char *dir, char *out, unsigned cap)
     return found;
 }
 
+// A data pack that is whole: the signature, a file table that fits, and every file inside the file's size. A copy that
+// was cut short (a full SD card, a pulled card) keeps its header and passed a check of the signature alone, then the
+// game crashed reading files past its end (#14: a Data.rsdk shown as 0 KB).
 static bool IsDataPack(const char *path)
 {
     FILE *f = fopen(path, "rb");
     if (!f)
         return false;
-    char sig[4] = {};
-    const bool ok = fread(sig, 1, 4, f) == 4 && !memcmp(sig, "RSDK", 4);
+    bool ok = false;
+    uint8 head[8];
+    fseek(f, 0, SEEK_END);
+    const long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size > (long)sizeof(head) && fread(head, 1, sizeof(head), f) == sizeof(head) && !memcmp(head, "RSDK", 4)) {
+        const unsigned count = head[6] | (head[7] << 8); // after the signature, 'v' and the version
+        ok                   = count > 0 && count <= DATAFILE_COUNT && (long)(sizeof(head) + 24 * count) <= size;
+        for (unsigned i = 0; ok && i < count; ++i) {
+            uint8 e[24]; // 16 bytes of hash, the offset, the size (its top bit: encrypted)
+            if (fread(e, 1, sizeof(e), f) != sizeof(e)) {
+                ok = false;
+                break;
+            }
+            const uint32 offset = e[16] | (e[17] << 8) | (e[18] << 16) | ((uint32)e[19] << 24);
+            const uint32 length = (e[20] | (e[21] << 8) | (e[22] << 16) | ((uint32)e[23] << 24)) & 0x7FFFFFFF;
+            ok                  = (uint64_t)offset + length <= (uint64_t)size;
+        }
+    }
     fclose(f);
     return ok;
 }

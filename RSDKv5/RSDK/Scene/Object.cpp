@@ -2,6 +2,7 @@
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/DevTools.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
+#include "RSDK/Dev/CTR/GameInfo.h"
 
 using namespace RSDK;
 
@@ -422,6 +423,9 @@ void RSDK::InitObjects()
 void RSDK::ProcessObjects()
 {
     DEV_STAGE(STAGE_UPDATE);
+#if RETRO_PLATFORM == RETRO_3DS
+    PortGame_Tick();
+#endif
     for (int32 i = 0; i < DRAWGROUP_COUNT; ++i) drawGroups[i].entityCount = 0;
 
     for (int32 o = 0; o < sceneInfo.classCount; ++o) {

@@ -272,6 +272,8 @@ static void ValFtp(char *o, unsigned c, bool *on)
 static void TapFtp() { DevTools::SetFtp(!DevTools::FtpRunning()); }
 static void ValImmortal(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::immortal ? "ON" : "OFF"); *on = DevTools::immortal; }
 static void TapImmortal() { DevTools::immortal = !DevTools::immortal; }
+static void ValAirJump(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::airJump ? "ON" : "OFF"); *on = DevTools::airJump; }
+static void TapAirJump() { DevTools::airJump = !DevTools::airJump; }
 static int sPick; // the STAGES list: 0 closed, 1 the scene list's categories, 2 the scenes of one (below)
 static void ValStages(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", "LIST"); *on = sPick != 0; }
 static void TapStages() { sPick = 1; }
@@ -281,7 +283,7 @@ static const Button kButtons[] = {
     { "LOG MARK", TapMark, ValMark },         { "DRAW LISTS", TapDraw, ValDraw },            { "FLIP COPY", TapFlip, ValFlip },
     { "3D SCENES", TapGpu3D, ValGpu3D },      { "FORCE 3D", TapForce3D, ValForce3D },    { "DEPTH TINT", TapDepthTint, ValDepthTint },
     { "CAPTURE", TapCapture, ValCapture },    { "FTP", TapFtp, ValFtp },                 { "STAGES", TapStages, ValStages },
-    { "IMMORTAL", TapImmortal, ValImmortal },
+    { "IMMORTAL", TapImmortal, ValImmortal }, { "AIR JUMP", TapAirJump, ValAirJump },
 };
 
 #endif // MANIA_DEV_TOOLS
@@ -1056,7 +1058,7 @@ static void DrawGameTab()
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_PLUS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_DEPTH, OPT_PLUS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
 enum { OPT_W = 150, OPT_H = 30, OPT_PITCH = 34 };
 // THEME opens a list over the page (the dropdown); its rows are hits OPT_LIST + i, a touch elsewhere OPT_LIST_OUT.
 enum { OPT_LIST = 100, OPT_LIST_OUT = 99, LIST_ROW_H = 22 };
@@ -1092,6 +1094,12 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
             snprintf(o, cap, "%s", Tr(T().name));
             *col = T().accent;
             break;
+        case OPT_DEPTH: {
+            static const char *const k[] = { "50 %", "75 %", "100 %", "150 %", "200 %" };
+            snprintf(o, cap, "%s", k[Port::depth3d]);
+            *col = Port::depth3d == 2 ? dim : good;
+            break;
+        }
         default: // OPT_PLUS: a change counts from the next start, until then in the warning colour
             snprintf(o, cap, "%s", Tr(Port::plus ? "ON" : "OFF"));
             *col = Port::plus != Port::PlusApplied() ? warn : Port::plus ? good : dim;
@@ -1099,12 +1107,13 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "PLUS" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "3D DEPTH", "PLUS" };
 static const char *const kOptHelp[OPT_COUNT] = {
     "AUTO SKIPS A LATE PICTURE TO KEEP THE SPEED, 30 FPS DRAWS EVERY OTHER ONE, OFF DRAWS THEM ALL (THE GAME SLOWS DOWN IF IT CANNOT KEEP UP)",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
     "AUTO HIDES THE GAME'S HUD WHILE THE GAME TAB SHOWS IT",
     "THE COLOURS OF THIS SCREEN",
+    "HOW STRONG THE 3D EFFECT IS WITH THE SLIDER UP. 100 % IS THE DEFAULT; LOWER IS SOFTER, HIGHER IS STRONGER",
     "MIGHTY, RAY AND ENCORE MODE, ONLY IF YOU OWN SONIC MANIA PLUS. IT CHANGES AT THE NEXT START",
 };
 static int sLastOpt = -1;
@@ -1184,6 +1193,7 @@ static void TapOption(int i)
         case OPT_FPS: Port::fps = (Port::fps + 1) % 5; break;
         case OPT_HUD: Port::hud = (Port::hud + 1) % 3; break;
         case OPT_THEME: sThemeOpen = true; break;
+        case OPT_DEPTH: Port::depth3d = (Port::depth3d + 1) % 5; break;
         default: Port::plus = !Port::plus; break; // OPT_PLUS
     }
     sLastOpt = i;
@@ -1216,9 +1226,9 @@ static void DrawOptionsTab()
         else
             Text(val, x + 7, y + 15, 0.5f, col, 0, 0.33f);
     }
-    // FRAMES OFF: the game slows down where it cannot keep up; said as long as it stays so (FRAMES' own help says it
-    // while it is up)
-    if (!Port::lock30 && !Port::frameSkip && sLastOpt != OPT_FRAMES)
+    // FRAMES OFF: the game slows down where it cannot keep up; said while no option has been touched (an option's help
+    // text goes in the same place)
+    if (!Port::lock30 && !Port::frameSkip && sLastOpt < 0)
         Text(Tr("FRAMES OFF: THE GAME MAY RUN SLOW IN SOME PLACES"), W / 2.0f, H - 60, 0.4f, Rgb(240, 200, 80), C2D_AlignCenter | C2D_WordWrap,
              0.33f, W - 24);
     // What the last option touched does

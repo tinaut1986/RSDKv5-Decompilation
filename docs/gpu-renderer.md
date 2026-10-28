@@ -661,6 +661,20 @@ Released as betas `v0.1.0`, `v0.1.1`, `v0.1.2` (GitHub releases, `.github/workfl
   reason every 5 s).
 - The title at 33 fps on the 2DS was FORCE 3D left on (saved) by an earlier test: 59.9 with it off.
 
+## onScreen with recorded draws, stereo edges (2026-10-28, #19, #21)
+
+- **`validDraw` / `onScreen` under the GPU renderer.** A recorded draw call returns before the software drawing that sets
+  `validDraw` (which becomes the entity's `onScreen`), so every entity's `onScreen` was 0. EncoreIntro's
+  `AIZEncore` step waits for `ruby->onScreen` and hung (#19; with `SET gpu 0` it went on). `GPUFRAME_REC_V` now sets it for
+  recorded sprites, rectangles and rotozoom sprites when the software would have drawn them (visible ink, box inside the
+  clip). **Not covered:** lines, circles, circle outlines, faces and deformed sprites still never set it. Nothing known
+  depends on them; if an object that "never leaves" or "never appears" turns up with the GPU renderer, look here first.
+- **Stereo edges (#21).** A layer shifted by its depth leaves bare columns: the basic and horizontal-scroll emitters draw
+  `EdgeMargin()` pixels past each edge now; full-screen fills and rectangles keep depth 0. Rotozoom, vertical-scroll, soft
+  layers, Special Stages and the title are not covered.
+- **Draw groups in stereo.** Group 12 is the players' high group (`Zone->playerDrawGroup[1]`, used by cutscenes): it stays
+  on the playfield; groups 13 and up (HUD) come forward.
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
