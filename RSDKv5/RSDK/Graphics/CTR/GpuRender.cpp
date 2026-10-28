@@ -89,6 +89,7 @@ struct Batch {
     uint8 uvk;             // TEX_ROTO*: texel coordinates in 1/16 texel << uvk (lines with a long span)
     uint8 disjoint;        // its quads never overlap (one a screen line): a masked ink draws them in one go
     uint8 fade;            // faded to the floor's fog colour by the vertex alpha's complement (as TEX_FLOOR*)
+    uint8 proj;            // drawn with the rotozoom planes' program (sRotoProg): w and disparity in the vertex colour
 };
 
 // Scissor rectangles (screen pixels x0, y0, x1, y1) of this frame: a rotated sprite or a 3D scene under a clip smaller
@@ -215,6 +216,7 @@ const void *sRotoTexFailed; // a layer or sheet whose texture could not be alloc
 uint32 sTileEpoch;               // bumped when animated tiles change the tileset
 uint32 sTileChanged[TILE_COUNT / 32]; // base tiles whose pixels changed this frame (the floor windows check theirs)
 bool sTileChangedAny;
+char sRotoRuns[ROTO_TEX_SLOTS][32];         // per texture slot: its last layer's lines and the quads they took (SITE REFUSED)
 const char *sRotoTexWhy = "-";   // why the last rotozoom layer was not drawn from its texture (SITE REFUSED)
 uint32 sRotoFrame;               // GPU frames, to free textures no longer drawn
 
@@ -252,6 +254,11 @@ unsigned sSoftJobCount, sSoftRows;
 DVLB_s *sDvlb;
 shaderProgram_s sProgram;
 int sProjLoc, sUvLoc;
+// The rotozoom planes' program (roto.v.pica, DVLE 2): a run of lines as one quad with perspective (Batch::proj). Its
+// projection and uvscale sit in the 2D program's registers (checked at init: otherwise the runs stay one quad a line).
+shaderProgram_s sRotoProg;
+int sRotoEyeLoc = -1;
+bool sRotoProgOk;
 C3D_AttrInfo sAttr;
 C3D_BufInfo sBufInfo;
 Vtx *sVbo[2];
@@ -459,6 +466,14 @@ bool Setup()
     shaderProgramSetVsh(&sProgram, &sDvlb->DVLE[0]);
     sProjLoc = shaderInstanceGetUniformLocation(sProgram.vertexShader, "projection");
     sUvLoc   = shaderInstanceGetUniformLocation(sProgram.vertexShader, "uvscale");
+
+    if (sDvlb->numDVLE >= 3) {
+        shaderProgramInit(&sRotoProg);
+        shaderProgramSetVsh(&sRotoProg, &sDvlb->DVLE[2]);
+        sRotoEyeLoc = shaderInstanceGetUniformLocation(sRotoProg.vertexShader, "eye");
+        sRotoProgOk = sRotoEyeLoc >= 0 && shaderInstanceGetUniformLocation(sRotoProg.vertexShader, "projection") == sProjLoc &&
+                      shaderInstanceGetUniformLocation(sRotoProg.vertexShader, "uvscale") == sUvLoc;
+    }
 
     AttrInfo_Init(&sAttr);
     AttrInfo_AddLoader(&sAttr, 0, GPU_SHORT, 4);         // x, y (quarter pixels), u, v (texels)
@@ -2572,26 +2587,127 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
     const unsigned slot   = (unsigned)(r - sRotoTex);
     const int lineSize    = x2 - x1;
     const uint32 maskX    = (w << 16) - 1, maskY = (h << 16) - 1;
-    const unsigned passes = 1 + (r->maskValid && !fadeMode ? r->hotCount : 0);
+    const unsigned passes = 1 + (r->maskValid && !fadeMode && !(GpuRender::depthMode & 2048) ? r->hotCount : 0); // bit 2048 (debug): no hot-colour passes
     const unsigned need   = (unsigned)(y2 - y1) * passes;
     sRotoTexWhy = "quads";
     if (sQuadCount + need > MAX_QUADS)
         return true;
     // From here on the layer is drawn from the texture.
     *handled    = true;
+    r->lastUsed = sRotoFrame;
+    unsigned q = sQuadCount;
+    uint32 *w32 = (uint32 *)&sVbo[sCur][q * 4];
+    // The lines first: where the layer maps each one, how far it is, which bank. Then neighbours on one plane share a
+    // quad: a quad one line high costs the GPU about as much as a taller one (the title's island, clouds and their hot
+    // passes were ~950 quads of 400 x 1 a frame in 3D, ~20 us each on the 2DS). A plane seen at an angle maps screen
+    // line y to texels (A + B * x) / q(y) with q linear in y (q: the inverse of the line's texel step), which the PICA
+    // interpolates exactly given each vertex's w = 1 / q (sRotoProg; the stereo disparity, linear in q too, also per
+    // vertex). So lines i..e share a quad while every line between stays within a quarter texel of that projective
+    // interpolation of the first's and the last's ends (an affine merge of lines whose step changes drew the quad's
+    // two triangles with different mappings: the island's near rows sheared along the diagonal).
+    // SITE SET depthmode 32768: one quad a line, to compare.
+    struct RLine {
+        int64 u0, v0, u1, v1;
+        double fu0, fv0, fu1, fv1; // the same as doubles (converting an int64 is a library call)
+        double q; // 1 / the texel step (16.16) along the line; 0: cannot share a quad
+        unsigned b, k;
+        int8 depth;
+    };
+    static RLine ln[SCREEN_YSIZE];
+    const int nLines = y2 - y1;
+    for (int i = 0; i < nLines; ++i) {
+        const int y           = y1 + i;
+        const ScanlineInfo &s = first[i];
+        const unsigned lb     = sLineBuf[y] & 7;
+        RLine &L              = ln[i];
+        L.b                   = fadeMode ? 0 : lb;
+        L.depth               = feet > 0 ? RotoLineDepth(feet, s.deform.x, s.deform.y) : sDepth;
+        const int64 px = (int64)((uint32)s.position.x & maskX), py = (int64)((uint32)s.position.y & maskY);
+        L.u0 = px - s.deform.x / 2, L.v0 = py - s.deform.y / 2;
+        L.u1 = L.u0 + (int64)s.deform.x * lineSize, L.v1 = L.v0 + (int64)s.deform.y * lineSize;
+        L.fu0 = (double)L.u0, L.fv0 = (double)L.v0, L.fu1 = (double)L.u1, L.fv1 = (double)L.v1;
+        const double step = sqrt((double)s.deform.x * s.deform.x + (double)s.deform.y * s.deform.y);
+        L.q               = step > 0 ? 1.0 / step : 0;
+        // 1/16 texel, or coarser where the line spans thousands of texels (far lines of a small repeating layer).
+        int64 big = 0;
+        for (int64 v : { L.u0, L.u1, L.v0, L.v1 })
+            big = (v < 0 ? -v : v) > big ? (v < 0 ? -v : v) : big;
+        unsigned k = 0;
+        while ((big >> (12 + k)) >= 32000 && k < 12)
+            ++k;
+        L.k = k;
+    }
+    // A value of the plane through lines a and e at t (0 at a's centre, 1 at e's), and its q.
+    auto planeQ = [](const RLine &A, const RLine &E, double t) { return A.q + (E.q - A.q) * t; };
+    auto planeAt = [](const RLine &A, const RLine &E, double t, double qt, double va, double ve) {
+        return ((1 - t) * A.q * va + t * E.q * ve) / qt;
+    };
+    static int gStart[SCREEN_YSIZE], gLen[SCREEN_YSIZE];
+    int groups = 0;
+    const bool merge = src.layer && !fadeMode && sRotoProgOk && !(GpuRender::depthMode & 32768); // not a sheet (the plasma): its lines are not a plane
+    {
+        const double tol  = 16384; // a quarter texel (16.16)
+        const int64 limU = (int64)w << 14, limV = (int64)h << 14;
+        auto absd        = [](int64 v) { return v < 0 ? -v : v; };
+        // Whether every line between a and e is on their plane (and the quad's edges at q > 0). Compared times q (no
+        // division a line): q * value is linear in the line.
+        auto onPlane = [&](int a, int e) {
+            const RLine &A = ln[a], &E = ln[e];
+            const double h = 0.5 / (e - a);
+            if (planeQ(A, E, -h) <= 0 || planeQ(A, E, 1 + h) <= 0)
+                return false;
+            const double dt = 1.0 / (e - a);
+            const double au0 = A.q * A.fu0, av0 = A.q * A.fv0, au1 = A.q * A.fu1, av1 = A.q * A.fv1;
+            const double du0 = (E.q * E.fu0 - au0) * dt, dv0 = (E.q * E.fv0 - av0) * dt, du1 = (E.q * E.fu1 - au1) * dt, dv1 = (E.q * E.fv1 - av1) * dt;
+            const double dq = (E.q - A.q) * dt;
+            for (int j = a + 1; j < e; ++j) {
+                const RLine &M = ln[j];
+                const double s = j - a, qt = A.q + dq * s, lim = tol * qt;
+                if (fabs(au0 + du0 * s - qt * M.fu0) > lim || fabs(av0 + dv0 * s - qt * M.fv0) > lim || fabs(au1 + du1 * s - qt * M.fu1) > lim ||
+                    fabs(av1 + dv1 * s - qt * M.fv1) > lim)
+                    return false;
+            }
+            return true;
+        };
+        for (int i = 0; i < nLines;) {
+            // The longest run that could be one plane: one bank, one texel unit, no wrap of the layer between neighbours.
+            int e = i;
+            while (merge && ln[i].q > 0 && e + 1 < nLines) {
+                const RLine &a = ln[i], &n = ln[e + 1], &pr = ln[e];
+                if (n.b != a.b || n.k != a.k || n.q <= 0)
+                    break;
+                if (absd(n.u0 - pr.u0) > limU || absd(n.u1 - pr.u1) > limU || absd(n.v0 - pr.v0) > limV || absd(n.v1 - pr.v1) > limV)
+                    break; // the layer wrapped between them
+                ++e;
+            }
+            // The longest run of those on one plane: the whole when it is (the title's), else found by doubling the
+            // run and halving the step back (n log n checks, not n^2).
+            if (e > i && !onPlane(i, e)) {
+                const int top = e;
+                int good = i, step = 1;
+                while (good + step <= top && (good + step == i + 1 ? true : onPlane(i, good + step)))
+                    good += step, step *= 2;
+                for (step /= 2; step > 0; step /= 2)
+                    if (good + step < top && onPlane(i, good + step))
+                        good += step;
+                e = good > i && onPlane(i, good) ? good : i;
+            }
+            gStart[groups] = i, gLen[groups] = e - i + 1, ++groups;
+            i = e + 1;
+        }
+    }
     {
         static char why[48];
         snprintf(why, sizeof(why), "- %ux%u banks %02x hot %u", w, h, banks, r->maskValid ? r->hotCount : 0);
         sRotoTexWhy = why;
+        snprintf(sRotoRuns[slot], sizeof(sRotoRuns[slot]), "%ux%u %d lines %d quads", w, h, nLines, groups);
     }
-    r->lastUsed = sRotoFrame;
-    unsigned q = sQuadCount;
-    uint32 *w32 = (uint32 *)&sVbo[sCur][q * 4];
     for (unsigned pass = 0; pass < passes; ++pass)
-    for (int y = y1; y < y2; ++y) {
-        const ScanlineInfo &s = first[y - y1];
-        const unsigned lb     = sLineBuf[y] & 7, b = fadeMode ? 0 : lb;
-        const int8 depth      = feet > 0 ? RotoLineDepth(feet, s.deform.x, s.deform.y) : sDepth;
+    for (int g = 0; g < groups; ++g) {
+        const int i = gStart[g], n = gLen[g], y = y1 + i;
+        const RLine &A = ln[i], &E = ln[i + n - 1];
+        const unsigned b = A.b;
+        const int8 depth = merge ? 0 : A.depth; // merged: the disparity is in the vertices
         // Pass 0 the line's bank's copy; pass k the mask's hot colour k - 1 in that bank now (as the atlases quantise
         // it).
         uint8 ptex = (uint8)(TEX_ROTO0 + slot), pblend = blend0;
@@ -2604,38 +2720,59 @@ bool EmitRotoTex(const RotoSrc &src, unsigned w, unsigned h, const ScanlineInfo 
             pblend   = BLEND_HOT;
             constant = ((uint32)(pass * 32) << 24) | (cb << 16) | (cg << 8) | cr;
         }
-        const int64 px = (int64)((uint32)s.position.x & maskX), py = (int64)((uint32)s.position.y & maskY);
-        const int64 u0 = px - s.deform.x / 2, v0 = py - s.deform.y / 2;
-        const int64 u1 = u0 + (int64)s.deform.x * lineSize, v1 = v0 + (int64)s.deform.y * lineSize;
-        // 1/16 texel, or coarser where the line spans thousands of texels (far lines of a small repeating layer).
-        int64 big = 0;
-        for (int64 v : { u0, u1, v0, v1 })
-            big = (v < 0 ? -v : v) > big ? (v < 0 ? -v : v) : big;
-        unsigned k = 0;
-        while ((big >> (12 + k)) >= 32000 && k < 12)
-            ++k;
+        const unsigned k = A.k;
         const unsigned sh = 12 + k;
         const int64 rnd   = (int64)1 << (sh - 1);
         const uint8 sub = pass ? 0 : (uint8)b; // the bank copy (Batch::fog holds it for TEX_ROTO*)
         Batch *last     = sBatchCount ? &sBatches[sBatchCount - 1] : NULL;
         if (!last || last->tex != ptex || last->blend != pblend || last->constant != constant || last->depth != depth || last->scissor != sScissor ||
-            last->fog != sub || last->uvk != k || last->fade != (uint8)fadeMode) {
+            last->fog != sub || last->uvk != k || last->fade != (uint8)fadeMode || last->proj != (uint8)merge) {
             if (sBatchCount >= MAX_BATCHES) {
                 sQuadCount = q;
                 return Refuse(GpuRender::REASON_QUAD_LIMIT);
             }
-            sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor, sub, (uint8)k, 1, (uint8)fadeMode };
+            sBatches[sBatchCount++] = { ptex, pblend, q, 0, constant, depth, sScissor, sub, (uint8)k, 1, (uint8)fadeMode, (uint8)merge };
             last                    = &sBatches[sBatchCount - 1];
         }
-        const uint32 uv0 = (uint16)(int16)((u0 + rnd) >> sh) | ((uint32)(uint16)(int16)((v0 + rnd) >> sh) << 16);
-        const uint32 uv1 = (uint16)(int16)((u1 + rnd) >> sh) | ((uint32)(uint16)(int16)((v1 + rnd) >> sh) << 16);
+        auto uv = [&](int64 u, int64 v) { return (uint32)(uint16)(int16)((u + rnd) >> sh) | ((uint32)(uint16)(int16)((v + rnd) >> sh) << 16); };
         const uint32 X0 = (uint32)(x1 << 2), X1 = (uint32)(x2 << 2);
-        const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + 1) << 2) << 16;
-        const uint32 rgba = pass ? 0xFFFFFFFFu : fadeMode ? 0x00FFFFFFu | ((uint32)(255 - FloorFade(lb)) << 24) : rgba0;
-        w32[0] = X0 | Y0, w32[1] = uv0, w32[2] = rgba;
-        w32[3] = X1 | Y0, w32[4] = uv1, w32[5] = rgba;
-        w32[6] = X1 | Y1, w32[7] = uv1, w32[8] = rgba;
-        w32[9] = X0 | Y1, w32[10] = uv0, w32[11] = rgba;
+        const uint32 Y0 = (uint32)(y << 2) << 16, Y1 = (uint32)((y + n) << 2) << 16;
+        if (merge) {
+            // The quad's top and bottom edges half a line beyond the first's and the last's centres, on their plane; w
+            // = 1 / q scaled to at most 1 (only the ratio counts), disparity * 8 + 128 (RotoLineDepth's, unrounded).
+            const double h = n > 1 ? 0.5 / (n - 1) : 0;
+            const double tt = -h, tb = 1 + h;
+            const double qt = n > 1 ? planeQ(A, E, tt) : A.q, qb = n > 1 ? planeQ(A, E, tb) : A.q;
+            auto at = [&](double t, double qv, double va, double ve) { return n > 1 ? (int64)planeAt(A, E, t, qv, va, ve) : (int64)va; };
+            const int64 tu0 = at(tt, qt, A.fu0, E.fu0), tv0 = at(tt, qt, A.fv0, E.fv0), tu1 = at(tt, qt, A.fu1, E.fu1), tv1 = at(tt, qt, A.fv1, E.fv1);
+            const int64 bu0 = at(tb, qb, A.fu0, E.fu0), bv0 = at(tb, qb, A.fv0, E.fv0), bu1 = at(tb, qb, A.fu1, E.fu1), bv1 = at(tb, qb, A.fv1, E.fv1);
+            const double qMin = qt < qb ? qt : qb;
+            auto extra = [&](double qv) {
+                int wv = (int)(qMin / qv * 65535.0 + 0.5);
+                wv     = wv < 1 ? 1 : wv;
+                float d = sDepth;
+                if (feet > 0) {
+                    float f = 1.0f - feet * (float)qv;
+                    f       = f < -0.5f ? -0.5f : f > 1.0f ? 1.0f : f;
+                    d       = f * STEREO_FAR;
+                }
+                int dv = (int)lroundf(d * 8.0f) + 128;
+                dv     = dv < 0 ? 0 : dv > 255 ? 255 : dv;
+                return (uint32)(wv >> 8) | ((uint32)(wv & 255) << 8) | ((uint32)dv << 16);
+            };
+            const uint32 et = extra(qt), eb = extra(qb);
+            w32[0] = X0 | Y0, w32[1] = uv(tu0, tv0), w32[2] = et;
+            w32[3] = X1 | Y0, w32[4] = uv(tu1, tv1), w32[5] = et;
+            w32[6] = X1 | Y1, w32[7] = uv(bu1, bv1), w32[8] = eb;
+            w32[9] = X0 | Y1, w32[10] = uv(bu0, bv0), w32[11] = eb;
+        }
+        else {
+            const uint32 rgba = pass ? 0xFFFFFFFFu : fadeMode ? 0x00FFFFFFu | ((uint32)(255 - FloorFade(sLineBuf[y] & 7)) << 24) : rgba0;
+            w32[0] = X0 | Y0, w32[1] = uv(A.u0, A.v0), w32[2] = rgba;
+            w32[3] = X1 | Y0, w32[4] = uv(A.u1, A.v1), w32[5] = rgba;
+            w32[6] = X1 | Y1, w32[7] = uv(A.u1, A.v1), w32[8] = rgba;
+            w32[9] = X0 | Y1, w32[10] = uv(A.u0, A.v0), w32[11] = rgba;
+        }
         w32 += 12, ++q;
         ++last->count;
     }
@@ -3869,6 +4006,9 @@ const char *GpuRender::RotoTexWhy()
     for (const Strip &st : sStrips)
         if (st.layer && n < (int)sizeof(buf))
             n += snprintf(buf + n, sizeof(buf) - n, " | strip L%d rows %u conv %u us copy %u us", (int)(st.layer - tileLayers), st.rowsUp, st.convUs, st.copyUs);
+    for (unsigned i = 0; i < ROTO_TEX_SLOTS && n < (int)sizeof(buf); ++i)
+        if (sRotoTex[i].key && sRotoRuns[i][0])
+            n += snprintf(buf + n, sizeof(buf) - n, " | roto %s", sRotoRuns[i]);
     return buf;
 }
 const char *GpuRender::DepthSummary() { return sDepthLast[0] ? sDepthLast : "- (no 3D frame yet: slider up or SET force3d 1)"; }
@@ -4568,6 +4708,7 @@ bool GpuRender::Render(const Stream &stream)
     bind2D();
 
     int curBlend = -1, curTex = -1, curDepth = 0; // bind2D sets the projection of depth 0
+    uint8 curProj = 0;                            // the rotozoom planes' program bound (bind2D binds the 2D one)
     int curTint = -1000;                          // DEPTH TINT: the depth the texture combiner paints now
     int curScissor = 0;
     // The batch before was a 3D scene: its program and state stay for the next scene (a run of them is common: 57 in a
@@ -4580,6 +4721,7 @@ bool GpuRender::Render(const Stream &stream)
             bind2D(); // the 2D state again, textures and blending set anew
             curBlend = curTex = -1;
             curDepth = 0;
+            curProj  = 0;
             curTint  = -1000;
             in3D     = false;
         }
@@ -4616,6 +4758,16 @@ bool GpuRender::Render(const Stream &stream)
                 ++scenes3d;
             }
             continue;
+        }
+        if (bt.proj != curProj) {
+            // To the rotozoom planes' program or back. Its projection and uvscale are the 2D program's registers, but
+            // binding a program loads its constants, which may sit where the other keeps a uniform: both set again.
+            C3D_BindProgram(bt.proj ? &sRotoProg : &sProgram);
+            if (bt.proj)
+                C3D_FVUnifSet(GPU_VERTEX_SHADER, sRotoEyeLoc, (eye ? 0.5f : -0.5f) * sSlider, 0.0f, 0.0f, 0.0f);
+            curProj  = bt.proj;
+            curDepth = -1000;
+            curTex   = -1;
         }
         if (bt.depth != curDepth) {
             // This eye's view of the batch: shifted by half its disparity, left for the left eye when behind.
@@ -4858,7 +5010,7 @@ bool GpuRender::Render(const Stream &stream)
         if (maskFrame && (bt.blend == BLEND_NORMAL || bt.blend == BLEND_UNMASKED || bt.blend == BLEND_MASKED))
             secondPass(bt.first, bt.count);
     }
-    if (in3D)
+    if (in3D || curProj)
         bind2D();
     // citro3d's state is sticky and citro2d (the bottom screen) draws next: leave no stencil, alpha test or scissor behind.
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);

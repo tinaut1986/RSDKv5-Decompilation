@@ -675,6 +675,26 @@ Released as betas `v0.1.0`, `v0.1.1`, `v0.1.2` (GitHub releases, `.github/workfl
 - **Draw groups in stereo.** Group 12 is the players' high group (`Zone->playerDrawGroup[1]`, used by cutscenes): it stays
   on the playfield; groups 13 and up (HUD) come forward.
 
+## Rotozoom planes as perspective quads (perf/title-roto, 2026-10-28)
+
+- The title with 3D on ran at 30-35 fps on the console (24-32 ms a frame): the GPU took 18-23 ms, almost all of it the
+  rotozoom layers' line quads (clouds 120 lines, island 72, the island's four hot-colour passes: ~950 quads of 400 x 1
+  for both eyes, ~20 us each whatever their height; `SET depthmode 32768` vs merged: 949 -> 745 quads, 22.7 -> 18.2 ms).
+- A first attempt merged up to 16 lines whose ends lay on a straight line into one affine quad. It cost 4 ms of CPU
+  (int64 divisions) and **sheared the island's near rows**: lines whose texel step changes make a trapezoid in texture
+  space, and the quad's two triangles map it differently on each side of the diagonal.
+- Now: a plane seen at an angle maps screen line y to texels (A + B x) / q(y) with q linear in y (q = 1 / the line's
+  texel step). A run of lines shares one quad while every line between the first and the last stays within 1/4 texel of
+  that projective interpolation; each vertex carries w = 1 / q and the PICA interpolates the texture coordinates with
+  perspective, exactly. The stereo disparity (RotoLineDepth, linear in q) is per vertex too. Program `roto.v.pica`
+  (DVLE 2 of renderer_shbin.h; vertex colour bytes = w high, w low, disparity * 8 + 128), `Batch::proj`. Runs end at a
+  palette-bank change, a texel-unit change or where the layer wraps; the longest run is found by doubling and halving.
+  `SITE REFUSED` ends with `roto WxH N lines M quads` per texture.
+- Title, console, FORCE 3D, FRAME SKIP off: island 72 lines -> 1 quad, clouds 120 -> 7; GPU 18.2 -> 12.5 ms, roto
+  emission 5.0 -> 1.7 ms; 30-35 -> 57-60 fps (2D stays 60). Frozen frame against the CPU: fewer differing pixels than
+  one quad a line. Debug: `SET depthmode 32768` one quad a line, `2048` no hot-colour passes.
+- Only layers (not sheets, not the Special Stage's faded lines) take this path.
+
 ## Next steps (suggested order)
 
 Pending work is tracked in the GitHub issues (tinaut1986/RSDKv5-Decompilation); in short:
