@@ -59,8 +59,8 @@
   for a while (floor and water rebuilt every frame) and could not be repeated; `SITE REFUSED` now says what changed in
   the floor ("changing (tiles)" or the bank and colour) should it come back. The v5U engine no longer fits with the new
   pools (the game quits at boot): revision 2 stays.
-- **Active release line**: `release/v0.4.1`, on `origin` (`v0.1.0`, `v0.1.1`, `v0.1.2` are beta tags on its history;
-  `v0.2.0` to `v0.2.3`, 2026-10-24, `v0.3.0` to `v0.3.3` and `v0.4.0`, 2026-10-26, stable tags on `main`; `v0.2.2` panicked at boot on the New 3DS, fixed in `v0.2.3`).
+- **Active release line**: `release/v0.4.5`, on `origin` (`v0.1.0`, `v0.1.1`, `v0.1.2` are beta tags on its history;
+  `v0.2.0` to `v0.2.3`, 2026-10-24, `v0.3.0` to `v0.3.3` and `v0.4.0`, 2026-10-26, `v0.4.1` to `v0.4.4` (the title at 60 fps with 3D), 2026-10-28, stable tags on `main`; `v0.2.2` panicked at boot on the New 3DS, fixed in `v0.2.3`).
 - **Consoles**: the owner's Old 2DS (`192.168.1.139` on 2026-10-26) and New 3DS (`.133` that day) (DHCP: ping first, the DEBUG tab shows the IP;
   `tools/site.sh -i IP`). Both run the latest dev build of `release/v0.1.0`; the New 3DS takes `--install` over FTP too
   (it rewrites `.3ds_ftp_ip`: set it back to the 2DS). Ask the owner before installing in a new session (each session's

@@ -821,7 +821,7 @@ static void HandleSession(int ctrl)
                 else if (!strncmp(path, "gpuskip", 7)) // before "gpu": it took gpuskip for gpu (0 turned the GPU renderer off)
                     GpuRender::gpuSkip = (unsigned)v;
                 else if (!strncmp(path, "depthmode", 9))
-                    GpuRender::depthMode = (unsigned)v & 2047;
+                    GpuRender::depthMode = (unsigned)v & 0xFFFF;
                 else if (!strncmp(path, "gpurender", 9))
                     DevTools::swGpuRender = v != 0;
                 else if (!strncmp(path, "gpu", 3))
