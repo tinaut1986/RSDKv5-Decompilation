@@ -1149,9 +1149,21 @@ void RSDK::DrawLine(int32 x1, int32 y1, int32 x2, int32 y2, uint32 color, int32 
             break;
     }
 }
+// Whether a recorded draw would have reached the pixels (validDraw): not an invisible ink, and a box inside the clip
+static bool RecBoxVisible(int32 x, int32 y, int32 w, int32 h, int32 inkEffect, int32 alpha)
+{
+    if ((inkEffect == INK_ALPHA || inkEffect == INK_ADD || inkEffect == INK_SUB) && alpha <= 0)
+        return false;
+    return w > 0 && h > 0 && x + w > currentScreen->clipBound_X1 && x < currentScreen->clipBound_X2 && y + h > currentScreen->clipBound_Y1
+           && y < currentScreen->clipBound_Y2;
+}
+
 void RSDK::DrawRectangle(int32 x, int32 y, int32 width, int32 height, uint32 color, int32 alpha, int32 inkEffect, bool32 screenRelative)
 {
-    GPUFRAME_REC(RecRect(x, y, width, height, color, alpha, inkEffect, screenRelative));
+    GPUFRAME_REC_V(RecRect(x, y, width, height, color, alpha, inkEffect, screenRelative),
+                   screenRelative ? RecBoxVisible(x, y, width, height, inkEffect, alpha)
+                                  : RecBoxVisible(FROM_FIXED(x) - currentScreen->position.x, FROM_FIXED(y) - currentScreen->position.y,
+                                                  FROM_FIXED(width), FROM_FIXED(height), inkEffect, alpha));
     DEV_STAGE(STAGE_SHAPES);
     switch (inkEffect) {
         default: break;
@@ -2872,7 +2884,8 @@ void RSDK::DrawSprite(Animator *animator, Vector2 *position, bool32 screenRelati
 void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 sprX, int32 sprY, int32 direction, int32 inkEffect, int32 alpha,
                              int32 sheetID)
 {
-    GPUFRAME_REC(RecSprite(x, y, width, height, sprX, sprY, direction, inkEffect, alpha, sheetID));
+    GPUFRAME_REC_V(RecSprite(x, y, width, height, sprX, sprY, direction, inkEffect, alpha, sheetID),
+                   RecBoxVisible(x, y, width, height, inkEffect, alpha));
     DEV_STAGE(STAGE_SPRITES);
     switch (inkEffect) {
         default: break;
@@ -3535,7 +3548,12 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
 void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int32 width, int32 height, int32 sprX, int32 sprY, int32 scaleX,
                               int32 scaleY, int32 direction, int16 rotation, int32 inkEffect, int32 alpha, int32 sheetID)
 {
-    GPUFRAME_REC(RecRoto(x, y, pivotX, pivotY, width, height, sprX, sprY, scaleX, scaleY, direction, rotation, inkEffect, alpha, sheetID));
+    // a square around the centre, as wide as the sprite's longest side times the scale (the turn can reach that far)
+    GPUFRAME_REC_V(RecRoto(x, y, pivotX, pivotY, width, height, sprX, sprY, scaleX, scaleY, direction, rotation, inkEffect, alpha, sheetID),
+                   RecBoxVisible(x - ((width > height ? width : height) * (scaleX > 0 ? scaleX : 0x200) >> 8),
+                                 y - ((width > height ? width : height) * (scaleY > 0 ? scaleY : 0x200) >> 8),
+                                 2 * ((width > height ? width : height) * (scaleX > 0 ? scaleX : 0x200) >> 8),
+                                 2 * ((width > height ? width : height) * (scaleY > 0 ? scaleY : 0x200) >> 8), inkEffect, alpha));
     DEV_STAGE(STAGE_ROTO);
     switch (inkEffect) {
         default: break;

@@ -87,6 +87,40 @@ void PortGame_Immortal(int on)
     }
 }
 
+void PortGame_Describe(char *out, unsigned cap)
+{
+    unsigned n = 0;
+#define ADD(...) (n += (unsigned)snprintf(out + n, n < cap ? cap - n : 0, __VA_ARGS__))
+    out[0] = 0;
+    if (Player && Player->classID)
+        for (int i = 0; i < 4; ++i) {
+            EntityPlayer *p = RSDK_GET_ENTITY(i, Player);
+            if (p->classID == Player->classID)
+                ADD("P%d char %d state %p input %p anim %d inv %d | ", i, p->characterID, (void *)p->state, (void *)p->stateInput,
+                    p->animator.animationID, p->invincibleTimer);
+        }
+    if (ActClear && ActClear->classID) {
+        EntityActClear *a = RSDK_GET_ENTITY(SLOT_ACTCLEAR, ActClear);
+        ADD("ACTCLEAR slot class %d state %p timer %d | ", a->classID, (void *)a->state, a->timer);
+    }
+    if (CutsceneSeq && CutsceneSeq->classID)
+        for (int i = 0; i < ENTITY_COUNT; ++i) {
+            EntityCutsceneSeq *c = RSDK_GET_ENTITY(i, CutsceneSeq);
+            if (c->classID == CutsceneSeq->classID)
+                ADD("SEQ slot %d stateID %d timer %d current %p | ", i, c->stateID, c->timer, (void *)c->currentState);
+        }
+    if (PhantomRuby && PhantomRuby->classID)
+        for (int i = 0; i < ENTITY_COUNT; ++i) {
+            EntityPhantomRuby *r = RSDK_GET_ENTITY(i, PhantomRuby);
+            if (r->classID == PhantomRuby->classID)
+                ADD("RUBY slot %d act %d vis %d onScr %d alpha %d ink %d pos %d,%d state %p grp %d anim %d | ", i, r->active, r->visible,
+                    r->onScreen, r->alpha, r->inkEffect, r->position.x >> 16, r->position.y >> 16, (void *)r->state, r->drawGroup,
+                    r->rubyAnimator.animationID);
+        }
+    ADD("CAM %d,%d", ScreenInfo->position.x, ScreenInfo->position.y);
+#undef ADD
+}
+
 void PortGame_SceneMode(const char *category)
 {
     if (!globals)
