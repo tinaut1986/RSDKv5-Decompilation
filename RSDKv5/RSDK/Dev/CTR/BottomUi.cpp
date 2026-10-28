@@ -1058,7 +1058,7 @@ static void DrawGameTab()
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_DEPTH, OPT_POP, OPT_PLUS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_DEPTH, OPT_PLUS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
 enum { OPT_W = 150, OPT_H = 30, OPT_PITCH = 34 };
 // THEME opens a list over the page (the dropdown); its rows are hits OPT_LIST + i, a touch elsewhere OPT_LIST_OUT.
 enum { OPT_LIST = 100, OPT_LIST_OUT = 99, LIST_ROW_H = 22 };
@@ -1100,12 +1100,6 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
             *col = Port::depth3d == 2 ? dim : good;
             break;
         }
-        case OPT_POP: {
-            static const char *const k[] = { "BEHIND", "NORMAL", "FORWARD" };
-            snprintf(o, cap, "%s", Tr(k[Port::pop3d]));
-            *col = Port::pop3d == 1 ? dim : good;
-            break;
-        }
         default: // OPT_PLUS: a change counts from the next start, until then in the warning colour
             snprintf(o, cap, "%s", Tr(Port::plus ? "ON" : "OFF"));
             *col = Port::plus != Port::PlusApplied() ? warn : Port::plus ? good : dim;
@@ -1113,14 +1107,13 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "3D DEPTH", "3D SCENE", "PLUS" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "3D DEPTH", "PLUS" };
 static const char *const kOptHelp[OPT_COUNT] = {
     "AUTO SKIPS A LATE PICTURE TO KEEP THE SPEED, 30 FPS DRAWS EVERY OTHER ONE, OFF DRAWS THEM ALL (THE GAME SLOWS DOWN IF IT CANNOT KEEP UP)",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
     "AUTO HIDES THE GAME'S HUD WHILE THE GAME TAB SHOWS IT",
     "THE COLOURS OF THIS SCREEN",
     "HOW STRONG THE 3D EFFECT IS WITH THE SLIDER UP. 100 % IS THE DEFAULT; LOWER IS SOFTER, HIGHER IS STRONGER",
-    "BEHIND: THE 3D GOES FROM THE SCREEN INTO THE DISTANCE, NOTHING COMES OUT. NORMAL: NEAR THINGS COME OUT A LITTLE. FORWARD: THE WHOLE SCENE COMES OUT OF THE SCREEN",
     "MIGHTY, RAY AND ENCORE MODE, ONLY IF YOU OWN SONIC MANIA PLUS. IT CHANGES AT THE NEXT START",
 };
 static int sLastOpt = -1;
@@ -1201,7 +1194,6 @@ static void TapOption(int i)
         case OPT_HUD: Port::hud = (Port::hud + 1) % 3; break;
         case OPT_THEME: sThemeOpen = true; break;
         case OPT_DEPTH: Port::depth3d = (Port::depth3d + 1) % 5; break;
-        case OPT_POP: Port::pop3d = (Port::pop3d + 1) % 3; break;
         default: Port::plus = !Port::plus; break; // OPT_PLUS
     }
     sLastOpt = i;
@@ -1234,9 +1226,9 @@ static void DrawOptionsTab()
         else
             Text(val, x + 7, y + 15, 0.5f, col, 0, 0.33f);
     }
-    // FRAMES OFF: the game slows down where it cannot keep up; said as long as it stays so (FRAMES' own help says it
-    // while it is up)
-    if (!Port::lock30 && !Port::frameSkip && sLastOpt != OPT_FRAMES)
+    // FRAMES OFF: the game slows down where it cannot keep up; said while no option has been touched (an option's help
+    // text goes in the same place)
+    if (!Port::lock30 && !Port::frameSkip && sLastOpt < 0)
         Text(Tr("FRAMES OFF: THE GAME MAY RUN SLOW IN SOME PLACES"), W / 2.0f, H - 60, 0.4f, Rgb(240, 200, 80), C2D_AlignCenter | C2D_WordWrap,
              0.33f, W - 24);
     // What the last option touched does

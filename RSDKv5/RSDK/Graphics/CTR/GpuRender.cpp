@@ -146,23 +146,13 @@ int8 ParallaxDepth(int32 f)
     const int front = -(STEREO_FAR / 2);
     return (int8)(d < front ? front : d);
 }
-// The depth a batch is shifted by after OPTIONS > 3D SCENE: BEHIND puts what was in front on the screen plane, FORWARD
-// moves everything half the near range.
-int ShiftDepth(int depth)
-{
-    if (Port::pop3d == 0 && depth < 0)
-        return 0;
-    if (Port::pop3d == 2)
-        return depth - STEREO_FAR / 2;
-    return depth;
-}
 // Pixels a layer is drawn past each screen edge in stereo: a shifted layer would leave the edge bare (the clear colour
 // showed as a blue line). The farthest the current depth moves it in one eye, rounded up.
 int EdgeMargin()
 {
-    if (!sDepths || !sStereo || sUfoStage || sTitleScene)
+    if (!sDepths || !sStereo || sUfoStage)
         return 0;
-    const int d = ShiftDepth(sDepth);
+    const int d = sDepth;
     return d ? (int)ceilf(0.5f * (d < 0 ? -d : d) * sSlider) + 1 : 0;
 }
 // The Special Stage's 3D scenes: the player's model is at Z ~ 41000 (SITE CMDS); things there sit on the screen plane.
@@ -1112,7 +1102,10 @@ bool EmitSpriteChunked(const Cmd &c, int32 X0, int32 Y0, int32 W0, int32 H0, int
 {
     const bool fx = direction == FLIP_X || direction == FLIP_XY, fy = direction == FLIP_Y || direction == FLIP_XY;
     // The visible screen rectangle, then the sheet range it shows.
-    const int32 vx0 = X0 > c.clip[0] ? X0 : c.clip[0], vx1 = X0 + W0 < c.clip[2] ? X0 + W0 : c.clip[2];
+    // Stereo: a piece at a depth is shifted sideways, so with the clip the whole screen wide it is cut a margin past each
+    // edge, not at the edge (the title's mountains lost a strip at one edge in each eye)
+    const int32 mx  = c.clip[0] <= 0 && c.clip[2] >= 400 ? EdgeMargin() : 0;
+    const int32 vx0 = X0 > c.clip[0] - mx ? X0 : c.clip[0] - mx, vx1 = X0 + W0 < c.clip[2] + mx ? X0 + W0 : c.clip[2] + mx;
     const int32 vy0 = Y0 > c.clip[1] ? Y0 : c.clip[1], vy1 = Y0 + H0 < c.clip[3] ? Y0 + H0 : c.clip[3];
     if (vx0 >= vx1 || vy0 >= vy1)
         return true;
@@ -1200,14 +1193,16 @@ bool EmitSprite(const Cmd &c)
         return EmitSpriteChunked(c, x, y, w0, h0, sprX0, sprY0, direction, sheetID, blend, alpha);
 
     int32 widthFlip = width, heightFlip = height;
-    if (width + x > c.clip[2])
-        width = c.clip[2] - x;
-    if (x < c.clip[0]) {
-        const int32 val = x - c.clip[0];
+    // Stereo: with the clip the whole screen wide the sprite is cut a margin past each edge (a depth shifts it sideways)
+    const int32 mx = c.clip[0] <= 0 && c.clip[2] >= 400 ? EdgeMargin() : 0;
+    if (width + x > c.clip[2] + mx)
+        width = c.clip[2] + mx - x;
+    if (x < c.clip[0] - mx) {
+        const int32 val = x - (c.clip[0] - mx);
         sprX -= val;
         width += val;
         widthFlip += 2 * val;
-        x = c.clip[0];
+        x = c.clip[0] - mx;
     }
     if (height + y > c.clip[3])
         height = c.clip[3] - y;
@@ -1731,10 +1726,7 @@ void Draw3DSceneGpu(unsigned k, bool follows)
     }
     if (!follows) {
         // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it)
-        // OPTIONS > 3D SCENE: BEHIND stops the shift at the screen plane, FORWARD moves the plane back (Zc x 1.5: the
-        // player's depth comes out by half the near range, as the 2D batches do)
-        const float zc = Port::pop3d == 2 ? STEREO_ZC * 1.5f : STEREO_ZC;
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, zc, Port::pop3d == 0 ? 0.0f : Port::pop3d == 2 ? -1.0f : -0.5f, 1.0f);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, STEREO_ZC, -0.5f, 1.0f);
         C3D_TexEnv *env = C3D_GetTexEnv(0);
         C3D_TexEnvInit(env);
         C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
@@ -4630,8 +4622,7 @@ bool GpuRender::Render(const Stream &stream)
             C3D_Mtx m;
             Mtx_Copy(&m, (const C3D_Mtx *)C3DPresent::Projection());
             // Whole pixels: a fraction moved the 1-pixel floor runs' samples off their tiles (stray texels in 3D)
-            // OPTIONS > 3D SCENE: BEHIND puts what was in front on the screen plane, FORWARD moves everything half the near range
-            const int depth = ShiftDepth(bt.depth);
+            const int depth = bt.depth;
             Mtx_Translate(&m, roundf((eye ? 0.5f : -0.5f) * depth * sSlider), 0.0f, 0.0f, true);
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &m);
             curDepth = bt.depth;
