@@ -4131,7 +4131,9 @@ static int8 CmdDepth(const Cmd &c, unsigned index)
         }
         return ParallaxDepth(layer->parallaxFactor);
     }
-    if (c.group >= 12)
+    // The HUD and what is above it (groups 13 and up). Group 12 is the players' high group (Zone->playerDrawGroup[1]: the
+    // cutscenes put them there): they stay on the playfield.
+    if (c.group >= 13)
         return -2;
     if (!sUfoStage && (c.type == CMD_SPRITE || c.type == CMD_ROTO) && index < sPlayfieldEnd && sBehind > 0) {
         ++sBehindSprites;

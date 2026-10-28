@@ -85,6 +85,22 @@ const Stats &GetStats();
             RSDK::GpuFrame::Flush();                                                                                                                 \
     } while (0)
 
+// The same, for the functions that tell the game something was drawn on screen (validDraw, which becomes the entity's
+// onScreen): recorded, they never reach the software drawing that sets it, so `visible` (the test that drawing would
+// have passed) sets it here. A cutscene waiting for a sprite to be on screen (EncoreIntro's ruby) hung without it.
+#define GPUFRAME_REC_V(rec, visible)                                                                                                                 \
+    do {                                                                                                                                             \
+        if (RSDK::GpuFrame::active) {                                                                                                                \
+            if (RSDK::GpuFrame::rec) {                                                                                                               \
+                if (visible)                                                                                                                         \
+                    validDraw = true;                                                                                                                \
+                return;                                                                                                                              \
+            }                                                                                                                                        \
+        }                                                                                                                                            \
+        else if (RSDK::GpuFrame::pending)                                                                                                            \
+            RSDK::GpuFrame::Flush();                                                                                                                 \
+    } while (0)
+
 // For functions that cannot be deferred (palette changes, the 3D scene, dev text). `why` names it in the dev tools.
 #define GPUFRAME_HAZARD(why)                                                                                                                         \
     do {                                                                                                                                             \
@@ -95,6 +111,7 @@ const Stats &GetStats();
 #else
 
 #define GPUFRAME_REC(rec)
+#define GPUFRAME_REC_V(rec, visible)
 #define GPUFRAME_HAZARD(why)
 
 #endif

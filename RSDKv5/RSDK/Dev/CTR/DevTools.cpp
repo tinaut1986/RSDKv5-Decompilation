@@ -1140,6 +1140,11 @@ static void HandleSession(int ctrl)
                 // The last GPU frame's atlas conversions: which ones really changed colour
                 Reply(s, "200 %s", GpuRender::ConvReport());
             }
+            else if (!strcmp(sub, "ENTS")) {
+                char buf[400];
+                PortGame_Describe(buf, sizeof(buf));
+                Reply(s, "200 %s", buf);
+            }
             else if (!strcmp(sub, "SVAR") && path) {
                 // SITE SVAR <Class> <byte offset> [n]: n int32 of a stage object's static variables (debug)
                 char name[48];

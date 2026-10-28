@@ -32,6 +32,10 @@ void PortGame_Immortal(int on);
 // (jumping again and again, to reach high places quickly).
 void PortGame_AirJump(int on);
 
+// SITE ENTS: the players' states, the ActClear entity and the cutscene sequences, as raw function pointers (resolve them
+// with addr2line on the ELF), to find what a stuck cutscene waits for.
+void PortGame_Describe(char *out, unsigned cap);
+
 // A scene picked from the STAGES list: the game mode follows its category ("Encore Mode" -> Encore, "Mania Mode" ->
 // Mania), as the menus would have set it; the other categories leave it.
 void PortGame_SceneMode(const char *category);
