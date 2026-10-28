@@ -36,6 +36,12 @@ void PortGame_AirJump(int on);
 // with addr2line on the ELF), to find what a stuck cutscene waits for.
 void PortGame_Describe(char *out, unsigned cap);
 
+// Every frame, before the objects update, in every build: game logic quirks that cost the 3DS what a PC does not notice.
+// The credits' text lines that fade out (UICreditsText_State_FadeOut) are never destroyed by the game: at alpha 0 they
+// go back to SetupIdleDelay and straight to FadeOut again, for good, so the entities pile up as the credits go on and
+// each is still updated and drawn (the credits ran slower and slower on the 2DS). They are destroyed here.
+void PortGame_Tick(void);
+
 // A scene picked from the STAGES list: the game mode follows its category ("Encore Mode" -> Encore, "Mania Mode" ->
 // Mania), as the menus would have set it; the other categories leave it.
 void PortGame_SceneMode(const char *category);

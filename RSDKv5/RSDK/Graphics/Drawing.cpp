@@ -2884,6 +2884,8 @@ void RSDK::DrawSprite(Animator *animator, Vector2 *position, bool32 screenRelati
 void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 sprX, int32 sprY, int32 direction, int32 inkEffect, int32 alpha,
                              int32 sheetID)
 {
+    // 16 pixels of margin: in stereo 3D a layer's shift can bring a sprite just outside the clip into view
+    GPUFRAME_CULL(!RecBoxVisible(x - 16, y - 16, width + 32, height + 32, inkEffect, alpha));
     GPUFRAME_REC_V(RecSprite(x, y, width, height, sprX, sprY, direction, inkEffect, alpha, sheetID),
                    RecBoxVisible(x, y, width, height, inkEffect, alpha));
     DEV_STAGE(STAGE_SPRITES);
