@@ -38,6 +38,9 @@ void PortGame_GetInfo(PortGameInfo *out)
 void PortGame_Immortal(int on)
 {
     static int wasOn;
+    // The Special Stage has no Player: its ring counter (time drain, traps) is kept at 50 or more
+    if (on && UFO_Setup && UFO_Setup->classID && UFO_Setup->rings < 50)
+        UFO_Setup->rings = 50;
     if (!Player || !Player->classID) { // no Player here (menus, Special Stage, Blue Spheres)
         wasOn = 0;
         return;
@@ -59,6 +62,15 @@ void PortGame_Immortal(int on)
     bool32 starsLive = stars && stars->classID == InvincibleStars->classID;
 
     if (active) {
+        // No drowning (the air never runs out) and no crushing (squeezed between two solids: the flags are read by
+        // the player's next update, so they are cleared before it). Pits and other deaths still kill.
+        p->drownTimer = 0;
+        if (p->deathType == PLAYER_DEATH_DROWN)
+            p->deathType = PLAYER_DEATH_NONE;
+        if (p->collisionFlagH == (1 | 2))
+            p->collisionFlagH = 0;
+        if (p->collisionFlagV == (1 | 2))
+            p->collisionFlagV = 0;
         if (p->invincibleTimer < 600) { // topped up (the item box gives 1260)
             p->invincibleTimer = 1260;
             if (stars && !starsLive && p->superState == SUPERSTATE_NONE)
@@ -73,6 +85,32 @@ void PortGame_Immortal(int on)
             RSDK.ResetEntity(stars, TYPE_BLANK, NULL);
         wasOn = 0;
     }
+}
+
+void PortGame_SceneMode(const char *category)
+{
+    if (!globals)
+        return;
+    if (!strcmp(category, "Mania Mode"))
+        globals->gameMode = MODE_MANIA;
+#if MANIA_USE_PLUS
+    else if (!strcmp(category, "Encore Mode"))
+        globals->gameMode = MODE_ENCORE;
+#endif
+}
+
+void PortGame_AirJump(int on)
+{
+    if (!on || !Player || !Player->classID || SceneInfo->state != ENGINESTATE_REGULAR)
+        return;
+    EntityPlayer *p = RSDK_GET_ENTITY(SLOT_PLAYER1, Player);
+    if (p->classID != Player->classID || p->stateInput != Player_Input_P1 || p->onGround)
+        return;
+    if (p->state == Player_State_Death || p->state == Player_State_Drown || p->state == Player_State_Hurt)
+        return;
+    // The 3DS Y button (the game's X, one of the three jump buttons) held: keep rising
+    if (ControllerInfo[p->controllerID].keyX.down && p->velocity.y > -0x60000)
+        p->velocity.y = -0x60000;
 }
 
 // One bit per entity slot: that slot's box was already reported (or found open). Cleared again when the slot holds a

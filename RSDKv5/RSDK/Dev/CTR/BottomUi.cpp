@@ -272,6 +272,8 @@ static void ValFtp(char *o, unsigned c, bool *on)
 static void TapFtp() { DevTools::SetFtp(!DevTools::FtpRunning()); }
 static void ValImmortal(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::immortal ? "ON" : "OFF"); *on = DevTools::immortal; }
 static void TapImmortal() { DevTools::immortal = !DevTools::immortal; }
+static void ValAirJump(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::airJump ? "ON" : "OFF"); *on = DevTools::airJump; }
+static void TapAirJump() { DevTools::airJump = !DevTools::airJump; }
 static int sPick; // the STAGES list: 0 closed, 1 the scene list's categories, 2 the scenes of one (below)
 static void ValStages(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", "LIST"); *on = sPick != 0; }
 static void TapStages() { sPick = 1; }
@@ -281,7 +283,7 @@ static const Button kButtons[] = {
     { "LOG MARK", TapMark, ValMark },         { "DRAW LISTS", TapDraw, ValDraw },            { "FLIP COPY", TapFlip, ValFlip },
     { "3D SCENES", TapGpu3D, ValGpu3D },      { "FORCE 3D", TapForce3D, ValForce3D },    { "DEPTH TINT", TapDepthTint, ValDepthTint },
     { "CAPTURE", TapCapture, ValCapture },    { "FTP", TapFtp, ValFtp },                 { "STAGES", TapStages, ValStages },
-    { "IMMORTAL", TapImmortal, ValImmortal },
+    { "IMMORTAL", TapImmortal, ValImmortal }, { "AIR JUMP", TapAirJump, ValAirJump },
 };
 
 #endif // MANIA_DEV_TOOLS
@@ -1056,7 +1058,7 @@ static void DrawGameTab()
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_PLUS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_DEPTH, OPT_POP, OPT_PLUS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
 enum { OPT_W = 150, OPT_H = 30, OPT_PITCH = 34 };
 // THEME opens a list over the page (the dropdown); its rows are hits OPT_LIST + i, a touch elsewhere OPT_LIST_OUT.
 enum { OPT_LIST = 100, OPT_LIST_OUT = 99, LIST_ROW_H = 22 };
@@ -1092,6 +1094,18 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
             snprintf(o, cap, "%s", Tr(T().name));
             *col = T().accent;
             break;
+        case OPT_DEPTH: {
+            static const char *const k[] = { "50 %", "75 %", "100 %", "150 %", "200 %" };
+            snprintf(o, cap, "%s", k[Port::depth3d]);
+            *col = Port::depth3d == 2 ? dim : good;
+            break;
+        }
+        case OPT_POP: {
+            static const char *const k[] = { "BEHIND", "NORMAL", "FORWARD" };
+            snprintf(o, cap, "%s", Tr(k[Port::pop3d]));
+            *col = Port::pop3d == 1 ? dim : good;
+            break;
+        }
         default: // OPT_PLUS: a change counts from the next start, until then in the warning colour
             snprintf(o, cap, "%s", Tr(Port::plus ? "ON" : "OFF"));
             *col = Port::plus != Port::PlusApplied() ? warn : Port::plus ? good : dim;
@@ -1099,12 +1113,14 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "PLUS" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "3D DEPTH", "3D SCENE", "PLUS" };
 static const char *const kOptHelp[OPT_COUNT] = {
     "AUTO SKIPS A LATE PICTURE TO KEEP THE SPEED, 30 FPS DRAWS EVERY OTHER ONE, OFF DRAWS THEM ALL (THE GAME SLOWS DOWN IF IT CANNOT KEEP UP)",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
     "AUTO HIDES THE GAME'S HUD WHILE THE GAME TAB SHOWS IT",
     "THE COLOURS OF THIS SCREEN",
+    "HOW STRONG THE 3D EFFECT IS WITH THE SLIDER UP. 100 % IS THE DEFAULT; LOWER IS SOFTER, HIGHER IS STRONGER",
+    "BEHIND: THE 3D GOES FROM THE SCREEN INTO THE DISTANCE, NOTHING COMES OUT. NORMAL: NEAR THINGS COME OUT A LITTLE. FORWARD: THE WHOLE SCENE COMES OUT OF THE SCREEN",
     "MIGHTY, RAY AND ENCORE MODE, ONLY IF YOU OWN SONIC MANIA PLUS. IT CHANGES AT THE NEXT START",
 };
 static int sLastOpt = -1;
@@ -1184,6 +1200,8 @@ static void TapOption(int i)
         case OPT_FPS: Port::fps = (Port::fps + 1) % 5; break;
         case OPT_HUD: Port::hud = (Port::hud + 1) % 3; break;
         case OPT_THEME: sThemeOpen = true; break;
+        case OPT_DEPTH: Port::depth3d = (Port::depth3d + 1) % 5; break;
+        case OPT_POP: Port::pop3d = (Port::pop3d + 1) % 3; break;
         default: Port::plus = !Port::plus; break; // OPT_PLUS
     }
     sLastOpt = i;
