@@ -43,22 +43,34 @@ void PortGame_Immortal(int on)
         return;
     }
     EntityPlayer *p = RSDK_GET_ENTITY(SLOT_PLAYER1, Player);
-    if (p->classID != Player->classID)
+    if (p->classID != Player->classID) {
+        wasOn = 0;
         return;
-    if (on) {
+    }
+    // The effect shows only in play. A cutscene, an act clear or a paused scene takes the player's input away and may
+    // recycle his entity, and the stars made here then pointed at something that is not a player (crash in
+    // InvincibleStars). Out of play it is undone as if the option were off (no timer, no stars); it comes back with
+    // the input.
+    bool32 active = on && SceneInfo->state == ENGINESTATE_REGULAR && p->stateInput == Player_Input_P1;
+
+    EntityInvincibleStars *stars = NULL;
+    if (InvincibleStars && InvincibleStars->classID)
+        stars = RSDK_GET_ENTITY(Player->playerCount + RSDK.GetEntitySlot(p), InvincibleStars);
+    bool32 starsLive = stars && stars->classID == InvincibleStars->classID;
+
+    if (active) {
         if (p->invincibleTimer < 600) { // topped up (the item box gives 1260)
             p->invincibleTimer = 1260;
-            if (InvincibleStars && InvincibleStars->classID && p->superState == SUPERSTATE_NONE) {
-                EntityInvincibleStars *stars = RSDK_GET_ENTITY(Player->playerCount + RSDK.GetEntitySlot(p), InvincibleStars);
-                if (stars->classID != InvincibleStars->classID)
-                    RSDK.ResetEntity(stars, InvincibleStars->classID, p);
-            }
+            if (stars && !starsLive && p->superState == SUPERSTATE_NONE)
+                RSDK.ResetEntity(stars, InvincibleStars->classID, p);
         }
         wasOn = 1;
     }
     else if (wasOn) {
         if (p->invincibleTimer > 1)
             p->invincibleTimer = 1;
+        if (starsLive)
+            RSDK.ResetEntity(stars, TYPE_BLANK, NULL);
         wasOn = 0;
     }
 }
