@@ -24,9 +24,17 @@ typedef struct {
 void PortGame_GetInfo(PortGameInfo *out);
 
 // The DEBUG tab's IMMORTAL (dev builds): called every frame. On, player 1 keeps the item box's invincibility (its
-// stars too, made again when the scene has none): enemies and spikes do not hurt, touching enemies breaks them. Pits,
-// crushes and drowning still kill. Off, the invincibility runs out at once.
+// stars too, made again when the scene has none): enemies and spikes do not hurt, touching enemies breaks them. It also
+// keeps the Special Stage's rings up, and there is no drowning or crushing. Pits and other deaths still kill. Off, the invincibility runs out at once.
 void PortGame_Immortal(int on);
+
+// The DEBUG tab's AIR JUMP (dev builds): called every frame. On, player 1 in the air rises while the 3DS Y button is held
+// (jumping again and again, to reach high places quickly).
+void PortGame_AirJump(int on);
+
+// A scene picked from the STAGES list: the game mode follows its category ("Encore Mode" -> Encore, "Mania Mode" ->
+// Mania), as the menus would have set it; the other categories leave it.
+void PortGame_SceneMode(const char *category);
 
 // Item boxes opened since the last call: their contents (the game's ITEMBOX_* numbering, which is also the frame of
 // the contents icon in Global/ItemBox.bin animation 2), at most `max`; returns how many. `reset` after a scene load:

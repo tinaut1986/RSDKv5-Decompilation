@@ -141,6 +141,7 @@ void LoadScene(int category, int scene);
 extern uint32 objDrawTicks[0x400]; // the same for the draw callbacks
 extern uint32 objTicks[0x400]; // CPU ticks each object class's update took since SITE OBJTIME last ran
 extern bool freeze;       // skip the objects' update, keep drawing (SITE FREEZE): the same frame in both renderers
+extern bool airJump;      // the DEBUG tab's AIR JUMP: hold the 3DS Y button in the air to keep rising (PortGame_AirJump); not saved
 extern bool immortal;     // the DEBUG tab's IMMORTAL: player 1 kept invincible (PortGame_Immortal); not saved
 extern bool swGpuPresent;  // present through citro3d instead of the CPU rotate-copy (part of the GPU mode)
 extern bool swGpuRender;   // execute recorded frames on the GPU (needs swRecord and swGpuPresent)

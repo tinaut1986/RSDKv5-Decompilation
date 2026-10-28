@@ -10,6 +10,7 @@
 
 #include "RSDK/Graphics/CTR/C3DPresent.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
+#include "RSDK/Dev/CTR/Port.hpp"
 #include "RSDK/Graphics/CTR/GpuFrame.hpp"
 #include "RSDK/Graphics/CTR/renderer_shbin.h"
 #include "RSDK/Graphics/CTR/GpuScene3D.hpp"
@@ -1711,7 +1712,10 @@ void Draw3DSceneGpu(unsigned k, bool follows)
     }
     if (!follows) {
         // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it)
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, STEREO_ZC, -0.5f, 1.0f);
+        // OPTIONS > 3D SCENE: BEHIND stops the shift at the screen plane, FORWARD moves the plane back (Zc x 1.5: the
+        // player's depth comes out by half the near range, as the 2D batches do)
+        const float zc = Port::pop3d == 2 ? STEREO_ZC * 1.5f : STEREO_ZC;
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, zc, Port::pop3d == 0 ? 0.0f : Port::pop3d == 2 ? -1.0f : -0.5f, 1.0f);
         C3D_TexEnv *env = C3D_GetTexEnv(0);
         C3D_TexEnvInit(env);
         C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
@@ -4239,6 +4243,11 @@ bool GpuRender::Render(const Stream &stream)
     if (DEV_SW_FORCE3D)
         sSlider = 1.0f;
     sStereo = sSlider > 0.0f && C3DPresent::TargetRight();
+    {
+        // OPTIONS > 3D DEPTH scales the slider's effect
+        static const float kLevel[] = { 0.5f, 0.75f, 1.0f, 1.5f, 2.0f };
+        sSlider *= kLevel[Port::depth3d >= 0 && Port::depth3d < 5 ? Port::depth3d : 2];
+    }
     sDepths   = sStereo || GpuRender::depthTint;
     sUfoScene = sceneInfo.listData && !strncmp(sceneInfo.listData[sceneInfo.listPos].folder, "UFO", 3);
     sUfoStage = sDepths && sceneInfo.listData && !strncmp(sceneInfo.listData[sceneInfo.listPos].folder, "UFO", 3);
@@ -4587,7 +4596,13 @@ bool GpuRender::Render(const Stream &stream)
             C3D_Mtx m;
             Mtx_Copy(&m, (const C3D_Mtx *)C3DPresent::Projection());
             // Whole pixels: a fraction moved the 1-pixel floor runs' samples off their tiles (stray texels in 3D)
-            Mtx_Translate(&m, roundf((eye ? 0.5f : -0.5f) * bt.depth * sSlider), 0.0f, 0.0f, true);
+            // OPTIONS > 3D SCENE: BEHIND puts what was in front on the screen plane, FORWARD moves everything half the near range
+            int depth = bt.depth;
+            if (Port::pop3d == 0 && depth < 0)
+                depth = 0;
+            else if (Port::pop3d == 2)
+                depth -= STEREO_FAR / 2;
+            Mtx_Translate(&m, roundf((eye ? 0.5f : -0.5f) * depth * sSlider), 0.0f, 0.0f, true);
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &m);
             curDepth = bt.depth;
         }

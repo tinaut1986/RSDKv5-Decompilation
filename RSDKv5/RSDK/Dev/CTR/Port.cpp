@@ -25,6 +25,8 @@ int Port::tab         = 0;
 bool Port::autoUpdate = true;
 bool Port::betas      = false;
 int Port::theme       = 0;
+int Port::depth3d     = 2;
+int Port::pop3d       = 1;
 bool Port::plus       = false;
 bool Port::plusAsked  = false;
 int Port::achNotice   = 1;
@@ -61,6 +63,10 @@ static bool ReadSettings(const char *path)
             Port::betas = v != 0;
         else if (!strcmp(key, "theme"))
             Port::theme = v < 0 || v > 15 ? 0 : v;
+        else if (!strcmp(key, "depth3d"))
+            Port::depth3d = v < 0 || v > 4 ? 2 : v;
+        else if (!strcmp(key, "pop3d"))
+            Port::pop3d = v < 0 || v > 2 ? 1 : v;
         else if (!strcmp(key, "plus"))
             Port::plus = v != 0;
         else if (!strcmp(key, "plusasked"))
@@ -88,9 +94,9 @@ void Port::Save()
     if (!f)
         return;
     fprintf(f, "frameskip=%d\nlock30=%d\ngpumode=%d\nfps=%d\nhud=%d\ntab=%d\nautoupdate=%d\nbetas=%d\ntheme=%d\nplus=%d\nplusasked=%d\n"
-               "achnotice=%d\nachsound=%d\n",
+               "achnotice=%d\nachsound=%d\ndepth3d=%d\npop3d=%d\n",
             (int)frameSkip, (int)lock30, (int)GpuMode(), fps, hud, tab, (int)autoUpdate, (int)betas, theme, (int)plus, (int)plusAsked,
-            achNotice, (int)achSound);
+            achNotice, (int)achSound, depth3d, pop3d);
 #if MANIA_DEV_TOOLS
     DevTools::SaveSwitches(f);
 #endif

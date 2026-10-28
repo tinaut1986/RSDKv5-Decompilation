@@ -23,6 +23,8 @@ extern int tab;         // the bottom screen's open tab (BottomUi)
 extern bool autoUpdate; // UPDATES > AUTO UPDATE: look for a newer build at boot and offer it
 extern bool betas;      // UPDATES > BETAS: the beta channel too (pre-releases)
 extern int theme;       // OPTIONS > THEME: the bottom screen's colours (BottomUi's kThemes)
+extern int depth3d;     // OPTIONS > 3D DEPTH: the 3D effect's strength, 0..4 = 50 75 100 150 200 % (2 = as designed)
+extern int pop3d;       // OPTIONS > 3D SCENE: 0 behind the screen only, 1 as designed (near things come out a little), 2 forward
 extern bool plus;       // OPTIONS > PLUS: Sonic Mania Plus content (Mighty, Ray, Encore); off by default, read at boot
 extern bool plusAsked;  // the one-time question (OfferPlus) was answered
 extern int achNotice;   // ACHIEVEMENTS > NOTICE: 0 off, 1 top (the game's own), 2 bottom (over the tab bar)
