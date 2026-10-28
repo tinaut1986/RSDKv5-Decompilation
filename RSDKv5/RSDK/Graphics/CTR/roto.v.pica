@@ -1,0 +1,46 @@
+; Vertex shader of the GPU renderer's rotozoom planes (GpuRender.cpp, EmitRotoTex): a run of a layer's screen lines drawn
+; as one quad whose texture coordinates the PICA interpolates with perspective (each vertex's w), as a plane seen at an
+; angle maps them (the title's island and clouds). The stereo disparity is per vertex too, so the run keeps its slope.
+; v0 = x, y (quarter screen pixels), u, v (texels) as 16-bit integers, as in the 2D shader (gpu.v.pica);
+; v1 = w * 65535 as two bytes (high, low), disparity * 8 + 128 (pixels at the full slider), unused.
+; projection and uvscale as in the 2D shader (declared first, in the same order: the same registers);
+; eye = (this eye's shift in pixels of one unit of disparity, 0, 0, 0).
+; Assembled with the other renderer shaders into one binary (renderer_shbin.h, DVLE 2):
+;   tools/gen-shader.sh renderer RSDKv5/RSDK/Graphics/CTR/gpu.v.pica RSDKv5/RSDK/Graphics/CTR/scene3d.v.pica RSDKv5/RSDK/Graphics/CTR/roto.v.pica
+.fvec projection[4]
+.fvec uvscale
+.fvec eye
+.constf myconst(0.5, 1.0, 0.25, 0.125)
+.constf wconst(0.00390631, 0.0000152590219, -128.0, 0.0)
+.constf uvbias(0.0, 1.0, 0.0, 0.0)
+.alias half    myconst.xxxx
+.alias ones    myconst.yyyy
+.alias quarter myconst.zzzz
+.alias eighth  myconst.wwww
+
+.out outpos position
+.out outtc0 texcoord0
+.out outclr color
+
+.entry mainroto
+.proc mainroto
+    mul r0.xy, quarter, v0.xy
+    add r2.x, wconst.z, v1.z
+    mul r2.x, eighth, r2.x
+    mul r2.x, eye.x, r2.x
+    add r0.x, r0.x, r2.x
+    mov r0.z, half
+    mov r0.w, ones
+    mul r3.x, wconst.x, v1.x
+    mul r4.x, wconst.y, v1.y
+    add r3.x, r3.x, r4.x
+    dp4 r5.x, projection[0], r0
+    dp4 r5.y, projection[1], r0
+    dp4 r5.z, projection[2], r0
+    dp4 r5.w, projection[3], r0
+    mul outpos, r3.xxxx, r5
+    mul r1, uvscale, v0.zwzw
+    add outtc0, uvbias, r1
+    mov outclr, ones
+    end
+.end
