@@ -49,7 +49,9 @@ at boot the game offers to extract it from the console's own Home Menu (`Port::E
 - Needs devkitPro. `libtheora` for 3DS is not in the owner's portlibs and installing it
   needs sudo, so it is unpacked into `.deps/` (gitignored) from
   `pkg.devkitpro.org/packages/3ds-libtheora-1.2.0alpha1-2-any.pkg.tar.xz` (needs a
-  pacman user agent). The script picks it up by itself.
+  pacman user agent), with the `prefix=` of its `lib/pkgconfig/*.pc` rewritten to that `.deps` path. The script picks it
+  up by itself. `.deps` is ignored as a file too: a worktree's symlink to it got committed once (v0.4.3 notes), and a
+  checkout of that commit replaced the real directory with the symlink.
 - After switching branches run `rm -rf bin` first: make does not notice header changes
   across branch switches and links stale objects.
 - The Makefile does not add `-DRETRO_USE_MOD_LOADER=0` or the `Game/` include paths;
@@ -135,7 +137,7 @@ name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/lu
 `arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
 `crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).
 
-- The owner's consoles: an **Old 2DS** (Old 3DS CPU; 192.168.1.139 on 2026-10-26, .133 on 2026-10-24) and a **New 3DS**
+- The owner's consoles: an **Old 2DS** (Old 3DS CPU; .133 on 2026-10-28, 192.168.1.139 on 2026-10-26, .133 on 2026-10-24) and a **New 3DS**
   (192.168.1.133 on 2026-10-26, .139 on 2026-10-24; 3D screen: check stereo there). Both got the v0.2.2 stable that day (no FTP: FBI to
   put a dev build back): the bottom screen's DEBUG tab shows the IP. IPs change (DHCP): ping first. `--install IP` rewrites `.3ds_ftp_ip`.
 - **FRAME SKIP is on by default** (`Port::frameSkip = true` in the code; `port-settings.ini` overrides it): with it on, the
