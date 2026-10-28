@@ -146,6 +146,25 @@ int8 ParallaxDepth(int32 f)
     const int front = -(STEREO_FAR / 2);
     return (int8)(d < front ? front : d);
 }
+// The depth a batch is shifted by after OPTIONS > 3D SCENE: BEHIND puts what was in front on the screen plane, FORWARD
+// moves everything half the near range.
+int ShiftDepth(int depth)
+{
+    if (Port::pop3d == 0 && depth < 0)
+        return 0;
+    if (Port::pop3d == 2)
+        return depth - STEREO_FAR / 2;
+    return depth;
+}
+// Pixels a layer is drawn past each screen edge in stereo: a shifted layer would leave the edge bare (the clear colour
+// showed as a blue line). The farthest the current depth moves it in one eye, rounded up.
+int EdgeMargin()
+{
+    if (!sDepths || !sStereo || sUfoStage || sTitleScene)
+        return 0;
+    const int d = ShiftDepth(sDepth);
+    return d ? (int)ceilf(0.5f * (d < 0 ? -d : d) * sSlider) + 1 : 0;
+}
 // The Special Stage's 3D scenes: the player's model is at Z ~ 41000 (SITE CMDS); things there sit on the screen plane.
 const float STEREO_ZC = 41000.0f;
 bool sRotoSoft; // this attempt draws rotozoom layers in software (the tile runs ran out of quads)
@@ -2115,7 +2134,8 @@ bool EmitLayerBasic(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
         const int rem = 16 - (layerY & 15);
         const int n   = rem < (y2 - line) ? rem : (y2 - line);
         const int xOff = FROM_FIXED(sl[line - y1].position.x);
-        if (!EmitTileRun(layer, 0, layerY >> 4, layerY & 15, line, n, x1, x2, x1 + xOff - x1 + 0))
+        const int margin = EdgeMargin();
+        if (!EmitTileRun(layer, 0, layerY >> 4, layerY & 15, line, n, x1 - margin, x2 + margin, xOff))
             return false;
         line += n;
         layerY += n;
@@ -3772,7 +3792,8 @@ bool EmitLayerHScroll(const Cmd &c, TileLayer *layer, const ScanlineInfo *sl)
         while (dy < end) {
             const int rem = 16 - (ly & 15);
             const int n   = rem < (end - dy) ? rem : (end - dy);
-            if (!EmitTileRun(layer, bank, ly >> 4, ly & 15, dy, n, 0, pitch, FROM_FIXED(x)))
+            const int margin = EdgeMargin();
+            if (!EmitTileRun(layer, bank, ly >> 4, ly & 15, dy, n, -margin, pitch + margin, FROM_FIXED(x)))
                 return false;
             dy += n;
             ly += n;
@@ -4130,6 +4151,17 @@ static int8 CmdDepth(const Cmd &c, unsigned index)
             return d;
         }
         return ParallaxDepth(layer->parallaxFactor);
+    }
+    // What covers the whole screen (the fade to black between menus and scenes, a flash) is not shifted: it would leave a
+    // column bare at one side, showing what is behind.
+    if (c.type == CMD_FILL)
+        return 0;
+    if (c.type == CMD_RECT) {
+        const bool sr = c.p[7] != 0;
+        const int w = sr ? c.p[2] : FROM_FIXED(c.p[2]), h = sr ? c.p[3] : FROM_FIXED(c.p[3]);
+        const int x = sr ? c.p[0] : FROM_FIXED(c.p[0]) - screens[0].position.x;
+        if (w >= 400 && h >= SCREEN_YSIZE && x <= 0)
+            return 0;
     }
     // The HUD and what is above it (groups 13 and up). Group 12 is the players' high group (Zone->playerDrawGroup[1]: the
     // cutscenes put them there): they stay on the playfield.
@@ -4599,11 +4631,7 @@ bool GpuRender::Render(const Stream &stream)
             Mtx_Copy(&m, (const C3D_Mtx *)C3DPresent::Projection());
             // Whole pixels: a fraction moved the 1-pixel floor runs' samples off their tiles (stray texels in 3D)
             // OPTIONS > 3D SCENE: BEHIND puts what was in front on the screen plane, FORWARD moves everything half the near range
-            int depth = bt.depth;
-            if (Port::pop3d == 0 && depth < 0)
-                depth = 0;
-            else if (Port::pop3d == 2)
-                depth -= STEREO_FAR / 2;
+            const int depth = ShiftDepth(bt.depth);
             Mtx_Translate(&m, roundf((eye ? 0.5f : -0.5f) * depth * sSlider), 0.0f, 0.0f, true);
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &m);
             curDepth = bt.depth;
