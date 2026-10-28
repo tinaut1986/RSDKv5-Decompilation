@@ -101,6 +101,15 @@ const Stats &GetStats();
             RSDK::GpuFrame::Flush();                                                                                                                 \
     } while (0)
 
+// A draw recorded for nothing is dropped before it is recorded: `outside` is true when it would draw nothing (an invisible
+// ink, or a box well outside the clip). The credits draw every letter of their text each frame, ~5000 sprites, most
+// off screen: recording and emitting them cost ~30 ms on the 2DS.
+#define GPUFRAME_CULL(outside)                                                                                                                       \
+    do {                                                                                                                                             \
+        if (RSDK::GpuFrame::active && (outside))                                                                                                     \
+            return;                                                                                                                                  \
+    } while (0)
+
 // For functions that cannot be deferred (palette changes, the 3D scene, dev text). `why` names it in the dev tools.
 #define GPUFRAME_HAZARD(why)                                                                                                                         \
     do {                                                                                                                                             \
@@ -112,6 +121,7 @@ const Stats &GetStats();
 
 #define GPUFRAME_REC(rec)
 #define GPUFRAME_REC_V(rec, visible)
+#define GPUFRAME_CULL(outside)
 #define GPUFRAME_HAZARD(why)
 
 #endif

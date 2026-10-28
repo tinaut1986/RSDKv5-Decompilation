@@ -121,6 +121,17 @@ void PortGame_Describe(char *out, unsigned cap)
 #undef ADD
 }
 
+void PortGame_Tick(void)
+{
+    if (!UICreditsText || !UICreditsText->classID)
+        return;
+    for (int i = 0; i < ENTITY_COUNT; ++i) {
+        EntityUICreditsText *label = RSDK_GET_ENTITY(i, UICreditsText);
+        if (label->classID == UICreditsText->classID && label->state == UICreditsText_State_FadeOut && label->alpha <= 0)
+            RSDK.ResetEntity(label, TYPE_BLANK, NULL);
+    }
+}
+
 void PortGame_SceneMode(const char *category)
 {
     if (!globals)
