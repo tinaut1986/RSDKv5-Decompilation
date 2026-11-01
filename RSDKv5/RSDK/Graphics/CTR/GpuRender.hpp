@@ -83,6 +83,7 @@ extern unsigned depthMode;
 extern int stereoFar;
 // DEPTH TINT (debug, not saved): every 2D batch painted one flat blue by its stereo depth, slider down too.
 extern bool depthTint;
+extern int orthoAmp, orthoOff; // orthographic 3D scenes' stereo (SITE SET orthoamp / orthooff, per mille)
 // The Special Stage floor from map windows (FloorWin), on by default; SITE SET floorwin 0 for the tile runs (not saved).
 extern bool floorWindows;
 // The floor windows' lines fade to black (default) or to bank 7's average colour (SITE SET floorfogavg 1), by this

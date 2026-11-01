@@ -61,6 +61,14 @@
     add r8.z, one, -r8.zzzz
     max r8.z, r9.zzzz, r8.zzzz
     min r8.z, r9.wwww, r8.zzzz
+    ; orthographic: an offset (ortho.z) plus the model's own Z around the plane of the screen, eye.y = amplitude / reach (the same clamp)
+    mul r10.x, r4.zzzz, r9.yyyy
+    add r10.x, r10.xxxx, ortho.zzzz
+    max r10.x, r9.zzzz, r10.xxxx
+    min r10.x, r9.wwww, r10.xxxx
+    mul r10.x, r10.xxxx, ortho.xxxx
+    mul r8.z, r8.zzzz, ortho.yyyy
+    add r8.z, r8.zzzz, r10.xxxx
     mul r8.z, r9.xxxx, r8.zzzz
     mul r8.z, r8.zzzz, r13.xxxx
     add r7.x, r7.xxxx, r8.zzzz
