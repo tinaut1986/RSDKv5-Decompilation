@@ -1739,13 +1739,30 @@ void Draw3DSceneGpu(unsigned k, bool follows)
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.difs, 1, 1, 1, 0);
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.spcs, 0, 0, 0, 0);
     }
-    if (!follows) {
-        // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it)
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, STEREO_ZC, -0.5f, 1.0f);
+    // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it).
+    // That is the Special Stage's depth (Zc = the player's Z); an orthographic scene (the giant ring, the Egg Tower) has
+    // Z ~ 0 there and would always come out at the maximum: it sits on the playfield plane instead (no shift).
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, ortho ? 0.0f : sEyeShift * STEREO_FAR, STEREO_ZC, -0.5f, 1.0f);
+    // DEPTH TINT (debug): an orthographic scene is flat blue of the playfield plane, as the 2D batches there; the
+    // perspective models (Special Stage) keep their colours.
+    const bool tint = GpuRender::depthTint && ortho;
+    if (!follows || ortho || tint) {
         C3D_TexEnv *env = C3D_GetTexEnv(0);
         C3D_TexEnvInit(env);
-        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
-        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        if (tint) {
+            const float far = (float)(STEREO_FAR > 0 ? STEREO_FAR : 1);
+            const float v   = far * (12.0f / (far * 1.5f)) > 12.0f ? 12.0f : far * (12.0f / (far * 1.5f));
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+            C3D_TexEnvColor(env, 0xFF000000u | ((40u + (unsigned)(v * 17.0f)) << 16) | ((unsigned)(v * 10.0f) << 8) | (unsigned)(v * 5.0f));
+        }
+        else {
+            C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        }
+    }
+    if (!follows) {
         C3D_DepthTest(true, (mode & 2) ? GPU_GREATER : GPU_LESS, GPU_WRITE_ALL);
         C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF); // a mask frame's stencil does not apply to the 3D scenes
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
