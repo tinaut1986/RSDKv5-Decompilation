@@ -46,6 +46,11 @@ void PortGame_Tick(void);
 // Mania), as the menus would have set it; the other categories leave it.
 void PortGame_SceneMode(const char *category);
 
+// An entity whose draw the port skipped (the HUD hidden while the GAME tab shows its numbers). HUD_Draw also counts the
+// Encore character swap's cooldown down (HUD->swapCooldown, one step per drawn frame); with it skipped the cooldown
+// stayed at 60 after the first swap and every further one failed. It is counted down here instead.
+void PortGame_HiddenDraw(unsigned short classID);
+
 // Item boxes opened since the last call: their contents (the game's ITEMBOX_* numbering, which is also the frame of
 // the contents icon in Global/ItemBox.bin animation 2), at most `max`; returns how many. `reset` after a scene load:
 // the boxes already open in it (reloaded from a checkpoint) are taken as known, not as news.

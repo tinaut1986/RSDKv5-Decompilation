@@ -892,6 +892,10 @@ void RSDK::ProcessObjectDrawLists()
 
                             sceneInfo.entity->onScreen |= validDraw << sceneInfo.currentScreenID;
                         }
+#if RETRO_PLATFORM == RETRO_3DS
+                        else if (sceneInfo.entity->visible)
+                            PortGame_HiddenDraw(sceneInfo.entity->classID); // the hidden HUD's draw also counts down the swap cooldown
+#endif
                     }
 
                     for (int32 i = 0; i < list->layerCount; ++i) {

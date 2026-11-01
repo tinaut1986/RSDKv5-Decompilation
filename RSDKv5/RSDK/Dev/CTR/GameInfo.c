@@ -35,6 +35,14 @@ void PortGame_GetInfo(PortGameInfo *out)
     }
 }
 
+void PortGame_HiddenDraw(unsigned short classID)
+{
+#if MANIA_USE_PLUS
+    if (HUD && classID == HUD->classID && HUD->swapCooldown > 0)
+        --HUD->swapCooldown;
+#endif
+}
+
 void PortGame_Immortal(int on)
 {
     static int wasOn;
@@ -117,6 +125,14 @@ void PortGame_Describe(char *out, unsigned cap)
                     r->onScreen, r->alpha, r->inkEffect, r->position.x >> 16, r->position.y >> 16, (void *)r->state, r->drawGroup,
                     r->rubyAnimator.animationID);
         }
+#if MANIA_USE_PLUS
+    // Why the Encore swap (Y) fails: the conditions of Player_SwapMainPlayer
+    if (Player && Player->classID) {
+        EntityPlayer *p1 = RSDK_GET_ENTITY(SLOT_PLAYER1, Player);
+        ADD("SWAP cant %d respawn %d cooldown %d grp %d time %d | ", Player->cantSwap, Player->respawnTimer, HUD ? HUD->swapCooldown : -1,
+            p1->drawGroup, SceneInfo->timeEnabled);
+    }
+#endif
     ADD("CAM %d,%d", ScreenInfo->position.x, ScreenInfo->position.y);
 #undef ADD
 }
