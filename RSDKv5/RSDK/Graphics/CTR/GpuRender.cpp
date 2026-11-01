@@ -1695,7 +1695,7 @@ void Draw3DSceneGpu(unsigned k, bool follows)
     }
     if (ortho) {
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, 1.0f / 256, 1.0f / 256, -(float)h->posX, -(float)h->posY);
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.ortho, 1, 0, 0, 0);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.ortho, 1, 0, GpuRender::orthoOff / 1000.0f, 0);
     }
     else {
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, (float)(1 << h->projX), -(float)(1 << h->projY), (float)h->centerX, (float)h->centerY);
@@ -1742,9 +1742,19 @@ void Draw3DSceneGpu(unsigned k, bool follows)
     // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it).
     // That is the Special Stage's depth (Zc = the player's Z); an orthographic scene (the giant ring, the Egg Tower) has
     // Z ~ 0 there and would always come out at the maximum.
-    // (An orthographic scene is moved as a whole, a third of the disparity in front of the screen plane: a shift per
-    // vertex by its own Z sheared the low-poly ring into a different outline in each eye.)
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, ortho ? 0.0f : STEREO_ZC, ortho ? -0.33f : -0.5f, ortho ? -0.33f : 1.0f);
+    // An orthographic scene: a fixed offset (SITE SET orthooff, per mille of the disparity, - in front of the screen plane)
+    // plus a shift by each vertex's own Z (orthoamp, per mille at the model's reach). The Z part shears a low-poly model,
+    // which gets a different outline in each eye.
+    float orthoReach = 1.0f;
+    if (ortho)
+        for (int32 i = 0; i < h->count; ++i) {
+            const GpuScene3D::Inst &in = d.in[i];
+            const float sx = in.world[8] / 256.0f, sy = in.world[9] / 256.0f, sz = in.world[10] / 256.0f;
+            const float reach = sModels[in.model].radius * sqrtf(sx * sx + sy * sy + sz * sz);
+            orthoReach        = reach > orthoReach ? reach : orthoReach;
+        }
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, ortho ? GpuRender::orthoAmp / 1000.0f / orthoReach : STEREO_ZC,
+                  ortho ? -1.0f : -0.5f, 1.0f);
     // DEPTH TINT (debug): an orthographic scene is flat blue of the playfield plane, as the 2D batches there; the
     // perspective models (Special Stage) keep their colours.
     const bool tint = GpuRender::depthTint && ortho;
@@ -4015,6 +4025,8 @@ void ResetTexEnv()
 unsigned GpuRender::depthMode = 0;
 int GpuRender::stereoFar       = 6;
 bool GpuRender::depthTint      = false;
+int GpuRender::orthoAmp        = 0;
+int GpuRender::orthoOff        = -700;
 bool GpuRender::floorWindows   = true;
 bool GpuRender::floorFogAverage = false;
 int GpuRender::floorFogPercent  = 60;

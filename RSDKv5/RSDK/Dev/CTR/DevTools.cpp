@@ -870,6 +870,10 @@ static void HandleSession(int ctrl)
                     GpuRender::depthTint = v != 0;
                 else if (!strncmp(path, "stereofar", 9))
                     GpuRender::stereoFar = v < 0 ? 0 : v > 16 ? 16 : v;
+                else if (!strncmp(path, "orthoamp", 8))
+                    GpuRender::orthoAmp = v;
+                else if (!strncmp(path, "orthooff", 8))
+                    GpuRender::orthoOff = v;
                 else if (!strncmp(path, "audioprio", 9)) {
                     // debug, not saved: the audio thread's priority (0x18-0x3F; lower runs first)
                     ok = v >= 0x18 && v <= 0x3F && R_SUCCEEDED(svcSetThreadPriority(threadGetHandle(audioThreadHandle), v));
@@ -881,7 +885,7 @@ static void HandleSession(int ctrl)
                     Reply(s, "200 %s", path);
                 }
                 else
-                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|depthtint|ufotime|modelcheck|gifcheck|ufonofall|floorwin|floorfog|floorfogavg|gpuskip|audioprio <value>");
+                    Reply(s, "501 frameskip|maxskip|draw|flipcopy|gpu|record|gpurender|gpu3d|depthmode|bottomui|syncdraw|vblank|tab|fps|hud|lock30|force3d|stereofar|orthoamp|orthooff|depthtint|ufotime|modelcheck|gifcheck|ufonofall|floorwin|floorfog|floorfogavg|gpuskip|audioprio <value>");
             }
             else if (!strcmp(sub, "MODELS")) {
                 // Loaded 3D models: id, vertices per frame, frames, indices, face size, flags, coordinate range. "MODELS N"
