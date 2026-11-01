@@ -31,8 +31,29 @@ void PortGame_GetInfo(PortGameInfo *out)
             out->invincible  = p->invincibleTimer;
             out->speedShoes  = p->speedShoesTimer;
             out->hyperRing   = p->hyperRing;
+#if MANIA_USE_PLUS
+            // Encore's HUD shows the characters in place of the lives: the leader, the buddy (the sidekick's entity) and
+            // the stock (HUD_Draw: GET_STOCK_ID 1..3)
+            if (globals->gameMode == MODE_ENCORE) {
+                out->team[out->teamCount++] = p->characterID;
+                EntityPlayer *buddy = RSDK_GET_ENTITY(SLOT_PLAYER2, Player);
+                if (buddy->classID == Player->classID && buddy->characterID)
+                    out->team[out->teamCount++] = buddy->characterID;
+                for (int i = 1; i < 4; ++i)
+                    if (GET_STOCK_ID(i))
+                        out->team[out->teamCount++] = GET_STOCK_ID(i);
+            }
+#endif
         }
     }
+}
+
+void PortGame_HiddenDraw(unsigned short classID)
+{
+#if MANIA_USE_PLUS
+    if (HUD && classID == HUD->classID && HUD->swapCooldown > 0)
+        --HUD->swapCooldown;
+#endif
 }
 
 void PortGame_Immortal(int on)
@@ -117,6 +138,14 @@ void PortGame_Describe(char *out, unsigned cap)
                     r->onScreen, r->alpha, r->inkEffect, r->position.x >> 16, r->position.y >> 16, (void *)r->state, r->drawGroup,
                     r->rubyAnimator.animationID);
         }
+#if MANIA_USE_PLUS
+    // Why the Encore swap (Y) fails: the conditions of Player_SwapMainPlayer
+    if (Player && Player->classID) {
+        EntityPlayer *p1 = RSDK_GET_ENTITY(SLOT_PLAYER1, Player);
+        ADD("SWAP cant %d respawn %d cooldown %d grp %d time %d | ", Player->cantSwap, Player->respawnTimer, HUD ? HUD->swapCooldown : -1,
+            p1->drawGroup, SceneInfo->timeEnabled);
+    }
+#endif
     ADD("CAM %d,%d", ScreenInfo->position.x, ScreenInfo->position.y);
 #undef ADD
 }
