@@ -1695,7 +1695,7 @@ void Draw3DSceneGpu(unsigned k, bool follows)
     }
     if (ortho) {
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, 1.0f / 256, 1.0f / 256, -(float)h->posX, -(float)h->posY);
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.ortho, 1, 0, 0, 0);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.ortho, 1, 0, GpuRender::orthoOff / 1000.0f, 0);
     }
     else {
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.scr, (float)(1 << h->projX), -(float)(1 << h->projY), (float)h->centerX, (float)h->centerY);
@@ -1739,13 +1739,43 @@ void Draw3DSceneGpu(unsigned k, bool follows)
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.difs, 1, 1, 1, 0);
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.spcs, 0, 0, 0, 0);
     }
-    if (!follows) {
-        // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it)
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, STEREO_ZC, -0.5f, 1.0f);
+    // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it).
+    // That is the Special Stage's depth (Zc = the player's Z); an orthographic scene (the giant ring, the Egg Tower) has
+    // Z ~ 0 there and would always come out at the maximum.
+    // An orthographic scene: a fixed offset (SITE SET orthooff, per mille of the disparity, - in front of the screen plane)
+    // plus a shift by each vertex's own Z (orthoamp, per mille at the model's reach). The Z part shears a low-poly model,
+    // which gets a different outline in each eye.
+    float orthoReach = 1.0f;
+    if (ortho)
+        for (int32 i = 0; i < h->count; ++i) {
+            const GpuScene3D::Inst &in = d.in[i];
+            const float sx = in.world[8] / 256.0f, sy = in.world[9] / 256.0f, sz = in.world[10] / 256.0f;
+            const float reach = sModels[in.model].radius * sqrtf(sx * sx + sy * sy + sz * sz);
+            orthoReach        = reach > orthoReach ? reach : orthoReach;
+        }
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, ortho ? GpuRender::orthoAmp / 1000.0f / orthoReach : STEREO_ZC,
+                  ortho ? -1.0f : -0.5f, 1.0f);
+    // DEPTH TINT (debug): an orthographic scene is flat blue of the playfield plane, as the 2D batches there; the
+    // perspective models (Special Stage) keep their colours.
+    const bool tint = GpuRender::depthTint && ortho;
+    if (!follows || ortho || tint) {
         C3D_TexEnv *env = C3D_GetTexEnv(0);
         C3D_TexEnvInit(env);
-        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
-        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        if (tint) {
+            const float far = (float)(STEREO_FAR > 0 ? STEREO_FAR : 1);
+            const float v   = 11.0f; (void)far;
+            // (flat, as the 2D batches; a lighter blue than the playfield's, which hid the ring in the tile layer)
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+            C3D_TexEnvColor(env, 0xFF000000u | ((40u + (unsigned)(v * 17.0f)) << 16) | ((unsigned)(v * 10.0f) << 8) | (unsigned)(v * 5.0f));
+        }
+        else {
+            C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+            C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        }
+    }
+    if (!follows) {
         C3D_DepthTest(true, (mode & 2) ? GPU_GREATER : GPU_LESS, GPU_WRITE_ALL);
         C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0xFF); // a mask frame's stencil does not apply to the 3D scenes
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
@@ -3995,6 +4025,8 @@ void ResetTexEnv()
 unsigned GpuRender::depthMode = 0;
 int GpuRender::stereoFar       = 6;
 bool GpuRender::depthTint      = false;
+int GpuRender::orthoAmp        = 0;
+int GpuRender::orthoOff        = -700;
 bool GpuRender::floorWindows   = true;
 bool GpuRender::floorFogAverage = false;
 int GpuRender::floorFogPercent  = 60;
