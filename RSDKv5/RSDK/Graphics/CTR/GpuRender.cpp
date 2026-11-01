@@ -1741,8 +1741,10 @@ void Draw3DSceneGpu(unsigned k, bool follows)
     }
     // Stereo: things far behind the player shift up to the full disparity, nearer ones come out (at most half of it).
     // That is the Special Stage's depth (Zc = the player's Z); an orthographic scene (the giant ring, the Egg Tower) has
-    // Z ~ 0 there and would always come out at the maximum: it sits on the playfield plane instead (no shift).
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, ortho ? 0.0f : sEyeShift * STEREO_FAR, STEREO_ZC, -0.5f, 1.0f);
+    // Z ~ 0 there and would always come out at the maximum.
+    // (An orthographic scene is moved as a whole, a third of the disparity in front of the screen plane: a shift per
+    // vertex by its own Z sheared the low-poly ring into a different outline in each eye.)
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s3Loc.eye, sEyeShift * STEREO_FAR, ortho ? 0.0f : STEREO_ZC, ortho ? -0.33f : -0.5f, ortho ? -0.33f : 1.0f);
     // DEPTH TINT (debug): an orthographic scene is flat blue of the playfield plane, as the 2D batches there; the
     // perspective models (Special Stage) keep their colours.
     const bool tint = GpuRender::depthTint && ortho;
@@ -1751,7 +1753,8 @@ void Draw3DSceneGpu(unsigned k, bool follows)
         C3D_TexEnvInit(env);
         if (tint) {
             const float far = (float)(STEREO_FAR > 0 ? STEREO_FAR : 1);
-            const float v   = far * (12.0f / (far * 1.5f)) > 12.0f ? 12.0f : far * (12.0f / (far * 1.5f));
+            const float v   = 11.0f; (void)far;
+            // (flat, as the 2D batches; a lighter blue than the playfield's, which hid the ring in the tile layer)
             C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
             C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
             C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
