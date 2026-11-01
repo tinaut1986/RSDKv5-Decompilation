@@ -557,7 +557,8 @@ enum { ITEM_TYPES = 18 }; // ITEMBOX_RING .. ITEMBOX_STOCK (Plus)
 enum ArtId {
     ART_SCORE, ART_TIME, ART_TIME_RED, ART_RINGS, ART_RINGS_RED, ART_MARKS, ART_X, ART_DIGIT,
     ART_LIFE = ART_DIGIT + 10, // Sonic, Tails, Knuckles, Mighty, Ray (HUD_CharacterIndexFromID)
-    ART_RING = ART_LIFE + 5,
+    ART_STOCK = ART_LIFE + 5, // Encore's stock letters (HUD.bin animation 12), the same order; absent from data without Plus
+    ART_RING = ART_STOCK + 5,
     ART_ITEM, // the item boxes' contents icons, by ITEMBOX_* (ItemBox.bin animation 2)
     ART_COUNT = ART_ITEM + ITEM_TYPES,
 };
@@ -608,12 +609,14 @@ static bool LoadArt(const uint16 *pal = NULL)
         src[ART_DIGIT + i] = { "Global/HUD.bin", 1, i };
     for (int i = 0; i < 5; ++i)
         src[ART_LIFE + i] = { "Global/HUD.bin", 2, i };
+    for (int i = 0; i < 5; ++i)
+        src[ART_STOCK + i] = { "Global/HUD.bin", 12, i };
     src[ART_RING] = { "Global/Ring.bin", 0, 0 };
     for (int i = 0; i < ITEM_TYPES; ++i)
         src[ART_ITEM + i] = { "Global/ItemBox.bin", 2, i };
     const SpriteFrame *frames[ART_COUNT];
     for (int i = 0; i < ART_COUNT; ++i)
-        if (!(frames[i] = FindFrame(src[i].file, src[i].anim, src[i].frame)) && i < ART_ITEM)
+        if (!(frames[i] = FindFrame(src[i].file, src[i].anim, src[i].frame)) && i < ART_ITEM && (i < ART_STOCK || i >= ART_RING))
             return false; // not in this scene (menus, the title): next time
     if (!frames[ART_ITEM])
         return false; // a stage without item boxes loaded: wait for one that has them
@@ -994,18 +997,43 @@ static void DrawGameTab()
         // LIVES: the head (Sonic's until a character is known) and the "x" as the HUD places them; the count right-aligned
         // like the rings above it
         BoxFrame(3, rx, y, bw, bh);
-        int head = -1;
-        for (int c = gi.character; c > 0; c >>= 1)
-            ++head;
-        if (head < 0 || head >= 5)
-            head = 0;
-        const ArtFrame &hf = sArt[ART_LIFE + head];
-        const float lx = rx + 10 - hf.px * s, ly = y + (bh - hf.h * s) / 2 - hf.py * s;
-        DrawArt(ART_LIFE + head, lx, ly, s, 0.33f);
-        DrawArt(ART_X, lx, ly, s, 0.33f);
-        NumberAnchor(rx + bw - 8, y + bh - 5, s, &nx, &ny);
-        if (inStage)
-            DrawNumber(gi.lives, 0, nx, ny, s, 0.33f);
+        auto headOf = [](int id) {
+            int h = -1;
+            for (int c = id; c > 0; c >>= 1)
+                ++h;
+            return h < 0 || h >= 5 ? 0 : h;
+        };
+        if (gi.teamCount > 0) {
+            // Encore: what the HUD shows in place of the lives: the leader's and the buddy's heads, then the stock as
+            // small letters; in a row, shrunk to fit the box when there are too many for it at full size
+            const float gap = 4, avail = bw - 16;
+            auto frameOf = [&](int i) {
+                const int h = headOf(gi.team[i]);
+                return i >= 2 && sArt[ART_STOCK + h].w > 0 ? ART_STOCK + h : ART_LIFE + h;
+            };
+            float total = 0;
+            for (int i = 0; i < gi.teamCount; ++i)
+                total += sArt[frameOf(i)].w * s + (i ? gap : 0);
+            const float k  = total > avail ? avail / total : 1.0f;
+            const float hs = s * k;
+            float hx       = rx + 8;
+            for (int i = 0; i < gi.teamCount; ++i) {
+                const int id       = frameOf(i);
+                const ArtFrame &hf = sArt[id];
+                DrawArt(id, hx - hf.px * hs, y + (bh - hf.h * hs) / 2 - hf.py * hs, hs, 0.33f);
+                hx += hf.w * hs + gap * k;
+            }
+        }
+        else {
+            const int head     = headOf(gi.character);
+            const ArtFrame &hf = sArt[ART_LIFE + head];
+            const float lx = rx + 10 - hf.px * s, ly = y + (bh - hf.h * s) / 2 - hf.py * s;
+            DrawArt(ART_LIFE + head, lx, ly, s, 0.33f);
+            DrawArt(ART_X, lx, ly, s, 0.33f);
+            NumberAnchor(rx + bw - 8, y + bh - 5, s, &nx, &ny);
+            if (inStage)
+                DrawNumber(gi.lives, 0, nx, ny, s, 0.33f);
+        }
         y += bh + 8;
     }
     else {
@@ -1017,8 +1045,8 @@ static void DrawGameTab()
         y += bh + 6;
         snprintf(line, sizeof(line), "%d", gi.score);
         StatBox(1, 8, y, bw, bh, "SCORE", inStage ? line : "-", T().text);
-        snprintf(line, sizeof(line), "%d", gi.lives);
-        StatBox(3, 16 + bw, y, bw, bh, "LIVES", inStage ? line : "-", Rgb(110, 220, 130));
+        snprintf(line, sizeof(line), "%d", gi.teamCount > 0 ? gi.teamCount : gi.lives);
+        StatBox(3, 16 + bw, y, bw, bh, gi.teamCount > 0 ? "TEAM" : "LIVES", inStage ? line : "-", Rgb(110, 220, 130));
         y += bh + 8;
     }
 

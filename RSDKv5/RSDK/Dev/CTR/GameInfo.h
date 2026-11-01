@@ -19,6 +19,8 @@ typedef struct {
     int invincible;       // frames of invincibility left (the item box's, not the hit's)
     int speedShoes;       // frames of speed shoes left
     int hyperRing;        // the hyper ring is on
+    int teamCount;        // Encore: the characters the HUD shows, leader first (0 elsewhere)
+    int team[5];          // their IDs (ID_SONIC 1 .. ID_RAY 16): the leader, the buddy, then the stock (up to three)
 } PortGameInfo;
 
 void PortGame_GetInfo(PortGameInfo *out);

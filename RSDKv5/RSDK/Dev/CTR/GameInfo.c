@@ -31,6 +31,19 @@ void PortGame_GetInfo(PortGameInfo *out)
             out->invincible  = p->invincibleTimer;
             out->speedShoes  = p->speedShoesTimer;
             out->hyperRing   = p->hyperRing;
+#if MANIA_USE_PLUS
+            // Encore's HUD shows the characters in place of the lives: the leader, the buddy (the sidekick's entity) and
+            // the stock (HUD_Draw: GET_STOCK_ID 1..3)
+            if (globals->gameMode == MODE_ENCORE) {
+                out->team[out->teamCount++] = p->characterID;
+                EntityPlayer *buddy = RSDK_GET_ENTITY(SLOT_PLAYER2, Player);
+                if (buddy->classID == Player->classID && buddy->characterID)
+                    out->team[out->teamCount++] = buddy->characterID;
+                for (int i = 1; i < 4; ++i)
+                    if (GET_STOCK_ID(i))
+                        out->team[out->teamCount++] = GET_STOCK_ID(i);
+            }
+#endif
         }
     }
 }
