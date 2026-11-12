@@ -80,6 +80,8 @@ at boot the game offers to extract it from the console's own Home Menu (`Port::E
 - **Issues** are enabled on `origin` (2026-10-22): pending work, bugs and the owner's requests go there (English, label
   `bug`/`enhancement`, sections Seen / Likely cause / To try / To check, as in sm-3ds); docs keep the technical record.
 
+**Discord**: every run of `.github/workflows/build-release.yml` announces the version on the Discord server (Tinaut's 3DS Ports): a stable in #announcements, pinging the project's role, a beta in #beta-testing, with `docs/release-notes/<tag>.md` as the text (one more reason to write it before the tag). Don't post it by hand. It needs the repo secrets `DISCORD_WEBHOOK_RELEASE` and `DISCORD_WEBHOOK_BETA` (without them the step is skipped); a re-run of the workflow posts again.
+
 ## The console in the loop (dev-tools builds)
 
 The game runs an FTP server on port 5000 (address on the bottom screen) with a remote control. Everything is
