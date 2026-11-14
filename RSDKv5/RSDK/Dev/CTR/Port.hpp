@@ -28,9 +28,19 @@ extern bool plus;       // OPTIONS > PLUS: Sonic Mania Plus content (Mighty, Ray
 extern bool plusAsked;  // the one-time question (OfferPlus) was answered
 extern int achNotice;   // ACHIEVEMENTS > NOTICE: 0 off, 1 top (the game's own), 2 bottom (over the tab bar)
 extern bool achSound;   // ACHIEVEMENTS > SOUND: a sparkle when one unlocks
+extern bool extras;     // OPTIONS > EXTRAS: shows the EXTRAS tab (IMMORTAL, AIR JUMP, STAGES); off by default
+extern bool immortal;   // EXTRAS > IMMORTAL: player 1 kept invincible (PortGame_Immortal); not saved
+extern bool airJump;    // EXTRAS > AIR JUMP: hold the 3DS Y button in the air to keep rising (PortGame_AirJump); not saved
 
 void Load(); // before the engine starts
 void Save();
+
+// EXTRAS off: the switches it holds go off too.
+void SetExtras(bool on);
+// Every frame, in every build: IMMORTAL and AIR JUMP handed to the game (GameInfo.c).
+void ApplyExtras();
+// EXTRAS > STAGES: load that scene of the scene list (category, index in it). Main thread, at the frame's end.
+void LoadScene(int category, int scene);
 
 // Sonic Mania Plus. The decompilation's license wants every build given to anyone to start with it off; an option
 // off by default is allowed. OfferPlus asks once, at boot, when the data has the Plus content; ApplyPlus hands the

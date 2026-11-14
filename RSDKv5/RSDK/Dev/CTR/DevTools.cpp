@@ -1604,8 +1604,6 @@ uint32 DevTools::injectKeys  = 0;
 uint32 DevTools::objTicks[0x400];
 uint32 DevTools::objDrawTicks[0x400];
 bool DevTools::freeze         = false;
-bool DevTools::immortal       = false;
-bool DevTools::airJump        = false;
 bool DevTools::swForce3D      = false;
 bool DevTools::swFtp          = true;
 
@@ -2271,8 +2269,7 @@ bool DevTools::FrameEnd()
     // frozen again, every tap).
     if (frozenFrame)
         hidScanInput();
-    PortGame_Immortal(DevTools::immortal);
-    PortGame_AirJump(DevTools::airJump);
+    Port::ApplyExtras(); // EXTRAS > IMMORTAL, AIR JUMP (production builds: Port::FrameEnd)
     if (BottomUi::Ready()) {
         DEV_STAGE(STAGE_BOTTOM);
         BottomUi::Update();
