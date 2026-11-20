@@ -29,13 +29,13 @@ extern bool plusAsked;  // the one-time question (OfferPlus) was answered
 extern int achNotice;   // ACHIEVEMENTS > NOTICE: 0 off, 1 top (the game's own), 2 bottom (over the tab bar)
 extern bool achSound;   // ACHIEVEMENTS > SOUND: a sparkle when one unlocks
 extern bool extras;     // OPTIONS > EXTRAS: shows the EXTRAS tab (IMMORTAL, AIR JUMP, STAGES); off by default
-extern bool immortal;   // EXTRAS > IMMORTAL: player 1 kept invincible (PortGame_Immortal); not saved
-extern bool airJump;    // EXTRAS > AIR JUMP: hold the 3DS Y button in the air to keep rising (PortGame_AirJump); not saved
+extern bool immortal;   // EXTRAS > IMMORTAL: player 1 kept invincible (PortGame_Immortal); saved, with EXTRAS on
+extern bool airJump;    // EXTRAS > AIR JUMP: hold the 3DS Y button in the air to keep rising (PortGame_AirJump); saved, with EXTRAS on
 
 void Load(); // before the engine starts
 void Save();
 
-// EXTRAS off: the switches it holds go off too.
+// EXTRAS off: the switches it holds go off too (and are saved off).
 void SetExtras(bool on);
 // Every frame, in every build: IMMORTAL and AIR JUMP handed to the game (GameInfo.c).
 void ApplyExtras();
