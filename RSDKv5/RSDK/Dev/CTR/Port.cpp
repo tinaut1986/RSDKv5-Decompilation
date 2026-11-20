@@ -78,6 +78,10 @@ static bool ReadSettings(const char *path)
             Port::achSound = v != 0;
         else if (!strcmp(key, "extras"))
             Port::extras = v != 0;
+        else if (!strcmp(key, "immortal"))
+            Port::immortal = v != 0;
+        else if (!strcmp(key, "airjump"))
+            Port::airJump = v != 0;
     }
     fclose(f);
     return true;
@@ -87,6 +91,7 @@ void Port::Load()
 {
     if (!ReadSettings(kSettings))
         ReadSettings(kDevSettings);
+    SetExtras(extras); // IMMORTAL and AIR JUMP count only with EXTRAS on
 }
 
 void Port::Save()
@@ -97,9 +102,9 @@ void Port::Save()
     if (!f)
         return;
     fprintf(f, "frameskip=%d\nlock30=%d\ngpumode=%d\nfps=%d\nhud=%d\ntab=%d\nautoupdate=%d\nbetas=%d\ntheme=%d\nplus=%d\nplusasked=%d\n"
-               "achnotice=%d\nachsound=%d\ndepth3d=%d\nextras=%d\n",
+               "achnotice=%d\nachsound=%d\ndepth3d=%d\nextras=%d\nimmortal=%d\nairjump=%d\n",
             (int)frameSkip, (int)lock30, (int)GpuMode(), fps, hud, tab, (int)autoUpdate, (int)betas, theme, (int)plus, (int)plusAsked,
-            achNotice, (int)achSound, depth3d, (int)extras);
+            achNotice, (int)achSound, depth3d, (int)extras, (int)(extras && immortal), (int)(extras && airJump));
 #if MANIA_DEV_TOOLS
     DevTools::SaveSwitches(f);
 #endif
