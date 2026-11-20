@@ -2153,7 +2153,7 @@ static int PickInput(u32 held, u32 down, const touchPosition &t)
 
 // ---------------------------------------------------------------- EXTRAS tab
 
-// OPTIONS > EXTRAS on: IMMORTAL and AIR JUMP (switches, not saved: they are off at every start) and STAGES, which opens
+// OPTIONS > EXTRAS on: IMMORTAL and AIR JUMP (switches, saved while EXTRAS is on) and STAGES, which opens
 // the list above over this tab. The cells are the OPTIONS tab's; under them, what the last one touched does.
 enum { EXT_IMMORTAL, EXT_AIRJUMP, EXT_STAGES, EXT_COUNT };
 static const char *const kExtName[EXT_COUNT] = { "IMMORTAL", "AIR JUMP", "STAGES" };
