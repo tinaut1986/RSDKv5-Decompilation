@@ -4,6 +4,7 @@
 #include "RSDK/Dev/CTR/BottomUi.hpp"
 #include "RSDK/Dev/CTR/Updater.hpp"
 #include "RSDK/Dev/CTR/PortText.hpp"
+#include "RSDK/Dev/CTR/GameInfo.h"
 
 #if RETRO_PLATFORM == RETRO_3DS
 
@@ -30,6 +31,9 @@ bool Port::plus       = false;
 bool Port::plusAsked  = false;
 int Port::achNotice   = 1;
 bool Port::achSound   = true;
+bool Port::extras     = false;
+bool Port::immortal   = false;
+bool Port::airJump    = false;
 
 // One file for the port, the dev tools' switches in it too (DevTools::SaveSwitches). The game's own Settings.ini
 // (language, video, sound) is the engine's and stays apart; dev-settings.ini is where these lived before: read once.
@@ -72,6 +76,8 @@ static bool ReadSettings(const char *path)
             Port::achNotice = v < 0 || v > 2 ? 1 : v;
         else if (!strcmp(key, "achsound"))
             Port::achSound = v != 0;
+        else if (!strcmp(key, "extras"))
+            Port::extras = v != 0;
     }
     fclose(f);
     return true;
@@ -91,13 +97,39 @@ void Port::Save()
     if (!f)
         return;
     fprintf(f, "frameskip=%d\nlock30=%d\ngpumode=%d\nfps=%d\nhud=%d\ntab=%d\nautoupdate=%d\nbetas=%d\ntheme=%d\nplus=%d\nplusasked=%d\n"
-               "achnotice=%d\nachsound=%d\ndepth3d=%d\n",
+               "achnotice=%d\nachsound=%d\ndepth3d=%d\nextras=%d\n",
             (int)frameSkip, (int)lock30, (int)GpuMode(), fps, hud, tab, (int)autoUpdate, (int)betas, theme, (int)plus, (int)plusAsked,
-            achNotice, (int)achSound, depth3d);
+            achNotice, (int)achSound, depth3d, (int)extras);
 #if MANIA_DEV_TOOLS
     DevTools::SaveSwitches(f);
 #endif
     fclose(f);
+}
+
+// ---------------------------------------------------------------- EXTRAS
+
+void Port::SetExtras(bool on)
+{
+    extras = on;
+    if (!on)
+        immortal = airJump = false;
+}
+
+void Port::ApplyExtras()
+{
+    PortGame_Immortal(immortal);
+    PortGame_AirJump(airJump);
+}
+
+void Port::LoadScene(int category, int scene)
+{
+    if (category < 0 || category >= sceneInfo.categoryCount || scene < 0 || scene >= sceneInfo.listCategory[category].sceneCount)
+        return;
+    const SceneListInfo *l   = &sceneInfo.listCategory[category];
+    sceneInfo.activeCategory = (uint8)category;
+    sceneInfo.listPos        = (uint16)(l->sceneOffsetStart + scene);
+    sceneInfo.state          = ENGINESTATE_LOAD;
+    PortGame_SceneMode(l->name); // the game mode follows the category (Encore Mode -> Encore), as the menus set it
 }
 
 // ---------------------------------------------------------------- Sonic Mania Plus
@@ -308,6 +340,7 @@ bool Port::FrameEnd()
         sSecondStart = now;
     }
 #if !MANIA_DEV_TOOLS
+    ApplyExtras();      // the dev tools do it in their own frame end, as the next one
     BottomUi::Update(); // the dev tools call it from their own frame end
     if (DevFtp::Tick()) // an install over the install-only FTP: relaunch into it
         return true;

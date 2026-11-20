@@ -270,33 +270,43 @@ static void ValFtp(char *o, unsigned c, bool *on)
 }
 // OFF -> ON; ON -> OFF; a failed start (FAILED) -> tries again
 static void TapFtp() { DevTools::SetFtp(!DevTools::FtpRunning()); }
-static void ValImmortal(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::immortal ? "ON" : "OFF"); *on = DevTools::immortal; }
-static void TapImmortal() { DevTools::immortal = !DevTools::immortal; }
-static void ValAirJump(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", DevTools::airJump ? "ON" : "OFF"); *on = DevTools::airJump; }
-static void TapAirJump() { DevTools::airJump = !DevTools::airJump; }
-static int sPick; // the STAGES list: 0 closed, 1 the scene list's categories, 2 the scenes of one (below)
-static void ValStages(char *o, unsigned c, bool *on) { snprintf(o, c, "%s", "LIST"); *on = sPick != 0; }
-static void TapStages() { sPick = 1; }
 
+// IMMORTAL, AIR JUMP and STAGES were here: they are the EXTRAS tab's now, in every build (OPTIONS > EXTRAS).
 static const Button kButtons[] = {
     { "RENDERER", TapRenderer, ValRenderer }, { "FRAME SKIP", TapFrameSkip, ValFrameSkip }, { "MAX SKIP", TapMaxSkip, ValMaxSkip },
     { "LOG MARK", TapMark, ValMark },         { "DRAW LISTS", TapDraw, ValDraw },            { "FLIP COPY", TapFlip, ValFlip },
     { "3D SCENES", TapGpu3D, ValGpu3D },      { "FORCE 3D", TapForce3D, ValForce3D },    { "DEPTH TINT", TapDepthTint, ValDepthTint },
-    { "CAPTURE", TapCapture, ValCapture },    { "FTP", TapFtp, ValFtp },                 { "STAGES", TapStages, ValStages },
-    { "IMMORTAL", TapImmortal, ValImmortal }, { "AIR JUMP", TapAirJump, ValAirJump },
+    { "CAPTURE", TapCapture, ValCapture },    { "FTP", TapFtp, ValFtp },
 };
 
 #endif // MANIA_DEV_TOOLS
 
+static int sPick; // EXTRAS > STAGES: 0 closed, 1 the scene list's categories, 2 the scenes of one (sPickCat)
+
 // Tabs, in the bar at the top (icons as in the owner's other ports). Values are saved: append only. kTabs is the
-// order they show in; DEBUG only with the dev tools.
-enum Tab { TAB_GAME, TAB_OPTIONS, TAB_DEBUG, TAB_UPDATES, TAB_ACH };
-#if MANIA_DEV_TOOLS
-static const int kTabs[] = { TAB_GAME, TAB_ACH, TAB_OPTIONS, TAB_UPDATES, TAB_DEBUG };
-#else
-static const int kTabs[] = { TAB_GAME, TAB_ACH, TAB_OPTIONS, TAB_UPDATES };
-#endif
-enum { TAB_SHOWN = sizeof(kTabs) / sizeof(kTabs[0]) };
+// order they show in: EXTRAS only with OPTIONS > EXTRAS on, DEBUG only with the dev tools.
+enum Tab { TAB_GAME, TAB_OPTIONS, TAB_DEBUG, TAB_UPDATES, TAB_ACH, TAB_EXTRAS };
+static const int kTabs[] = { TAB_GAME, TAB_ACH, TAB_OPTIONS, TAB_UPDATES, TAB_EXTRAS, TAB_DEBUG };
+enum { TAB_MAX = sizeof(kTabs) / sizeof(kTabs[0]) };
+
+static bool TabShown(int tab)
+{
+    if (tab == TAB_EXTRAS)
+        return Port::extras;
+    if (tab == TAB_DEBUG)
+        return MANIA_DEV_TOOLS != 0;
+    return true;
+}
+
+// The tabs shown now, in their order; returns how many.
+static int ShownTabs(int out[TAB_MAX])
+{
+    int n = 0;
+    for (int i = 0; i < TAB_MAX; ++i)
+        if (TabShown(kTabs[i]))
+            out[n++] = kTabs[i];
+    return n;
+}
 
 enum {
     HEADER_H  = 26,
@@ -473,6 +483,24 @@ static void DrawTabIcon(int tab, float cx, float cy, u32 col, float z)
             C2D_DrawRectSolid(cx + 6, cy + 2, z, 2, 5, col);
             C2D_DrawRectSolid(cx - 7, cy + 6, z, 15, 2, col);
             break;
+        case TAB_EXTRAS: { // a star, 13x13, in runs as the ring
+            static const char *const kStar[13] = { "......X......", "......X......", ".....XXX.....", ".....XXX.....", "XXXXXXXXXXXXX",
+                                                   ".XXXXXXXXXXX.", "..XXXXXXXXX..", "...XXXXXXX...", "...XXXXXXX...", "..XXXX.XXXX..",
+                                                   "..XXX...XXX..", ".XXX.....XXX.", ".X.........X." };
+            for (int r = 0; r < 13; ++r)
+                for (int c = 0; c < 13;) {
+                    if (kStar[r][c] != 'X') {
+                        ++c;
+                        continue;
+                    }
+                    int e = c;
+                    while (e < 13 && kStar[r][e] == 'X')
+                        ++e;
+                    C2D_DrawRectSolid(cx - 6 + c, cy - 7 + r, z, e - c, 1, col);
+                    c = e;
+                }
+            break;
+        }
         default:
             C2D_DrawRectSolid(cx - 3, cy - 4, z, 6, 9, col);  // body
             C2D_DrawRectSolid(cx - 2, cy - 7, z, 4, 3, col);  // head
@@ -492,17 +520,19 @@ static void DrawTabBar()
             C2D_DrawRectSolid(i * W / 4.0f, HEADER_H - 2, 0.71f, W / 4.0f, 2, Hex(kMania[i]));
     else
         C2D_DrawRectSolid(0, HEADER_H - 1, 0.71f, W, 1, T().barLine);
-    for (int i = 0; i < TAB_SHOWN; ++i) {
+    int tabs[TAB_MAX];
+    const int tabCount = ShownTabs(tabs);
+    for (int i = 0; i < tabCount; ++i) {
         float x, y;
         TabRect(i, &x, &y);
-        const bool on = kTabs[i] == Port::tab;
+        const bool on = tabs[i] == Port::tab;
         u32 edge = on ? T().tabOnEdge : T().tabOffEdge, fill = on ? T().tabOnFill : T().tabOffFill;
         if (T().multi) { // each tab its colour; the closed ones dimmed
             edge = Hex(on ? kMania[i & 3] : Mix(kMania[i & 3], 0x0A1438, 0.55f));
             fill = Hex(Mix(kMania[i & 3], 0x0A1438, on ? 0.45f : 0.85f));
         }
         Panel(x, y, 0.72f, TAB_W, TAB_H, edge, fill, 1);
-        DrawTabIcon(kTabs[i], x + TAB_W / 2.0f, y + TAB_H / 2.0f, on ? Rgb(255, 255, 255) : T().tabIcon, 0.74f);
+        DrawTabIcon(tabs[i], x + TAB_W / 2.0f, y + TAB_H / 2.0f, on ? Rgb(255, 255, 255) : T().tabIcon, 0.74f);
     }
 
     // Battery, then the clock, at the right end
@@ -1086,7 +1116,7 @@ static void DrawGameTab()
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_DEPTH, OPT_PLUS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_DEPTH, OPT_PLUS, OPT_EXTRAS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
 enum { OPT_W = 150, OPT_H = 30, OPT_PITCH = 34 };
 // THEME opens a list over the page (the dropdown); its rows are hits OPT_LIST + i, a touch elsewhere OPT_LIST_OUT.
 enum { OPT_LIST = 100, OPT_LIST_OUT = 99, LIST_ROW_H = 22 };
@@ -1128,6 +1158,10 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
             *col = Port::depth3d == 2 ? dim : good;
             break;
         }
+        case OPT_EXTRAS:
+            snprintf(o, cap, "%s", Tr(Port::extras ? "ON" : "OFF"));
+            *col = Port::extras ? good : dim;
+            break;
         default: // OPT_PLUS: a change counts from the next start, until then in the warning colour
             snprintf(o, cap, "%s", Tr(Port::plus ? "ON" : "OFF"));
             *col = Port::plus != Port::PlusApplied() ? warn : Port::plus ? good : dim;
@@ -1135,7 +1169,7 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "3D DEPTH", "PLUS" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "3D DEPTH", "PLUS", "EXTRAS" };
 static const char *const kOptHelp[OPT_COUNT] = {
     "AUTO SKIPS A LATE PICTURE TO KEEP THE SPEED, 30 FPS DRAWS EVERY OTHER ONE, OFF DRAWS THEM ALL (THE GAME SLOWS DOWN IF IT CANNOT KEEP UP)",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
@@ -1143,6 +1177,7 @@ static const char *const kOptHelp[OPT_COUNT] = {
     "THE COLOURS OF THIS SCREEN",
     "HOW STRONG THE 3D EFFECT IS WITH THE SLIDER UP. 100 % IS THE DEFAULT; LOWER IS SOFTER, HIGHER IS STRONGER",
     "MIGHTY, RAY AND ENCORE MODE, ONLY IF YOU OWN SONIC MANIA PLUS. IT CHANGES AT THE NEXT START",
+    "A TAB WITH IMMORTAL, AIR JUMP AND A STAGE SELECT",
 };
 static int sLastOpt = -1;
 
@@ -1222,6 +1257,11 @@ static void TapOption(int i)
         case OPT_HUD: Port::hud = (Port::hud + 1) % 3; break;
         case OPT_THEME: sThemeOpen = true; break;
         case OPT_DEPTH: Port::depth3d = (Port::depth3d + 1) % 5; break;
+        case OPT_EXTRAS:
+            Port::SetExtras(!Port::extras);
+            if (!Port::extras)
+                sPick = 0;
+            break;
         default: Port::plus = !Port::plus; break; // OPT_PLUS
     }
     sLastOpt = i;
@@ -1262,8 +1302,12 @@ static void DrawOptionsTab()
     // What the last option touched does
     if (sLastOpt >= 0)
         Text(Tr(OptHelp(sLastOpt)), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * OPT_PITCH + 4, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
-    Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, T().footer, C2D_AlignCenter);
-    Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, T().footer, C2D_AlignCenter);
+    // The name and version, under the fourth row of options: a help text of three lines reaches down to them, so they
+    // give it the place while it is shown
+    if (sLastOpt < 0) {
+        Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, T().footer, C2D_AlignCenter);
+        Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, T().footer, C2D_AlignCenter);
+    }
     if (sThemeOpen)
         DrawThemeList();
 }
@@ -1951,10 +1995,12 @@ static void DrawDebugTab()
     sInfoH = DrawInfo(VIEW_TOP) + 2;
 }
 
-// ---------------------------------------------------------------- DEBUG > STAGES
+#endif // MANIA_DEV_TOOLS
 
-// Over the DEBUG tab: the scene list's categories (Mania Mode, Encore Mode, Special Stage...), two to a row; one
-// tapped shows its scenes, and a scene tapped is loaded (DevTools::LoadScene). The list scrolls by dragging; a tap
+// ---------------------------------------------------------------- EXTRAS > STAGES
+
+// Over the EXTRAS tab: the scene list's categories (Mania Mode, Encore Mode, Special Stage...), two to a row; one
+// tapped shows its scenes, and a scene tapped is loaded (Port::LoadScene). The list scrolls by dragging; a tap
 // is a release without a drag, as in ACHIEVEMENTS. Hits: 200 BACK, 201 CLOSE, 300 + i a row.
 static int sPickCat;
 static float sPickScroll;
@@ -2039,7 +2085,7 @@ static void DrawStagePicker()
     }
     // Header row, over what scrolls up past it: the title, BACK (in a category) and CLOSE
     C2D_DrawRectSolid(0, HEADER_H, 0.5f, W, PICK_TOP - HEADER_H, T().bg);
-    Text(sPick == 1 ? "STAGES" : sceneInfo.listCategory[sPickCat].name, 10, HEADER_H + 7, 0.5f, T().accent, 0, 0.55f);
+    Text(sPick == 1 ? Tr("STAGES") : sceneInfo.listCategory[sPickCat].name, 10, HEADER_H + 7, 0.5f, T().accent, 0, 0.55f);
     if (sPick == 2)
         Button(W - 2 * PICK_BTN_W - 10, HEADER_H + 3, PICK_BTN_W, 24, "BACK", sPressed == 200, T().cellEdge, T().text, 0.55f);
     Button(W - PICK_BTN_W - 6, HEADER_H + 3, PICK_BTN_W, 24, "CLOSE", sPressed == 201, T().cellEdge, T().text, 0.55f);
@@ -2093,7 +2139,7 @@ static int PickInput(u32 held, u32 down, const touchPosition &t)
                 sPickScroll = 0;
             }
             else {
-                DevTools::LoadScene(sPickCat, row);
+                Port::LoadScene(sPickCat, row);
                 sPick = 0;
             }
         }
@@ -2105,7 +2151,64 @@ static int PickInput(u32 held, u32 down, const touchPosition &t)
     return (held & KEY_TOUCH) && row >= 0 ? 300 + row : -1;
 }
 
-#endif // MANIA_DEV_TOOLS
+// ---------------------------------------------------------------- EXTRAS tab
+
+// OPTIONS > EXTRAS on: IMMORTAL and AIR JUMP (switches, not saved: they are off at every start) and STAGES, which opens
+// the list above over this tab. The cells are the OPTIONS tab's; under them, what the last one touched does.
+enum { EXT_IMMORTAL, EXT_AIRJUMP, EXT_STAGES, EXT_COUNT };
+static const char *const kExtName[EXT_COUNT] = { "IMMORTAL", "AIR JUMP", "STAGES" };
+static const char *const kExtHelp[EXT_COUNT] = {
+    "ENEMIES AND SPIKES DO NOT HURT, AND THERE IS NO DROWNING OR CRUSHING. PITS STILL KILL",
+    "HOLD Y IN THE AIR TO KEEP RISING",
+    "GO STRAIGHT TO ANY STAGE OF THE GAME",
+};
+static int sLastExt = -1;
+
+static void DrawExtrasTab()
+{
+    const u32 good = Rgb(110, 220, 130), dim = T().dim;
+    for (int i = 0; i < EXT_COUNT; ++i) {
+        float x, y;
+        OptRect(i, &x, &y);
+        const bool pressed = i == sPressed;
+        const int tint     = i + i / 2;
+        Panel(x, y, 0.3f, OPT_W, OPT_H, pressed ? T().pressEdge : CellEdge(tint), pressed ? T().pressFill : CellFill(tint), 1);
+        if (!T().cut)
+            C2D_DrawRectSolid(x + 1, y + 1, 0.32f, 148, 1, CellLine(tint));
+        const bool on   = i == EXT_IMMORTAL ? Port::immortal : i == EXT_AIRJUMP ? Port::airJump : false;
+        const char *val = i == EXT_STAGES ? "OPEN" : on ? "ON" : "OFF";
+        Text(Tr(kExtName[i]), x + 7, y + 3, 0.42f, T().text, 0, 0.33f);
+        Text(Tr(val), x + 7, y + 15, 0.5f, i == EXT_STAGES ? T().accent : on ? good : dim, 0, 0.33f);
+    }
+    if (sLastExt >= 0)
+        Text(Tr(kExtHelp[sLastExt]), 12, HEADER_H + 8 + (EXT_COUNT + 1) / 2 * OPT_PITCH + 4, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f,
+             W - 24);
+}
+
+static int ExtrasHit(int px, int py)
+{
+    for (int i = 0; i < EXT_COUNT; ++i) {
+        float x, y;
+        OptRect(i, &x, &y);
+        if (Inside(px, py, x, y, OPT_W, OPT_H))
+            return i;
+    }
+    return -1;
+}
+
+static void ExtrasTap(int i)
+{
+    switch (i) {
+        case EXT_IMMORTAL: Port::immortal = !Port::immortal; break;
+        case EXT_AIRJUMP: Port::airJump = !Port::airJump; break;
+        case EXT_STAGES:
+            sPick       = 1;
+            sPickScroll = 0;
+            break;
+        default: return;
+    }
+    sLastExt = i;
+}
 
 // The install-only FTP server of a production build (dev-ftp.txt, DevFtp): a strip over every tab with its address and
 // a CANCEL that stops it until the game is opened again.
@@ -2156,13 +2259,14 @@ static void Draw()
         case TAB_OPTIONS: DrawOptionsTab(); break;
         case TAB_UPDATES: DrawUpdatesTab(); break;
         case TAB_ACH: DrawAchievementsTab(); break;
-#if MANIA_DEV_TOOLS
-        case TAB_DEBUG:
+        case TAB_EXTRAS:
             if (sPick)
                 DrawStagePicker();
             else
-                DrawDebugTab();
+                DrawExtrasTab();
             break;
+#if MANIA_DEV_TOOLS
+        case TAB_DEBUG: DrawDebugTab(); break;
 #endif
         default: DrawGameTab(); break;
     }
@@ -2639,6 +2743,11 @@ void BottomUi::Update()
         return;
     PollItems(); // every frame, whatever the tab: a box opened while another tab is open still shows
     PollAchievements();
+    if (!TabShown(Port::tab)) { // EXTRAS turned off, or DEBUG saved by a beta: back to GAME
+        Port::tab = TAB_GAME;
+        sPick     = 0;
+        sDirty    = true;
+    }
 #if MANIA_DEV_TOOLS
     if (!DevTools::swBottomUi)
         return;
@@ -2673,14 +2782,9 @@ void BottomUi::Update()
     // ACHIEVEMENTS handles its own touches (a drag scrolls, a release opens), except on the tab bar and under a prompt
     const bool achTab = Port::tab == TAB_ACH && !UpdatePromptShown() && !((down & KEY_TOUCH) && t.py < HEADER_H);
     const int achHit  = achTab ? AchInput(held, down, t) : -1;
-#if MANIA_DEV_TOOLS
     // The STAGES list, the same way (its own touches but the tab bar's)
-    const bool pickOpen = debugTab && sPick && !UpdatePromptShown() && !((down & KEY_TOUCH) && t.py < HEADER_H);
+    const bool pickOpen = Port::tab == TAB_EXTRAS && sPick && !UpdatePromptShown() && !((down & KEY_TOUCH) && t.py < HEADER_H);
     const int pickHit   = pickOpen ? PickInput(held, down, t) : -1;
-#else
-    const bool pickOpen = false;
-    const int pickHit   = -1;
-#endif
     int hit = -1;
     if (held & KEY_TOUCH) {
         if (UpdatePromptShown()) {
@@ -2689,12 +2793,15 @@ void BottomUi::Update()
         }
         else if ((down & KEY_TOUCH) && t.py < HEADER_H) {
             // The tab bar
-            for (int i = 0; i < TAB_SHOWN; ++i) {
+            int tabs[TAB_MAX];
+            const int tabCount = ShownTabs(tabs);
+            for (int i = 0; i < tabCount; ++i) {
                 float x, y;
                 TabRect(i, &x, &y);
-                if (t.px >= x && t.px < x + TAB_W && t.py >= y && t.py < y + TAB_H && Port::tab != kTabs[i]) {
-                    Port::tab  = kTabs[i];
+                if (t.px >= x && t.px < x + TAB_W && t.py >= y && t.py < y + TAB_H && Port::tab != tabs[i]) {
+                    Port::tab  = tabs[i];
                     sLastOpt   = -1;
+                    sLastExt   = -1;
                     sThemeOpen = false;
                     SaveAll();
                     sDirty = true;
@@ -2756,6 +2863,8 @@ void BottomUi::Update()
         }
         else if (Port::tab == TAB_UPDATES)
             hit = UpdatesHit(t.px, t.py, (down & KEY_TOUCH) != 0);
+        else if (Port::tab == TAB_EXTRAS)
+            hit = ExtrasHit(t.px, t.py);
     }
 #if MANIA_DEV_TOOLS
     else if (sDragY >= 0 || sDragBar) {
@@ -2780,6 +2889,8 @@ void BottomUi::Update()
 #endif
         else if (Port::tab == TAB_UPDATES)
             UpdatesTap(hit);
+        else if (Port::tab == TAB_EXTRAS)
+            ExtrasTap(hit);
         else
             TapOption(hit);
         SaveAll();
