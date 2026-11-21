@@ -44,6 +44,10 @@ void PortGame_Describe(char *out, unsigned cap);
 // each is still updated and drawn (the credits ran slower and slower on the 2DS). They are destroyed here.
 void PortGame_Tick(void);
 
+// OPTIONS > CAMERA (Port::cameraAhead): 1 AHEAD, the view moves ahead of the player at speed (CameraAhead in
+// GameInfo.c, run by PortGame_Tick); 0 CLASSIC, the game's own camera.
+extern int PortGame_cameraAhead;
+
 // A scene picked from the STAGES list: the game mode follows its category ("Encore Mode" -> Encore, "Mania Mode" ->
 // Mania), as the menus would have set it; the other categories leave it.
 void PortGame_SceneMode(const char *category);

@@ -34,6 +34,7 @@ bool Port::achSound   = true;
 bool Port::extras     = false;
 bool Port::immortal   = false;
 bool Port::airJump    = false;
+bool Port::cameraAhead = false;
 
 // One file for the port, the dev tools' switches in it too (DevTools::SaveSwitches). The game's own Settings.ini
 // (language, video, sound) is the engine's and stays apart; dev-settings.ini is where these lived before: read once.
@@ -82,6 +83,8 @@ static bool ReadSettings(const char *path)
             Port::immortal = v != 0;
         else if (!strcmp(key, "airjump"))
             Port::airJump = v != 0;
+        else if (!strcmp(key, "camera"))
+            Port::cameraAhead = v != 0;
     }
     fclose(f);
     return true;
@@ -102,9 +105,10 @@ void Port::Save()
     if (!f)
         return;
     fprintf(f, "frameskip=%d\nlock30=%d\ngpumode=%d\nfps=%d\nhud=%d\ntab=%d\nautoupdate=%d\nbetas=%d\ntheme=%d\nplus=%d\nplusasked=%d\n"
-               "achnotice=%d\nachsound=%d\ndepth3d=%d\nextras=%d\nimmortal=%d\nairjump=%d\n",
+               "achnotice=%d\nachsound=%d\ndepth3d=%d\nextras=%d\nimmortal=%d\nairjump=%d\ncamera=%d\n",
             (int)frameSkip, (int)lock30, (int)GpuMode(), fps, hud, tab, (int)autoUpdate, (int)betas, theme, (int)plus, (int)plusAsked,
-            achNotice, (int)achSound, depth3d, (int)extras, (int)(extras && immortal), (int)(extras && airJump));
+            achNotice, (int)achSound, depth3d, (int)extras, (int)(extras && immortal), (int)(extras && airJump),
+            (int)cameraAhead);
 #if MANIA_DEV_TOOLS
     DevTools::SaveSwitches(f);
 #endif
@@ -124,6 +128,7 @@ void Port::ApplyExtras()
 {
     PortGame_Immortal(immortal);
     PortGame_AirJump(airJump);
+    PortGame_cameraAhead = cameraAhead; // OPTIONS > CAMERA, read by PortGame_Tick
 }
 
 void Port::LoadScene(int category, int scene)

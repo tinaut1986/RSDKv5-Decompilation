@@ -1116,7 +1116,7 @@ static void DrawGameTab()
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_DEPTH, OPT_PLUS, OPT_EXTRAS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_DEPTH, OPT_PLUS, OPT_CAMERA, OPT_EXTRAS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
 enum { OPT_W = 150, OPT_H = 30, OPT_PITCH = 34 };
 // THEME opens a list over the page (the dropdown); its rows are hits OPT_LIST + i, a touch elsewhere OPT_LIST_OUT.
 enum { OPT_LIST = 100, OPT_LIST_OUT = 99, LIST_ROW_H = 22 };
@@ -1162,6 +1162,10 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
             snprintf(o, cap, "%s", Tr(Port::extras ? "ON" : "OFF"));
             *col = Port::extras ? good : dim;
             break;
+        case OPT_CAMERA:
+            snprintf(o, cap, "%s", Tr(Port::cameraAhead ? "AHEAD" : "CLASSIC"));
+            *col = Port::cameraAhead ? good : dim;
+            break;
         default: // OPT_PLUS: a change counts from the next start, until then in the warning colour
             snprintf(o, cap, "%s", Tr(Port::plus ? "ON" : "OFF"));
             *col = Port::plus != Port::PlusApplied() ? warn : Port::plus ? good : dim;
@@ -1169,7 +1173,7 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "3D DEPTH", "PLUS", "EXTRAS" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "3D DEPTH", "PLUS", "CAMERA", "EXTRAS" };
 static const char *const kOptHelp[OPT_COUNT] = {
     "AUTO SKIPS A LATE PICTURE TO KEEP THE SPEED, 30 FPS DRAWS EVERY OTHER ONE, OFF DRAWS THEM ALL (THE GAME SLOWS DOWN IF IT CANNOT KEEP UP)",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
@@ -1177,6 +1181,7 @@ static const char *const kOptHelp[OPT_COUNT] = {
     "THE COLOURS OF THIS SCREEN",
     "HOW STRONG THE 3D EFFECT IS WITH THE SLIDER UP. 100 % IS THE DEFAULT; LOWER IS SOFTER, HIGHER IS STRONGER",
     "MIGHTY, RAY AND ENCORE MODE, ONLY IF YOU OWN SONIC MANIA PLUS. IT CHANGES AT THE NEXT START",
+    "AHEAD MOVES THE VIEW AHEAD OF THE PLAYER AT HIGH SPEED AND BACK WHEN SLOWING DOWN",
     "A TAB WITH IMMORTAL, AIR JUMP AND A STAGE SELECT",
 };
 static int sLastOpt = -1;
@@ -1262,6 +1267,7 @@ static void TapOption(int i)
             if (!Port::extras)
                 sPick = 0;
             break;
+        case OPT_CAMERA: Port::cameraAhead = !Port::cameraAhead; break;
         default: Port::plus = !Port::plus; break; // OPT_PLUS
     }
     sLastOpt = i;

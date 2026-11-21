@@ -31,6 +31,7 @@ extern bool achSound;   // ACHIEVEMENTS > SOUND: a sparkle when one unlocks
 extern bool extras;     // OPTIONS > EXTRAS: shows the EXTRAS tab (IMMORTAL, AIR JUMP, STAGES); off by default
 extern bool immortal;   // EXTRAS > IMMORTAL: player 1 kept invincible (PortGame_Immortal); saved, with EXTRAS on
 extern bool airJump;    // EXTRAS > AIR JUMP: hold the 3DS Y button in the air to keep rising (PortGame_AirJump); saved, with EXTRAS on
+extern bool cameraAhead; // OPTIONS > CAMERA: AHEAD (on) moves the view ahead of the player at speed, CLASSIC (off, default) is the game's
 
 void Load(); // before the engine starts
 void Save();

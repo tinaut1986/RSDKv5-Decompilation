@@ -150,8 +150,82 @@ void PortGame_Describe(char *out, unsigned cap)
 #undef ADD
 }
 
+int PortGame_cameraAhead = 0;
+
+// OPTIONS > CAMERA, AHEAD: each camera that follows a player looks ahead of him, by Camera.lookPos.x, which the game
+// adds to the screen's position (Camera_SetCameraBounds) before clamping it to the stage's bounds and uses for nothing
+// else. The look-ahead grows with the player's speed on the ground once he has kept a speed over kFrom for kHold
+// frames in one direction, eases towards its target (a sixteenth of the way a frame, at most kStep), and stays as it
+// is in the air (a jump or a spring does not swing the view). Below kFrom, turning round, out of the follow states
+// (bosses, cutscenes, map view) or with the option off, it eases back to 0. Nothing is touched while it rests at 0.
+static void CameraAhead(void)
+{
+    enum { MAX_SCREENS = 4, kHold = 24 };
+    static const int32 kFrom = TO_FIXED(3), kFull = TO_FIXED(7), kMax = TO_FIXED(96), kStep = 0x18000, kMinStep = 0x4000;
+    static int32 cur[MAX_SCREENS];    // the look-ahead, 16.16
+    static int32 target[MAX_SCREENS]; // where it goes
+    static int32 wrote[MAX_SCREENS];  // the lookPos.x written last (a new camera, after a load, starts from its own)
+    static int held[MAX_SCREENS];     // frames over kFrom in one direction (sign = the direction)
+
+    if (!Camera || !Camera->classID || !Player || !Player->classID)
+        return;
+    foreach_all(Camera, camera)
+    {
+        const int s = camera->screenID;
+        if (s < 0 || s >= MAX_SCREENS)
+            continue;
+        if (camera->lookPos.x != wrote[s]) { // not ours: a new camera or the game set it
+            cur[s] = TO_FIXED(camera->lookPos.x);
+            target[s] = 0;
+            held[s]   = 0;
+        }
+        EntityPlayer *p = (EntityPlayer *)camera->target;
+        const bool32 follows = camera->state == Camera_State_FollowXY || camera->state == Camera_State_FollowX;
+        if (!PortGame_cameraAhead || !follows || !p || p->classID != Player->classID) {
+            target[s] = 0;
+            held[s]   = 0;
+        }
+        else if (p->onGround) {
+            const int32 v = p->velocity.x, speed = v < 0 ? -v : v;
+            if (speed < kFrom) {
+                held[s]   = 0;
+                target[s] = 0;
+            }
+            else {
+                const int dir = v < 0 ? -1 : 1;
+                if (held[s] * dir < 0) { // turned round
+                    held[s]   = 0;
+                    target[s] = 0;
+                }
+                if (held[s] * dir < kHold)
+                    held[s] += dir;
+                else {
+                    const int32 a = speed >= kFull ? kMax : (int32)((long long)kMax * (speed - kFrom) / (kFull - kFrom));
+                    target[s]     = dir * a;
+                }
+            }
+        }
+        if (!cur[s] && !target[s]) {
+            wrote[s] = camera->lookPos.x;
+            continue;
+        }
+        int32 d = target[s] - cur[s], step = d / 16;
+        const int32 ad = d < 0 ? -d : d;
+        if (step > kStep)
+            step = kStep;
+        else if (step < -kStep)
+            step = -kStep;
+        else if (step > -kMinStep && step < kMinStep)
+            step = ad < kMinStep ? d : (d < 0 ? -kMinStep : kMinStep);
+        cur[s] += step;
+        camera->lookPos.x = FROM_FIXED(cur[s] + (cur[s] < 0 ? -0x8000 : 0x8000));
+        wrote[s]          = camera->lookPos.x;
+    }
+}
+
 void PortGame_Tick(void)
 {
+    CameraAhead();
     if (!UICreditsText || !UICreditsText->classID)
         return;
     for (int i = 0; i < ENTITY_COUNT; ++i) {
