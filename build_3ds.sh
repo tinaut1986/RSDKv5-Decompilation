@@ -7,6 +7,34 @@
 # .deps/ when the portlibs lack it (see docs/PLAN.md, B0.1).
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# Windows: devkitPro's make and compilers only work from devkitPro's own MSYS2 shell. Run from another one (Git
+# Bash), they get no environment at all (make sees DEVKITARM empty: "/3ds_rules: No such file"), so the script runs
+# itself again there, with the variables it reads passed on by hand.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        if [ ! -d /opt/devkitpro ]; then
+            DKP_BASH="${DEVKITPRO:-C:/devkitpro}/msys2/usr/bin/bash.exe"
+            [ -x "$DKP_BASH" ] || { echo "build_3ds.sh: devkitPro's MSYS2 shell not found ($DKP_BASH)" >&2; exit 1; }
+            FWD=()
+            for v in DEV_TOOLS EXTRA_DEFINES MANIA3DS_CHANNEL; do
+                [ -n "${!v+x}" ] && FWD+=("$v=${!v}")
+            done
+            exec "$DKP_BASH" -lc 'cd "$(cygpath -u "$1")" && shift && exec env "$@"' _ "$(cygpath -m "$PWD")" \
+                "${FWD[@]}" ./build_3ds.sh "$@"
+        fi
+        ;;
+esac
+
+# Game is a symbolic link to the game logic's folder in the submodule. A Windows checkout without symbolic links
+# (core.symlinks=false) leaves a text file holding that path: build from the path then.
+GAME_DIR=Game
+[ -f Game ] && GAME_DIR=$(tr -d '\r\n' < Game)
+[ -f "$GAME_DIR/Game.c" ] || {
+    echo "build_3ds.sh: no game logic in $GAME_DIR; run: git submodule update --init --recursive" >&2
+    exit 1
+}
+
 export DEVKITPRO=${DEVKITPRO:-/opt/devkitpro}
 export DEVKITARM=${DEVKITARM:-$DEVKITPRO/devkitARM}
 
@@ -42,7 +70,7 @@ fi
 
 # The Makefile does not add these by itself.
 # DEV_TOOLS=0 leaves the FTP server and the perf timing out (production builds).
-export DEFINES="-DRETRO_USE_MOD_LOADER=0 -DMANIA_DEV_TOOLS=${DEV_TOOLS:-1} -I./Game -I./Game/Objects ${EXTRA_DEFINES:-}"
+export DEFINES="-DRETRO_USE_MOD_LOADER=0 -DMANIA_DEV_TOOLS=${DEV_TOOLS:-1} -I./$GAME_DIR -I./$GAME_DIR/Objects ${EXTRA_DEFINES:-}"
 # make does not rebuild objects when only a -D changes, and some of them (SCREEN_XMAX) change the layout of
 # structures the engine and the game logic share: a stamp of the defines wipes the objects when they differ.
 STAMP="bin/.defines"
@@ -54,7 +82,7 @@ if [ "$(cat "$STAMP" 2>/dev/null)" != "$STAMPED" ]; then
 fi
 # RETRO_REVISION=2: the engine of Sonic Mania Plus (the game's own), not v5U (Sonic Origins), whose Legacy engine for
 # Sonic 1, 2 and CD Mania never runs but kept ~12 MB of static arrays in the 2DS's memory. The file keeps its name.
-make PLATFORM=3DS RETRO_REVISION=2 RSDK_NAME=RSDKv5U PKGCONFIG="env PKG_CONFIG_LIBDIR=$LIBDIR pkg-config --static" -j"$(nproc)"
+make PLATFORM=3DS RETRO_REVISION=2 RSDK_NAME=RSDKv5U GAME_NAME="$GAME_DIR" PKGCONFIG="env PKG_CONFIG_LIBDIR=$LIBDIR pkg-config --static" -j"$(nproc)"
 
 if [ "${1:-}" = "--install" ]; then
   IP="${2:-$(cat .3ds_ftp_ip 2>/dev/null || true)}"

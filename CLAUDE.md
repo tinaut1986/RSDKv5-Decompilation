@@ -56,6 +56,13 @@ at boot the game offers to extract it from the console's own Home Menu (`Port::E
   across branch switches and links stale objects.
 - The Makefile does not add `-DRETRO_USE_MOD_LOADER=0` or the `Game/` include paths;
   `build_3ds.sh` does.
+- On Windows `build_3ds.sh` works from any shell (Git Bash too): outside devkitPro's MSYS2 it runs itself again in it,
+  since devkitPro's make gets no environment from another MSYS (`DEV_TOOLS`, `EXTRA_DEFINES`, `MANIA3DS_CHANNEL` are
+  passed on). A checkout without symbolic links leaves `Game` as a text file with the path; the script builds from that
+  path. A fresh checkout needs `git submodule update --init --recursive`.
+- On Windows, `3ds/build_cia.sh` uses devkitPro's `bannertool.exe` and the makerom of `tools/fetch-makerom.sh`
+  (the owner's fork of Project_CTR, cached in `AppData\Local\3ds-tools`): devkitPro's `makerom.exe` 0.19.0 drops the
+  title version's minor number (0.4.8 becomes 0.0.8, 3DSGuy/Project_CTR#169). The committed `3ds/makerom` is Linux's.
 - Title ID `0x5A230`, name "Sonic Mania 3DS", data folder `sdmc:/3ds/Sonic Mania 3DS/`.
   The SaturnSH2x2 build (`0x3082`, `/3ds/SonicMania/`) can stay installed next to it.
 
