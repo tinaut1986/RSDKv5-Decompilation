@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Converts the game's videos for the 3DS port.
 
-Reads the videos out of the player's own Data.rsdk (the intro and the eight ending clips, Theora 1024x512) and
-re-encodes them with ffmpeg at the top screen's size (400x200 by default, quality 4, a keyframe every 240 frames),
-which costs the Old 3DS ~5 times less to decode and takes a tenth of the space (48.8 MB -> ~5 MB). On an Old 2DS the
-intro then shows 97 % of its frames; the pack's own 1024x512 videos play too, but only a few frames a second. The results go to OUT_DIR; copy that folder's files to
-sdmc:/3ds/Sonic Mania 3DS/Video/ and the port plays them instead of the pack's (Graphics/Video.cpp).
+Reads the videos out of the player's own Data.rsdk (the intro, the bad endings' eight clips and the good ending,
+Theora 1024x512) and re-encodes them with ffmpeg at the top screen's size (400x200 by default, 500 kbit/s, a keyframe
+every 240 frames), which costs the Old 3DS ~4 times less to decode and takes a sixth of the space (56 MB -> ~12 MB).
+On an Old 2DS the intro then shows all of its frames but the first few; the pack's own 1024x512 videos play too, but
+only a few frames a second. The results go to OUT_DIR; copy that folder's files to sdmc:/3ds/Sonic Mania 3DS/Video/
+and the port plays them instead of the pack's (Graphics/Video.cpp).
 
-    python3 tools/convert-videos.py path/to/Data.rsdk out/Video [--size 400x200] [--quality 4] [--keep-original]
+    python3 tools/convert-videos.py path/to/Data.rsdk out/Video [--size 400x200] [--bitrate 500k] [--keep-original]
+
+A constant bit rate, not a constant quality: the quiet stretches (most of the videos) get several times the bits
+quality 4 gave them (which looked blocky), while the few heavy ones (the intro's 21-24 s and 53-55 s) stay as cheap to
+decode as at quality 4. Quality 6 or 7 made those stop and jump on the Old 2DS; 450 and 520 kbit/s did not.
 
 Needs ffmpeg built with libtheora (on PATH, or --ffmpeg). The game's data is never committed or shipped: each player
 converts their own copy.
@@ -21,7 +26,7 @@ import sys
 
 # Data/Video/ files the game plays: TitleSetup (the intro) and the Ending scenes' UIVideo objects
 VIDEOS = ['Mania.ogv', 'BadSonic.ogv', 'BadSonic2.ogv', 'BadTails.ogv', 'BadKnux.ogv', 'BadMighty.ogv', 'BadRay.ogv', 'BadEnd.ogv',
-          'MREnd.ogv']
+          'MREnd.ogv', 'GoodEnd.ogv']
 
 
 def word_swap(digest):
@@ -98,8 +103,9 @@ def main():
     ap.add_argument('pack', help='Data.rsdk')
     ap.add_argument('out', help='output folder (its files go to sdmc:/3ds/Sonic Mania 3DS/Video/)')
     ap.add_argument('--size', default='400x200', help='picture size, WxH (default 400x200: 1024x512 scaled to the top screen)')
-    ap.add_argument('--quality', type=int, default=4,
-                    help='Theora quality 0-10 (default 4: the intro is 3 MB; 6 looks a little better, costs ~25 %% more to decode)')
+    ap.add_argument('--bitrate', default='500k', help='video bit rate (default 500k: the intro is ~4.5 MB)')
+    ap.add_argument('--quality', type=int, default=None,
+                    help='a constant Theora quality 0-10 instead of the bit rate (4 is cheap but blocky; 6 stops in the heavy stretches)')
     ap.add_argument('--keyint', type=int, default=240, help='frames between keyframes (default 240)')
     ap.add_argument('--ffmpeg', default='ffmpeg')
     ap.add_argument('--keep-original', action='store_true', help='also write the pack\'s videos as they are (*.orig.ogv)')
@@ -125,7 +131,8 @@ def main():
         fps = theora_fps(data)
         vf = 'setpts=N/(%d/%d)/TB,scale=%d:%d:flags=lanczos' % (fps[0], fps[1], width, height)
         cmd = [args.ffmpeg, '-v', 'error', '-y', '-i', src, '-an', '-vf', vf, '-fps_mode', 'cfr', '-r', '%d/%d' % fps,
-               '-c:v', 'libtheora', '-q:v', str(args.quality), '-g', str(args.keyint), dst]
+               '-c:v', 'libtheora'] + (['-q:v', str(args.quality)] if args.quality is not None else ['-b:v', args.bitrate]) + [
+               '-g', str(args.keyint), dst]
         subprocess.run(cmd, check=True)
         if not args.keep_original:
             os.remove(src)

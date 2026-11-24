@@ -46,7 +46,6 @@ struct VideoStats {
     uint64 lastTick;     // the previous pass (the clock the picture follows without music)
     uint32 clockPasses;  // passes timed by the clock: no music stream to follow
     uint32 passes;       // ProcessVideo calls
-    uint64 nextReport;   // the next timeline line in the log
     uint32 lateBins[4];  // frames shown after their time by < 17, < 33 ms, less than a frame, more
     uint32 gapBins[3];   // passes that came > 25, > 50, > 100 ms after the previous one
     uint32 clockSnaps;   // times the smoothed clock jumped to the music's position (more than 250 ms apart)
@@ -56,6 +55,12 @@ struct VideoStats {
     uint8 traceResult[16];
     int32 traceCount;
     uint16 prefilled, prefillMs; // frames queued by LoadVideo before the thread started, and the time it took
+    uint16 prefillStepMs[8];
+    int32 prefillSteps;
+    uint32 stepUs[5];            // the last DecodeStep: queueing, reading, decoding, waiting for Y2R, converting
+    uint32 prefillPhase[5];      // stepUs after the prefill's first step
+    uint16 firstFrameMs;         // LoadVideo's first frame (decoded and shown before the prefill)
+    uint32 prepareUs;            // VideoFrame::Prepare: the slots and Y2R
     uint32 recentUs[8];  // the last decodes' times (the decoder thread), for the trouble spots
     uint32 recentAt;
 };
@@ -167,8 +172,9 @@ bool32 RSDK::LoadVideo(const char *filename, double startDelay, bool32 (*skipCal
         LightLock_Init(&videoQueue.lock);
         LightEvent_Init(&videoQueue.room, RESET_ONESHOT);
         videoQueue.convSlot = -1;
-        const uint32 prepUs = VideoFrame::Prepare(); // here, not in the decoder thread with the first frame
-        DEV_LOG("video %s: slots and Y2R ready in %u us (Y2R %s)", filename, prepUs, VideoFrame::HardwareReady() ? "open" : "not open");
+        // Here, not in the decoder thread with the first frame. Nothing is written to the log until the video ends:
+        // a write to the SD card held the next read of the video ~170 ms, and the start lost a dozen frames.
+        videoStats.prepareUs = VideoFrame::Prepare();
         videoStats.loose = opened;
         if (!opened) {
             InitFileInfo(&VideoManager::file);
@@ -381,14 +387,18 @@ static void ShowVideoFrame()
 }
 
 // The next packet of the video stream into VideoManager::op; false at the end of the file.
+// Read 64 KB at a time, not the engine's 4 KB: a read from the SD card costs ~10 ms however small, and ffmpeg puts a
+// second of video in each Ogg page, so the second frame waited for ~15 reads (120-185 ms) and a clip's start lost a
+// dozen frames. Only what was read is handed to Ogg (the engine told it 4 KB came even at the end of the file).
 static bool32 NextVideoPacket()
 {
     while (ogg_stream_packetout(&VideoManager::to, &VideoManager::op) <= 0) {
-        char *buffer = ogg_sync_buffer(&VideoManager::oy, 0x1000);
-        if (!ReadBytes(&VideoManager::file, buffer, 0x1000) && !VideoManager::initializing)
+        char *buffer       = ogg_sync_buffer(&VideoManager::oy, 0x10000);
+        const size_t bytes = ReadBytes(&VideoManager::file, buffer, 0x10000);
+        if (!bytes)
             return false;
 
-        ogg_sync_wrote(&VideoManager::oy, 0x1000);
+        ogg_sync_wrote(&VideoManager::oy, (long)bytes);
 
         while (ogg_sync_pageout(&VideoManager::oy, &VideoManager::og) > 0) ogg_stream_pagein(&VideoManager::to, &VideoManager::og);
     }
@@ -420,6 +430,7 @@ static void QueueConverted(bool wait)
 static bool32 DecodeStep()
 {
     VideoQueue &q = videoQueue;
+    const u64 p0 = svcGetSystemTick();
     QueueConverted(false);
     if (q.ended)
         return false;
@@ -442,6 +453,7 @@ static bool32 DecodeStep()
     if (freeSlot < 0)
         return false;
 
+    const u64 p1 = svcGetSystemTick();
     if (!NextVideoPacket()) {
         QueueConverted(true);
         q.ended = true;
@@ -470,6 +482,8 @@ static bool32 DecodeStep()
     }
 
     const u64 t0     = svcGetSystemTick();
+    videoStats.stepUs[0] = TicksToUs(p1 - p0);
+    videoStats.stepUs[1] = TicksToUs(t0 - p1);
     const int32 ret  = th_decode_packetin(VideoManager::td, &VideoManager::op, &VideoManager::granulePos);
     const u64 dt     = svcGetSystemTick() - t0;
     const uint32 dUs = TicksToUs(dt);
@@ -494,9 +508,14 @@ static bool32 DecodeStep()
             q.seeking = true;
         return true;
     }
+    const u64 c0 = svcGetSystemTick();
+    videoStats.stepUs[2] = TicksToUs(c0 - t0);
     QueueConverted(true); // the previous frame's conversion reads the staging copy this one is about to fill
+    const u64 c1 = svcGetSystemTick();
     VideoFrame::SetTarget(freeSlot);
     ShowVideoFrame();
+    videoStats.stepUs[3] = TicksToUs(c1 - c0);
+    videoStats.stepUs[4] = TicksToUs(svcGetSystemTick() - c1);
     q.convSlot  = freeSlot;
     q.convStart = end - frameTime;
     q.convEnd   = end;
@@ -571,9 +590,11 @@ void RSDK::ProcessVideo()
 
     if (VideoManager::initializing) {
         // LoadVideo: the first frame on the screen now, then the decoder
-        q.clockMs = -1000000;
+        q.clockMs        = -1000000;
+        const u64 first0 = svcGetSystemTick();
         while (!q.count && DecodeStep()) {
         }
+        videoStats.firstFrameMs = (uint16)(TicksToUs(svcGetSystemTick() - first0) / 1000);
         if (q.count) {
             VideoFrame::Show(q.slot[q.head]);
             q.head  = (q.head + 1) % VideoFrame::SLOTS;
@@ -587,7 +608,17 @@ void RSDK::ProcessVideo()
         // running, so it began a quarter of a second behind and lost 8-11 frames. Decoding runs faster than the
         // frames last (12-20 ms for 33 or 42), so the time spent here is won back.
         const u64 t0 = svcGetSystemTick();
-        while (q.count + (q.convSlot >= 0) < 6 && TicksToUs(svcGetSystemTick() - t0) < 120000 && DecodeStep()) {
+        for (;;) {
+            if (q.count + (q.convSlot >= 0) >= 6 || TicksToUs(svcGetSystemTick() - t0) >= 120000)
+                break;
+            const u64 s0     = svcGetSystemTick();
+            const bool32 got = DecodeStep();
+            if (!videoStats.prefillSteps)
+                memcpy(videoStats.prefillPhase, videoStats.stepUs, sizeof(videoStats.stepUs));
+            if (videoStats.prefillSteps < 8)
+                videoStats.prefillStepMs[videoStats.prefillSteps++] = (uint16)(TicksToUs(svcGetSystemTick() - s0) / 1000);
+            if (!got)
+                break;
         }
         QueueConverted(true);
         videoStats.prefilled  = (uint16)q.count;
@@ -643,14 +674,6 @@ void RSDK::ProcessVideo()
     const double frameTime = ti.fps_numerator ? (double)ti.fps_denominator / ti.fps_numerator : 1.0 / 30.0;
     const double clock     = engine.displayTime - engine.videoStartDelay;
     q.clockMs              = (s32)(clock * 1000.0);
-
-    if (now >= videoStats.nextReport) { // a timeline line every 5 s: where the music and the queue are
-        if (videoStats.nextReport)
-            DEV_LOG("video %s at %.2f s: %d queued, %u decoded, %u skipped, %u shown, %u dropped, %u late, %u passes, decode %u ms so far",
-                    videoStats.name, clock, (int)q.count, videoStats.decoded, videoStats.skipped, videoStats.shown, videoStats.dropped,
-                    videoStats.late, videoStats.passes, TicksToUs(videoStats.decodeTicks) / 1000);
-        videoStats.nextReport = now + 5ULL * SYSCLOCK_ARM11;
-    }
 
     // The newest queued frame whose time has come goes on the screen (any older one due too is dropped). Shown under
     // the lock: the decoder thread must not take the slot as free in between.
@@ -710,8 +733,14 @@ void RSDK::ProcessVideo()
 
         {
             char line[0x100];
-            int32 at = snprintf(line, sizeof(line), "video %s: %u frames ahead in %u ms; decoder start (ms after LoadVideo: took, decoded):",
-                                videoStats.name, videoStats.prefilled, videoStats.prefillMs);
+            int32 at = snprintf(line, sizeof(line), "video %s: slots and Y2R %u us (Y2R %s), first frame %u ms, %u ahead in %u ms (steps",
+                                videoStats.name, videoStats.prepareUs, VideoFrame::HardwareReady() ? "open" : "closed", videoStats.firstFrameMs,
+                                videoStats.prefilled, videoStats.prefillMs);
+            for (int32 i = 0; i < videoStats.prefillSteps; ++i) at += snprintf(line + at, sizeof(line) - at, " %u", videoStats.prefillStepMs[i]);
+            at += snprintf(line + at, sizeof(line) - at, "; first: queue %u read %u decode %u wait %u convert %u us)", videoStats.prefillPhase[0],
+                           videoStats.prefillPhase[1], videoStats.prefillPhase[2], videoStats.prefillPhase[3], videoStats.prefillPhase[4]);
+            DEV_LOG("%s", line);
+            at = snprintf(line, sizeof(line), "video %s thread (ms after LoadVideo: took, decoded):", videoStats.name);
             for (int32 i = 0; i < videoStats.traceCount && at < (int32)sizeof(line) - 24; ++i)
                 at += snprintf(line + at, sizeof(line) - at, " %u:%u,%u%s", videoStats.traceAt[i], videoStats.traceMs[i],
                                videoStats.traceDecoded[i], videoStats.traceResult[i] ? "" : "w");

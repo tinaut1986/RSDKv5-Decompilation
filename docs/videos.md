@@ -1,6 +1,6 @@
 # Videos and full-screen images
 
-The game shows nine Theora videos and one still image. The original 3DS port had video and image playback stubbed out
+The game shows ten Theora videos and one still image. The original 3DS port had video and image playback stubbed out
 (`LoadVideo` returned false at once), so the game skipped all of them without a word.
 
 | File | Where | Size |
@@ -8,11 +8,13 @@ The game shows nine Theora videos and one still image. The original 3DS port had
 | `Data/Video/Mania.ogv` | The intro (TitleSetup, after the title screen waits; music `IntroHP.ogg` 77.0 s, or `IntroTee.ogg` 77.7 s with the video 1.8 s in) | 1024x512, 23.98 fps, 1781 frames: 74.3 s, 30 MB |
 | `BadEnd.ogv`, `MREnd.ogv` | An ending's first clip, from the start of its music (`BadEnd.ogg`, 25.0 s) | 1024x512, 30 fps, 419 frames: 14.0 s |
 | `BadSonic`, `BadSonic2`, `BadTails`, `BadKnux`, `BadMighty`, `BadRay.ogv` | An ending's second clip, the character's, 14 s into the music | 1024x512, 30 fps, 316-319 frames: 10.5-10.6 s |
-| `Data/Images/TrueEnd.png` | The true ending (UIVideo, `LoadImage`) | 1024x512 |
+| `GoodEnd.ogv` | The good ending (scene `Ending/SceneG.bin`, music `GoodEnd.ogg` 42.0 s) | 1024x512, 30 fps, 1230 frames: 41.0 s, 7.4 MB |
+| `Data/Images/TrueEnd.png` | The true ending, "True End?" (UIVideo, `LoadImage`: a still picture 32 s long with its music, fading in and out) | 1024x512 |
 
-An ending's UIVideo plays `videoFile1` with the music and then `videoFile2` with a start delay of 14 s on the music's
+A bad ending's UIVideo plays `videoFile1` with the music and then `videoFile2` with a start delay of 14 s on the music's
 clock. The names (and their order) were found in the scene files (UTF-16 strings of the UIVideo attributes), not
-guessed.
+guessed. (The good ending's scene id is a single letter, `G`, which the first search, of two-letter ids, missed: it
+played from the pack, a few frames a second, until the owner noticed.)
 
 ## How it plays (Graphics/Video.cpp, Graphics/CTR/VideoFrame.cpp)
 
@@ -30,6 +32,9 @@ guessed.
   ahead by the time the music took to load, 240 ms for an ending's). `LoadVideo` decodes a few frames before the
   thread starts (up to 6, or 120 ms): the thread gets little of the core in the next 0.1-0.2 s, while the main thread
   finishes the scene's frame. Y2R is opened there too (7 ms) and stays open between videos.
+- **Reads of 64 KB.** The engine read the video 4 KB at a time; a read from the SD card costs ~10 ms however small, and
+  ffmpeg's Ogg pages hold a second of video each, so the second frame waited for ~15 reads (120-185 ms) and an
+  ending's second clip lost a dozen frames at its start. Nothing is written to the log while a video plays either.
 - **Y2R** (the camera's YUV -> RGB hardware, service `y2r:u`) converts a 4:2:0 frame at the screen's width (the
   converted videos): the planes are copied without the decoder's borders (~0.5 ms) and the conversion runs while the
   thread decodes the next frame; a frame is queued once it is done. Anything else (the pack's 1024x512 videos) is
@@ -60,12 +65,16 @@ python3 tools/convert-videos.py path/to/Data.rsdk out/Video   # then copy out/Vi
 ```
 
 The tool reads the videos out of the player's own `Data.rsdk` (decrypting them as `Reader.cpp` does) and re-encodes them
-with ffmpeg (libtheora) at 400x200, quality 4, a keyframe every 240 frames: 48.8 MB -> 4.7 MB. Each packet becomes one
+with ffmpeg (libtheora) at 400x200, 500 kbit/s, a keyframe every 240 frames: 56.2 MB -> 11.7 MB. A constant bit rate,
+not a constant quality: quality 4 (the first choice, 3.0 MB for the intro) looked blocky, and quality 6 or 7 made the
+intro stop and jump on the Old 2DS in its heavy stretches (21-24 s, 53-55 s, 70 s). At 500 kbit/s the quiet stretches
+(most of the videos) get ~3.5 times the bits quality 4 gave them, the heaviest half second about the same (79-92 KB at
+450-520 kbit/s against 80 at quality 4). libtheora's two-pass mode and `-bufsize` did not flatten the heavy stretches. Each packet becomes one
 frame at the stream's own rate (`setpts=N/rate`, `-fps_mode cfr`): ffmpeg would otherwise follow the granule jumps and
 add the 7 s hold and repeated frames. Each converted video keeps the original's packet count (checked with ffprobe).
 The game's data is never committed or shipped.
 
-## Measurements (Old 2DS, dev build, `debug/log.txt` has a line per video and a timeline every 5 s)
+## Measurements (Old 2DS, dev build, `debug/log.txt` has the lines of each video once it ends)
 
 | Video | Decode a frame (avg / max) | Shown |
 |---|---|---|
@@ -78,9 +87,15 @@ The game's data is never committed or shipped.
 | **Intro, 12 slots, prefill** | 15 ms | **1765 of 1769, none skipped or late; ends with the music at 74.30 s** |
 | **BadEnd / MREnd, 12 slots, prefill** | 15 ms | **419 of 419** |
 | BadKnux / BadMighty, 12 slots, prefill | 13 ms | 195 of 203, 197 of 205: 6-7 frames lost in the first 0.3-0.45 s |
+| Intro, quality 6 / 7 | 17 / 18 ms | 1676 / 1463 of ~1780: stops at 22-23 s, 53-55 s, 70-71 s |
+| **Intro, 500 kbit/s, 64 KB reads** | 16.7 ms / 55 ms | **1777 of 1780, none skipped or late; ends with the music at 74.30 s** |
+| **BadEnd, 500 kbit/s** | 15 ms | **419 of 419**; 6 frames ready in 130 ms before the thread starts |
+| **BadSonic / BadKnux, 500 kbit/s** | 13 ms | **none skipped**; 6 shown a little late in 0.28-0.41 s, 5 dropped |
+| **GoodEnd, 500 kbit/s** | | **1213 of 1213**; ends with the music at 40.99 s (of 42.0) |
 
 `debug/log.txt` also lists the stretches where a video fell behind ("behind:", with the slowest decode before each)
-and the decoder thread's first steps ("frames ahead in ... ms; decoder start").
+and how the start went (Y2R and the slots, the first frame, the frames ready before the thread, the first step's
+read / decode / convert times, the thread's first steps).
 
 On the PC (ffmpeg, one thread) quality 4 decodes in 75 % of quality 6's time and quality 3 in 62 %; a keyframe every
 240 frames saves another ~6 %.
@@ -91,6 +106,6 @@ On the PC (ffmpeg, one thread) quality 4 decodes in 75 % of quality 6's time and
   encoding Theora again several times more (an estimate: 10-20 min). Not done.
 - Integrating the converted videos in `Data.rsdk` instead of `Video/` (a rebuilt pack, ~44 MB smaller). Not done.
 - Faster decoding: devkitPro's libtheora is built without its ARM assembly.
-- An ending's second clip (the character's) loses 6-7 frames at its start: it is due 14 s into the music, which is
-  where the first clip ends, so it starts a little late, with its keyframe to decode (~3 times a frame) and the main
-  thread busy. Decoding it ahead would need to know the next clip while the first plays (UIVideo's `videoFile2`).
+- An ending's second clip (the character's) shows a few frames a little late at its start: it is due 14 s into the
+  music, which is where the first clip ends. Decoding it ahead would need to know the next clip while the first plays
+  (UIVideo's `videoFile2`).
