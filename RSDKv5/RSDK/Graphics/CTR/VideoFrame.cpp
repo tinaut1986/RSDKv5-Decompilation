@@ -404,13 +404,27 @@ uint32 VideoFrame::Version() { return sVersion; }
 void VideoFrame::WaitConversion() { EndY2R(100 * 1000000LL); }
 bool VideoFrame::ConversionDone() { return EndY2R(0); }
 
+uint32 VideoFrame::Prepare()
+{
+    const u64 t0 = svcGetSystemTick();
+    for (int32 i = 0; i < SLOTS; ++i) Slot(i);
+    OpenY2R();
+    return (uint32)((svcGetSystemTick() - t0) * 1000000ULL / SYSCLOCK_ARM11);
+}
+
+bool VideoFrame::HardwareReady() { return sY2R == Y2R_OPEN; }
+
 void VideoFrame::Release()
 {
-    bool any = sDimmed || sY2R != Y2R_CLOSED;
+    bool any = sDimmed || sY2R == Y2R_FAILED;
     for (int32 i = 0; i < SLOTS; ++i) any = any || sSlots[i];
     if (!any)
         return;
-    CloseY2R();
+    // Y2R stays open: opening it with a video's first frame made that video's first frames late (an ending's second
+    // clip starts the moment the first one ends). A failed one is tried again with the next video.
+    EndY2R(100 * 1000000LL);
+    if (sY2R == Y2R_FAILED)
+        CloseY2R();
     for (int32 i = 0; i < SLOTS; ++i) {
         free(sSlots[i]);
         sSlots[i] = NULL;

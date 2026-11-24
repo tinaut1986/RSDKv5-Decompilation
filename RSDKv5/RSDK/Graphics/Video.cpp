@@ -50,8 +50,57 @@ struct VideoStats {
     uint32 lateBins[4];  // frames shown after their time by < 17, < 33 ms, less than a frame, more
     uint32 gapBins[3];   // passes that came > 25, > 50, > 100 ms after the previous one
     uint32 clockSnaps;   // times the smoothed clock jumped to the music's position (more than 250 ms apart)
+    bool32 followingMusic; // the clock has taken the music's position once
+    // The decoder thread's first steps: when each began (ms after LoadVideo), how long it took, frames decoded after it
+    uint16 traceAt[16], traceMs[16], traceDecoded[16];
+    uint8 traceResult[16];
+    int32 traceCount;
+    uint16 prefilled, prefillMs; // frames queued by LoadVideo before the thread started, and the time it took
+    uint32 recentUs[8];  // the last decodes' times (the decoder thread), for the trouble spots
+    uint32 recentAt;
 };
 VideoStats videoStats;
+
+// Where the picture fell behind (frames decoded after their time, or shown more than a frame late), merged when less
+// than 0.3 s apart: the stretches the player sees stop and jump. Written under the queue's lock.
+struct VideoTrouble {
+    float from, to;      // the video's clock (s)
+    uint16 skipped, late;
+    uint16 keyframes;    // keyframes decoded in the stretch
+    uint32 maxDecodeUs;  // the slowest of the decodes just before
+};
+enum { VIDEO_TROUBLES = 24 };
+VideoTrouble videoTroubles[VIDEO_TROUBLES];
+int32 videoTroubleCount;
+
+uint32 RecentMaxDecodeUs()
+{
+    uint32 m = 0;
+    for (int32 i = 0; i < 8; ++i) m = videoStats.recentUs[i] > m ? videoStats.recentUs[i] : m;
+    return m;
+}
+
+void NoteTrouble(double t, bool skipped, bool keyframe)
+{
+    VideoTrouble *last = videoTroubleCount ? &videoTroubles[videoTroubleCount - 1] : NULL;
+    if (!last || t > last->to + 0.3) {
+        if (videoTroubleCount >= VIDEO_TROUBLES)
+            return;
+        last = &videoTroubles[videoTroubleCount++];
+        memset(last, 0, sizeof(*last));
+        last->from = (float)t;
+    }
+    last->to = (float)t;
+    if (skipped)
+        ++last->skipped;
+    else
+        ++last->late;
+    if (keyframe)
+        ++last->keyframes;
+    const uint32 m = RecentMaxDecodeUs();
+    if (m > last->maxDecodeUs)
+        last->maxDecodeUs = m;
+}
 
 // The frames decoded and converted ahead (VideoFrame's slots), oldest first. The decoder thread fills it; the main
 // thread shows each at its time. One slot more than the queue holds is the one on the screen.
@@ -112,12 +161,14 @@ bool32 RSDK::LoadVideo(const char *filename, double startDelay, bool32 (*skipCal
         opened                          = LoadFile(&VideoManager::file, loosePath, FMODE_RB);
         const int32 looseErrno          = errno;
         memset(&videoStats, 0, sizeof(videoStats));
+        videoTroubleCount = 0;
         memset(&videoQueue, 0, sizeof(videoQueue));
         VideoFrame::ResetStats();
         LightLock_Init(&videoQueue.lock);
         LightEvent_Init(&videoQueue.room, RESET_ONESHOT);
         videoQueue.convSlot = -1;
-        for (int32 i = 0; i < VideoFrame::SLOTS; ++i) VideoFrame::Slot(i); // here, not in the decoder thread
+        const uint32 prepUs = VideoFrame::Prepare(); // here, not in the decoder thread with the first frame
+        DEV_LOG("video %s: slots and Y2R ready in %u us (Y2R %s)", filename, prepUs, VideoFrame::HardwareReady() ? "open" : "not open");
         videoStats.loose = opened;
         if (!opened) {
             InitFileInfo(&VideoManager::file);
@@ -425,6 +476,7 @@ static bool32 DecodeStep()
     videoStats.decodeTicks += dt;
     if (dUs > videoStats.maxDecodeUs)
         videoStats.maxDecodeUs = dUs;
+    videoStats.recentUs[videoStats.recentAt++ & 7] = dUs;
     if (ret == TH_DUPFRAME) { // the picture stays for another frame
         ++videoStats.duplicates;
         return true;
@@ -435,6 +487,9 @@ static bool32 DecodeStep()
 
     if (end <= clock) {
         ++videoStats.skipped; // already over: not worth converting
+        LightLock_Lock(&q.lock);
+        NoteTrouble(clock, true, keyframe == 1);
+        LightLock_Unlock(&q.lock);
         if (clock - end > 0.5)
             q.seeking = true;
         return true;
@@ -456,7 +511,16 @@ static void VideoDecodeThread(void *)
 {
     VideoQueue &q = videoQueue;
     while (!q.stop) {
-        if (!DecodeStep()) {
+        const u64 t0     = svcGetSystemTick();
+        const bool32 got = DecodeStep();
+        if (videoStats.traceCount < 16) {
+            const int32 i              = videoStats.traceCount++;
+            videoStats.traceAt[i]      = (uint16)(TicksToUs(t0 - videoStats.startTick) / 1000);
+            videoStats.traceMs[i]      = (uint16)(TicksToUs(svcGetSystemTick() - t0) / 1000);
+            videoStats.traceDecoded[i] = (uint16)videoStats.decoded;
+            videoStats.traceResult[i]  = got ? 1 : 0;
+        }
+        if (!got) {
             if (q.ended)
                 break;
             // Nothing to decode until a slot is free: a frame still converting is queued as soon as it is done
@@ -517,7 +581,19 @@ void RSDK::ProcessVideo()
             ++videoStats.shown;
         }
         VideoManager::initializing = false;
-        q.clockMs                  = 0;
+
+        // A few frames more now, on this thread: the decoder thread gets little of the core for the next 0.1-0.2 s
+        // (the main thread finishes the scene's frame), and an ending's second clip starts with its music already
+        // running, so it began a quarter of a second behind and lost 8-11 frames. Decoding runs faster than the
+        // frames last (12-20 ms for 33 or 42), so the time spent here is won back.
+        const u64 t0 = svcGetSystemTick();
+        while (q.count + (q.convSlot >= 0) < 6 && TicksToUs(svcGetSystemTick() - t0) < 120000 && DecodeStep()) {
+        }
+        QueueConverted(true);
+        videoStats.prefilled  = (uint16)q.count;
+        videoStats.prefillMs  = (uint16)(TicksToUs(svcGetSystemTick() - t0) / 1000);
+
+        q.clockMs = 0;
         StartVideoDecoder();
         return;
     }
@@ -530,6 +606,13 @@ void RSDK::ProcessVideo()
     if (streamPos <= -1.0) {
         engine.displayTime += dt;
         ++videoStats.clockPasses;
+    }
+    else if (!videoStats.followingMusic) {
+        // The first pass with music (the video's first, or the music just started): the clock takes its position as
+        // it is. Moved on by the real time instead, it ran ahead by however long the music took to load (240 ms for
+        // an ending's: its first 9 frames were then over and skipped).
+        engine.displayTime        = streamPos;
+        videoStats.followingMusic = true;
     }
     else {
         const double prev = engine.displayTime;
@@ -589,8 +672,10 @@ void RSDK::ProcessVideo()
         ++videoStats.shown;
         const double lateBy = clock - poppedStart;
         ++videoStats.lateBins[lateBy < 0.017 ? 0 : lateBy < 0.033 ? 1 : lateBy < frameTime ? 2 : 3];
-        if (lateBy >= frameTime)
+        if (lateBy >= frameTime) {
             ++videoStats.late;
+            NoteTrouble(clock, false, false);
+        }
     }
     const bool32 drained = q.ended && !q.count && q.convSlot < 0 && clock >= (q.streamEnd > q.lastEnd ? q.streamEnd : q.lastEnd);
     LightLock_Unlock(&q.lock);
@@ -622,6 +707,26 @@ void RSDK::ProcessVideo()
                 TicksToUs(VideoFrame::ConvertTicks()) / convs, VideoFrame::HardwareConversions(), videoStats.lateBins[0],
                 videoStats.lateBins[1], videoStats.lateBins[2], videoStats.lateBins[3], videoStats.gapBins[0], videoStats.gapBins[1],
                 videoStats.gapBins[2]);
+
+        {
+            char line[0x100];
+            int32 at = snprintf(line, sizeof(line), "video %s: %u frames ahead in %u ms; decoder start (ms after LoadVideo: took, decoded):",
+                                videoStats.name, videoStats.prefilled, videoStats.prefillMs);
+            for (int32 i = 0; i < videoStats.traceCount && at < (int32)sizeof(line) - 24; ++i)
+                at += snprintf(line + at, sizeof(line) - at, " %u:%u,%u%s", videoStats.traceAt[i], videoStats.traceMs[i],
+                               videoStats.traceDecoded[i], videoStats.traceResult[i] ? "" : "w");
+            DEV_LOG("%s", line);
+        }
+        for (int32 i = 0; i < videoTroubleCount; i += 3) {
+            char line[0x100];
+            int32 at = snprintf(line, sizeof(line), "video %s behind:", videoStats.name);
+            for (int32 j = i; j < i + 3 && j < videoTroubleCount; ++j) {
+                const VideoTrouble &t = videoTroubles[j];
+                at += snprintf(line + at, sizeof(line) - at, " %.2f-%.2f s (%u skipped, %u late, %u key, decode up to %u ms)", t.from, t.to,
+                               t.skipped, t.late, t.keyframes, t.maxDecodeUs / 1000);
+            }
+            DEV_LOG("%s", line);
+        }
 
         CloseFile(&VideoManager::file);
 

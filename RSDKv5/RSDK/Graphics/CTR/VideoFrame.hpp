@@ -15,10 +15,17 @@ namespace RSDK
 namespace VideoFrame
 {
 
-enum { W = 400, H = 240, SLOTS = 4 };
+// 12 slots (2.3 MB): half a second ahead at 24 fps, through the intro's stretches of frames that cost more to decode
+// than they last (with 4, the picture stopped and jumped 4 times in a row around 21-23 s and at 53 s). A slot the heap
+// cannot give is left unused.
+enum { W = 400, H = 240, SLOTS = 12 };
 
 // The slot's picture, allocated on the first call (NULL without memory).
 uint16 *Slot(int32 slot);
+// At the start of a video, on the main thread: the slots, and Y2R opened (it stays open from then on). Returns the
+// time it took (us).
+uint32 Prepare();
+bool HardwareReady();
 
 // Where SetYUV converts (the engine's SetupVideoTexture_* calls reach it through the render device).
 void SetTarget(int32 slot);
@@ -41,7 +48,7 @@ const uint16 *Picture(float dim);
 // Changes whenever the picture does (the screen is only presented again then).
 uint32 Version();
 
-// Frees the slots and closes Y2R (called once the engine draws its own screens again).
+// Frees the slots (called once the engine draws its own screens again); Y2R stays open.
 void Release();
 
 // Frames converted since the last Release, the time it took (ticks of svcGetSystemTick), how many by Y2R.

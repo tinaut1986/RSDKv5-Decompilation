@@ -19,11 +19,17 @@ guessed.
 - **The converted copy first.** `LoadVideo` opens `sdmc:/3ds/Sonic Mania 3DS/Video/<name>` and falls back to the
   pack's. A video read from the pack uses a 64 KB stdio buffer (`OpenDataFile`): the engine's buffer the size of the
   file would be 30 MB for the intro.
-- **A decoder thread** on core 0, one priority below the main thread, decodes ahead into a queue (VideoFrame has 4
-  slots of 400x240 RGB565: the one on the screen and up to 3 queued). It runs while the main thread sleeps until its
-  next tick (the main thread used ~2 ms of each 16.7 ms pass during a video). Decoding on the main thread, a frame
-  when its time came, made every slow frame late the next ones and the pacing threw passes away (only 56 % of the
-  intro's frames were shown).
+- **A decoder thread** on core 0, one priority below the main thread, decodes ahead into a queue (VideoFrame has 12
+  slots of 400x240 RGB565, 2.3 MB: the one on the screen and up to 11 queued, half a second at 24 fps). It runs while
+  the main thread sleeps until its next tick (the main thread used ~2 ms of each 16.7 ms pass during a video).
+  Decoding on the main thread, a frame when its time came, made every slow frame late the next ones and the pacing
+  threw passes away (only 56 % of the intro's frames were shown). With 4 slots the intro still stopped and jumped in
+  its heaviest stretches, always the same ones (four times in a row around 21-23 s, at 53 s): frames that cost more
+  to decode (25-31 ms) than they last, for about a second. Half a second ahead carries it through them.
+- **The start.** The clock takes the music's position on its first pass with music (moved on by the real time, it ran
+  ahead by the time the music took to load, 240 ms for an ending's). `LoadVideo` decodes a few frames before the
+  thread starts (up to 6, or 120 ms): the thread gets little of the core in the next 0.1-0.2 s, while the main thread
+  finishes the scene's frame. Y2R is opened there too (7 ms) and stays open between videos.
 - **Y2R** (the camera's YUV -> RGB hardware, service `y2r:u`) converts a 4:2:0 frame at the screen's width (the
   converted videos): the planes are copied without the decoder's borders (~0.5 ms) and the conversion runs while the
   thread decodes the next frame; a frame is queued once it is done. Anything else (the pack's 1024x512 videos) is
@@ -69,6 +75,12 @@ The game's data is never committed or shipped.
 | **Intro, 400x200 quality 4, a frame a packet** | 15.2 ms / 42 ms | **1733 of 1769 (98 %), ends with the music at 76.11 s** |
 | BadEnd + BadSonic, quality 4, a frame a packet | 15 ms | 410 of 419, 197 of 206; end with the music at 14.01 and 24.61 s (of 25.0) |
 | MREnd + BadSonic2, quality 4 | 15.3 / 13.5 ms | 410 of 420, 195 of 205 |
+| **Intro, 12 slots, prefill** | 15 ms | **1765 of 1769, none skipped or late; ends with the music at 74.30 s** |
+| **BadEnd / MREnd, 12 slots, prefill** | 15 ms | **419 of 419** |
+| BadKnux / BadMighty, 12 slots, prefill | 13 ms | 195 of 203, 197 of 205: 6-7 frames lost in the first 0.3-0.45 s |
+
+`debug/log.txt` also lists the stretches where a video fell behind ("behind:", with the slowest decode before each)
+and the decoder thread's first steps ("frames ahead in ... ms; decoder start").
 
 On the PC (ffmpeg, one thread) quality 4 decodes in 75 % of quality 6's time and quality 3 in 62 %; a keyframe every
 240 frames saves another ~6 %.
@@ -79,3 +91,6 @@ On the PC (ffmpeg, one thread) quality 4 decodes in 75 % of quality 6's time and
   encoding Theora again several times more (an estimate: 10-20 min). Not done.
 - Integrating the converted videos in `Data.rsdk` instead of `Video/` (a rebuilt pack, ~44 MB smaller). Not done.
 - Faster decoding: devkitPro's libtheora is built without its ARM assembly.
+- An ending's second clip (the character's) loses 6-7 frames at its start: it is due 14 s into the music, which is
+  where the first clip ends, so it starts a little late, with its keyframe to decode (~3 times a frame) and the main
+  thread busy. Decoding it ahead would need to know the next clip while the first plays (UIVideo's `videoFile2`).
