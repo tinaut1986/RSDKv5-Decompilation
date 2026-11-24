@@ -8,6 +8,7 @@
 #include <citro3d.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 #include <sys/iosupport.h>
 
@@ -2020,12 +2021,19 @@ enum {
     PICK_BTN_W = 70,
 };
 
+// The Videos category (the endings) gets two rows after its scenes: the intro, which is not a scene (Port::PlayIntro),
+// with either of the two musics the title screen alternates.
+static int PickExtraRows(int category)
+{
+    return category < sceneInfo.categoryCount && !strcasecmp(sceneInfo.listCategory[category].name, "Videos") ? 2 : 0;
+}
+
 static int PickCount()
 {
     if (sPick == 1)
         return sceneInfo.categoryCount;
     if (sPick == 2 && sPickCat < sceneInfo.categoryCount)
-        return sceneInfo.listCategory[sPickCat].sceneCount;
+        return sceneInfo.listCategory[sPickCat].sceneCount + PickExtraRows(sPickCat);
     return 0;
 }
 
@@ -2046,7 +2054,12 @@ static void PickRowRect(int i, float *x, float *y)
 static void PickLabel(int i, char *out, unsigned cap)
 {
     if (sPick == 1) {
-        snprintf(out, cap, "%s (%d)", sceneInfo.listCategory[i].name, (int)sceneInfo.listCategory[i].sceneCount);
+        snprintf(out, cap, "%s (%d)", sceneInfo.listCategory[i].name, (int)sceneInfo.listCategory[i].sceneCount + PickExtraRows(i));
+        return;
+    }
+    const int scenes = sceneInfo.listCategory[sPickCat].sceneCount;
+    if (i >= scenes) {
+        snprintf(out, cap, "%s", Tr(i == scenes ? "INTRO" : "INTRO (ALT. MUSIC)"));
         return;
     }
     const int first  = sceneInfo.listCategory[sPickCat].sceneOffsetStart;
@@ -2145,7 +2158,11 @@ static int PickInput(u32 held, u32 down, const touchPosition &t)
                 sPickScroll = 0;
             }
             else {
-                Port::LoadScene(sPickCat, row);
+                const int scenes = sceneInfo.listCategory[sPickCat].sceneCount;
+                if (row >= scenes)
+                    Port::PlayIntro(row > scenes);
+                else
+                    Port::LoadScene(sPickCat, row);
                 sPick = 0;
             }
         }

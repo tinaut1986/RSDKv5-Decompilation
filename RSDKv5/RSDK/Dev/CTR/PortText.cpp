@@ -116,6 +116,8 @@ static const char *const kText[][COLS] = {
     { "PREV", "PRÉC.", "PREC.", "ZURÜCK", "ANT.", "前へ" },
     { "CLOSE", "FERMER", "CHIUDI", "SCHLIESSEN", "CERRAR", "閉じる" },
     { "BACK", "RETOUR", "INDIETRO", "ZURÜCK", "ATRÁS", "戻る" },
+    { "INTRO", "INTRO", "INTRO", "INTRO", "INTRO", "イントロ" },
+    { "INTRO (ALT. MUSIC)", "INTRO (MUSIQUE ALT.)", "INTRO (MUSICA ALT.)", "INTRO (ALT. MUSIK)", "INTRO (MÚSICA ALT.)", "イントロ (別の曲)" },
     { "NEXT", "SUIV.", "SUCC.", "WEITER", "SIG.", "次へ" },
     { "UPDATE AVAILABLE", "MISE À JOUR DISPONIBLE", "AGGIORNAMENTO DISPONIBILE", "UPDATE VERFÜGBAR", "ACTUALIZACIÓN DISPONIBLE", "更新があります" },
     { "NEW VERSION", "NOUVELLE VERSION", "NUOVA VERSIONE", "NEUE VERSION", "VERSIÓN NUEVA", "新バージョン" },

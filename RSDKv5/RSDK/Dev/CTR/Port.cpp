@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 
 using namespace RSDK;
@@ -140,6 +141,39 @@ void Port::LoadScene(int category, int scene)
     sceneInfo.listPos        = (uint16)(l->sceneOffsetStart + scene);
     sceneInfo.state          = ENGINESTATE_LOAD;
     PortGame_SceneMode(l->name); // the game mode follows the category (Encore Mode -> Encore), as the menus set it
+}
+
+// The intro is not a scene: the title screen plays it after waiting (TitleSetup_State_FadeToVideo). This does the same:
+// the title scene is loaded again (it runs once the video ends), the music starts and the video plays over it, A, B
+// or START skipping it. The title alternates the two musics; altMusic is the other one, IntroTee.ogg, which starts
+// 1.8 s before the video.
+static bool32 IntroSkip()
+{
+    const ControllerState &c = controller[CONT_ANY];
+    if (!c.keyA.press && !c.keyB.press && !c.keyStart.press)
+        return false;
+    for (int32 ch = 0; ch < CHANNEL_COUNT; ++ch)
+        if (channels[ch].state == CHANNEL_STREAM)
+            StopChannel(ch);
+    return true;
+}
+
+void Port::PlayIntro(bool altMusic)
+{
+    for (int c = 0; c < sceneInfo.categoryCount; ++c) {
+        const SceneListInfo *l = &sceneInfo.listCategory[c];
+        for (int s = 0; s < l->sceneCount; ++s) {
+            if (strcasecmp(sceneInfo.listData[l->sceneOffsetStart + s].name, "Title Screen"))
+                continue;
+            for (int32 ch = 0; ch < CHANNEL_COUNT; ++ch)
+                if (channels[ch].state == CHANNEL_STREAM)
+                    StopChannel(ch);
+            LoadScene(c, s);
+            PlayStream(altMusic ? "IntroTee.ogg" : "IntroHP.ogg", 0, 0, 0, false);
+            LoadVideo("Mania.ogv", altMusic ? 1.8 : 0.0, IntroSkip);
+            return;
+        }
+    }
 }
 
 // ---------------------------------------------------------------- Sonic Mania Plus
