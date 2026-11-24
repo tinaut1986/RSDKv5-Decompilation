@@ -63,6 +63,12 @@ def decrypt(data, name, size):
     return bytes(out)
 
 
+def theora_fps(ogv):
+    """The frame rate (numerator, denominator) in the Theora identification header."""
+    at = ogv.index(bytes([0x80]) + b'theora') + 7
+    return struct.unpack('>II', ogv[at + 15:at + 23])
+
+
 class Pack:
     def __init__(self, path):
         with open(path, 'rb') as f:
@@ -112,8 +118,14 @@ def main():
         dst = os.path.join(args.out, name)
         with open(src, 'wb') as f:
             f.write(data)
-        cmd = [args.ffmpeg, '-v', 'error', '-y', '-i', src, '-an', '-vf', 'scale=%d:%d:flags=lanczos' % (width, height), '-c:v',
-               'libtheora', '-q:v', str(args.quality), '-g', str(args.keyint), dst]
+        # One output frame per packet, at the stream's own rate, as the game plays them: libtheora counts packets and
+        # the engine never sets the decoder's granule position, so the jumps in the pages' granule positions (the
+        # intro's first frame "held" 7 s, a few more later) are not in the game. Following them, as ffmpeg does by
+        # default, made the converted intro 7.5 s longer than its music.
+        fps = theora_fps(data)
+        vf = 'setpts=N/(%d/%d)/TB,scale=%d:%d:flags=lanczos' % (fps[0], fps[1], width, height)
+        cmd = [args.ffmpeg, '-v', 'error', '-y', '-i', src, '-an', '-vf', vf, '-fps_mode', 'cfr', '-r', '%d/%d' % fps,
+               '-c:v', 'libtheora', '-q:v', str(args.quality), '-g', str(args.keyint), dst]
         subprocess.run(cmd, check=True)
         if not args.keep_original:
             os.remove(src)

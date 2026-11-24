@@ -61,9 +61,10 @@ struct VideoQueue {
     int32 head, count;
     double lastEnd;       // the end of the last frame queued
     volatile double streamEnd; // the end of the last packet read, duplicates too (a still stretch is coded as such)
-    ogg_int64_t granule;  // the granule position of the last packet read: the page's own when it has one, else the
-                          // previous one moved on a frame (times come from this, not from the decoder, which loses
-                          // track when packets are dropped; the pack's intro holds its first frame 7 s by a jump)
+    int64 packets;        // video packets read: a frame each, as libtheora counts them on the PC (the engine never
+                          // sets the decoder's granule position, so the jumps in the pages' granule positions, such
+                          // as the intro's first frame "held" 7 s, are not in the game: following them made the
+                          // intro 7.5 s longer than its music). Counted here, as packets dropped undecoded count too.
     bool seeking;         // far behind: dropping packets up to the next keyframe still ahead of the clock
     int32 convSlot;       // a frame still being converted (Y2R), queued once done; -1: none
     double convStart, convEnd;
@@ -402,15 +403,7 @@ static bool32 DecodeStep()
     const th_info &ti      = VideoManager::ti;
     const double frameTime = ti.fps_numerator ? (double)ti.fps_denominator / ti.fps_numerator : 1.0 / 30.0;
     const int32 keyframe   = th_packet_iskeyframe(&VideoManager::op);
-    if (VideoManager::op.granulepos >= 0)
-        q.granule = VideoManager::op.granulepos;
-    else {
-        const int32 shift        = ti.keyframe_granule_shift;
-        const ogg_int64_t iframe = q.granule >> shift;
-        const ogg_int64_t pframe = q.granule - (iframe << shift);
-        q.granule                = keyframe == 1 ? (iframe + pframe + 1) << shift : q.granule + 1;
-    }
-    const double end = th_granule_time(VideoManager::td, q.granule); // this frame's end
+    const double end       = (double)(++q.packets) * frameTime; // this frame's end
     const double clock     = q.clockMs / 1000.0;
     q.streamEnd            = end;
 
@@ -612,6 +605,8 @@ void RSDK::ProcessVideo()
     if (finished) {
         StopVideoDecoder();
         EndVideoConversions();
+        DEV_LOG("video %s: ends with the music at %.2f s (the video's start delay %.2f s, its last frame's end %.2f s)", videoStats.name,
+                GetVideoStreamPos(), engine.videoStartDelay, q.streamEnd > q.lastEnd ? q.streamEnd : q.lastEnd);
 
         const uint32 frames = videoStats.decoded ? videoStats.decoded : 1;
         const uint32 convs  = VideoFrame::Conversions() ? VideoFrame::Conversions() : 1;
