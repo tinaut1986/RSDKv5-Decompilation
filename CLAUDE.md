@@ -142,7 +142,8 @@ tools/fbi-install.py IP [file.cia]          # send a CIA to FBI's Remote Install
 
 Files on the SD (`sdmc:/3ds/Sonic Mania 3DS/`): `Data.rsdk`, `debug/log.txt` (boot steps), `debug/perf-NNNN.csv` (one row a
 second), `port-settings.ini` (the bottom-screen options, `plus`/`plusasked` for Sonic Mania Plus, and, in dev builds, the switches; `dev-settings.ini` is the old
-name, read once; `Settings.ini` is the game's own). Luma crash dumps are in `/luma/dumps/arm11/`; resolve the PC/LR with
+name, read once; `Settings.ini` is the game's own), `Video/` (the videos converted by `tools/convert-videos.py`, played
+instead of the pack's: [`docs/videos.md`](docs/videos.md); each video logs a line with its numbers). Luma crash dumps are in `/luma/dumps/arm11/`; resolve the PC/LR with
 `arm-none-eabi-addr2line -f -C -e bin/3DS/CTR/RSDKv5U.elf` (see the dump format in `docs/gpu-renderer.md` lessons:
 `crash_dump` words 10.. are r0-r12, sp, lr, pc, cpsr).
 

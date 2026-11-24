@@ -164,6 +164,7 @@ RSDK_SOURCES += \
 	RSDKv5/RSDK/Graphics/CTR/GpuFrame 		\
 	RSDKv5/RSDK/Graphics/CTR/GpuRender 		\
 	RSDKv5/RSDK/Graphics/CTR/GpuScene3D 		\
+	RSDKv5/RSDK/Graphics/CTR/VideoFrame 		\
 	RSDKv5/RSDK/Storage/Storage       		\
 	RSDKv5/RSDK/Storage/Text         		\
 	RSDKv5/RSDK/Graphics/Drawing      		\

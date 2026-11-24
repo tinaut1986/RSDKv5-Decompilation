@@ -624,6 +624,14 @@ uint32 RSDK::GetChannelPos(uint32 channel)
 
 double RSDK::GetVideoStreamPos()
 {
+#if RETRO_AUDIODEVICE_CTR
+    // What is being heard, not what stb_vorbis decoded (on core 1, ahead by the ring); the stream on any channel
+    for (int32 c = 0; c < CHANNEL_COUNT; ++c) {
+        if (channels[c].state == CHANNEL_STREAM && AudioDevice::initializedAudioChannels && vorbisInfo)
+            return CtrMusicPos() / (double)AUDIO_FREQUENCY;
+    }
+    return -1.0;
+#endif
     if (channels[0].state == CHANNEL_STREAM && AudioDevice::audioState && AudioDevice::initializedAudioChannels && vorbisInfo->current_loc_valid) {
         return vorbisInfo->current_loc / (double)AUDIO_FREQUENCY;
     }

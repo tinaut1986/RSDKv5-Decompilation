@@ -321,9 +321,15 @@ bool32 RSDK::OpenDataFile(FileInfo *info, const char *filename)
             }
 
 #if USE_SETVBUF
+            // A video is read a little at a time while it plays: a buffer the size of the file (the intro is 30 MB)
+            // would not fit in memory and would be filled whole by the first read.
+            size_t bufSize = file->size;
+            const size_t nameLen = strlen(filename);
+            if (nameLen > 4 && !strcmp(filename + nameLen - 4, ".ogv") && bufSize > 0x10000)
+              bufSize = 0x10000;
             if (!info->iocache)
-              info->iocache = (uint8*)malloc(file->size);
-            setvbuf(info->file, (char*)info->iocache, _IOFBF, file->size);
+              info->iocache = (uint8*)malloc(bufSize);
+            setvbuf(info->file, (char*)info->iocache, _IOFBF, bufSize);
             fSeek(info->file, file->offset, SEEK_SET);
 #endif
         }
