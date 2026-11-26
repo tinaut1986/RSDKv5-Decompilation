@@ -2,6 +2,7 @@
 
 #if RETRO_PLATFORM == RETRO_3DS
 #include "RSDK/Dev/CTR/DevTools.hpp"
+#include "RSDK/Dev/CTR/BottomUi.hpp"
 #include <errno.h>
 #include "RSDK/Graphics/CTR/VideoFrame.hpp"
 #endif
@@ -584,6 +585,7 @@ static void FinishVideo()
 {
     VideoQueue &q     = videoQueue;
     const th_info &ti = VideoManager::ti;
+    BottomUi::SetVideoNotice(false);
     StopVideoDecoder();
     EndVideoConversions();
     DEV_LOG("video %s: ends with the music at %.2f s (the video's start delay %.2f s, its last frame's end %.2f s)", videoStats.name,
@@ -658,7 +660,9 @@ void RSDK::ProcessVideo()
     const u64 now   = svcGetSystemTick();
 
     if (VideoManager::initializing) {
-        // LoadVideo: the first frame on the screen now, then the decoder
+        // LoadVideo: the first frame on the screen now, then the decoder. A picture wider than the screen is the
+        // pack's own video, which the console cannot decode in time: the top screen says so while it plays.
+        BottomUi::SetVideoNotice(VideoManager::ti.pic_width > VideoFrame::W);
         q.clockMs        = -1000000;
         const u64 first0 = svcGetSystemTick();
         while (!q.count && DecodeStep()) {

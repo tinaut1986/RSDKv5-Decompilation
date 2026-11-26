@@ -60,6 +60,10 @@ played from the pack, a few frames a second, until the owner noticed.)
 
 ## Converting
 
+The pack's own videos still play when nothing is converted, a few frames a second on an Old 3DS: a line under the
+picture says so (BottomUi::SetVideoNotice, on while a video wider than the screen plays), so the game does not look
+broken. Converted videos are 400 wide, wherever they are read from, and play without it.
+
 ```sh
 python3 tools/convert-videos.py path/to/Data.rsdk out/Video   # then copy out/Video/* to sdmc:/3ds/Sonic Mania 3DS/Video/
 ```
@@ -73,6 +77,12 @@ intro stop and jump on the Old 2DS in its heavy stretches (21-24 s, 53-55 s, 70 
 frame at the stream's own rate (`setpts=N/rate`, `-fps_mode cfr`): ffmpeg would otherwise follow the granule jumps and
 add the 7 s hold and repeated frames. Each converted video keeps the original's packet count (checked with ffprobe).
 The game's data is never committed or shipped.
+
+`--pack NEW.rsdk` writes a copy of the pack with the converted videos inside it instead of (or besides) the folder:
+the videos stored unencrypted (the engine reads unencrypted entries as they are: the PC game's pack has 66 of them),
+every other file copied as it was, still encrypted (the key comes from a file's path and size, not its place). For
+the owner's pack: 208.4 MB -> 163.9 MB, the 1879 other entries identical (checked byte for byte). It goes on the SD
+card as `Data.rsdk` in place of the original; with it, no `Video/` folder is needed.
 
 ## Measurements (Old 2DS, dev build, `debug/log.txt` has the lines of each video once it ends)
 

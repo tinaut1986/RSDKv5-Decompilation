@@ -43,6 +43,8 @@ void Touch(int x, int y);
 // The FPS counter of OPTIONS > SHOW FPS on the top screen: drawn with citro2d into the top target at the end of a
 // GPU frame, or into the software picture (RGB565) before it is presented.
 void DrawTopOverlayGpu(void *target); // C3D_RenderTarget*
+// While a video too big for the console plays (not converted on a PC): a line under its picture saying so
+void SetVideoNotice(bool on);
 void DrawTopOverlaySoft(unsigned short *fb, int pitch);
 // At the end of the top screen's citro3d frame (GPU and CPU presentation): the GAME tab's TIME box, redrawn into the
 // bottom target when the time changed, so the hundredths run at the game's rate between the full redraws.

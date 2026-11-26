@@ -2613,13 +2613,19 @@ static int OverlayLines(char lines[3][16], u32 colors[3], int *bx, int *by, int 
     return n;
 }
 
+// A video too big for the console (the pack's 1024x512, not converted on a PC) plays a few frames a second: said on
+// the top screen, in the black band under its picture, so the game does not look broken
+static bool sVideoNotice;
+
+void BottomUi::SetVideoNotice(bool on) { sVideoNotice = on; }
+
 void BottomUi::DrawTopOverlayGpu(void *target)
 {
     char lines[3][16];
     u32 colors[3];
     int bx, by, bw, bh;
     const int n = OverlayLines(lines, colors, &bx, &by, &bw, &bh);
-    if (!n || !sReady)
+    if ((!n && !sVideoNotice) || !sReady)
         return;
     C2D_Prepare();
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
@@ -2627,10 +2633,17 @@ void BottomUi::DrawTopOverlayGpu(void *target)
     C3D_AlphaTest(false, GPU_ALWAYS, 0);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
     C2D_SceneBegin((C3D_RenderTarget *)target);
-    C2D_DrawRectSolid(bx, by, 0.5f, bw, bh, C2D_Color32(0, 0, 0, 150));
-    for (int i = 0; i < n; ++i) {
-        const u32 c = C2D_Color32((colors[i] >> 16) & 0xFF, (colors[i] >> 8) & 0xFF, colors[i] & 0xFF, 255);
-        UiFont::Runs(lines[i], bx + 2, by + 2 + i * 10, [&](int x, int y, int w) { C2D_DrawRectSolid(x, y, 0.6f, w, 1, c); });
+    if (n) {
+        C2D_DrawRectSolid(bx, by, 0.5f, bw, bh, C2D_Color32(0, 0, 0, 150));
+        for (int i = 0; i < n; ++i) {
+            const u32 c = C2D_Color32((colors[i] >> 16) & 0xFF, (colors[i] >> 8) & 0xFF, colors[i] & 0xFF, 255);
+            UiFont::Runs(lines[i], bx + 2, by + 2 + i * 10, [&](int x, int y, int w) { C2D_DrawRectSolid(x, y, 0.6f, w, 1, c); });
+        }
+    }
+    if (sVideoNotice) {
+        const char *notice = Tr("NOT CONVERTED FOR THE 3DS: IT PLAYS IN JUMPS. SEE OPTIONS > VIDEOS");
+        Text(notice, 201, 225, 0.38f, C2D_Color32(0, 0, 0, 255), C2D_AlignCenter, 0.65f);
+        Text(notice, 200, 224, 0.38f, Rgb(240, 200, 80), C2D_AlignCenter, 0.66f);
     }
     C2D_Flush();
 }

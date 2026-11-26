@@ -5,10 +5,15 @@ Reads the videos out of the player's own Data.rsdk (the intro, the bad endings' 
 Theora 1024x512) and re-encodes them with ffmpeg at the top screen's size (400x200 by default, 500 kbit/s, a keyframe
 every 240 frames), which costs the Old 3DS ~4 times less to decode and takes a sixth of the space (56 MB -> ~12 MB).
 On an Old 2DS the intro then shows all of its frames but the first few; the pack's own 1024x512 videos play too, but
-only a few frames a second. The results go to OUT_DIR; copy that folder's files to sdmc:/3ds/Sonic Mania 3DS/Video/
-and the port plays them instead of the pack's (Graphics/Video.cpp).
+only a few frames a second (the game says so under the picture). Two ways to hand them to the port:
 
-    python3 tools/convert-videos.py path/to/Data.rsdk out/Video [--size 400x200] [--bitrate 500k] [--keep-original]
+    python3 tools/convert-videos.py path/to/Data.rsdk Video
+        a folder of converted videos: copy it into sdmc:/3ds/Sonic Mania 3DS/ (the port plays those first)
+    python3 tools/convert-videos.py path/to/Data.rsdk --pack Data-3ds.rsdk
+        a copy of Data.rsdk with the converted videos inside it (~44 MB smaller): rename it Data.rsdk and put it in
+        place of the original on the SD card; nothing else is needed
+
+    [--size 400x200] [--bitrate 500k] [--keep-original]
 
 A constant bit rate, not a constant quality: the quiet stretches (most of the videos) get several times the bits
 quality 4 gave them (which looked blocky), while the few heavy ones (the intro's 21-24 s and 53-55 s) stay as cheap to
@@ -23,6 +28,7 @@ import os
 import struct
 import subprocess
 import sys
+import tempfile
 
 # Data/Video/ files the game plays: TitleSetup (the intro) and the Ending scenes' UIVideo objects
 VIDEOS = ['Mania.ogv', 'BadSonic.ogv', 'BadSonic2.ogv', 'BadTails.ogv', 'BadKnux.ogv', 'BadMighty.ogv', 'BadRay.ogv', 'BadEnd.ogv',
@@ -82,12 +88,42 @@ class Pack:
             sys.exit('%s is not an RSDK data pack' % path)
         count = struct.unpack_from('<H', self.data, 6)[0]
         self.files = {}
+        self.entries = [] # in the pack's order: (digest, offset, size, encrypted)
         pos = 8
         for _ in range(count):
             digest = self.data[pos:pos + 16]
             offset, size = struct.unpack_from('<II', self.data, pos + 16)
             pos += 24
             self.files[digest] = (offset, size & 0x7FFFFFFF, bool(size & 0x80000000))
+            self.entries.append((digest, offset, size & 0x7FFFFFFF, bool(size & 0x80000000)))
+
+    @staticmethod
+    def digest(path):
+        return word_swap(hashlib.md5(path.lower().encode()).digest())
+
+    def write(self, path, replace):
+        """A copy of the pack with the files in `replace` (digest -> contents) stored unencrypted, the others as they are
+        (still encrypted: the key comes from a file's path and size, not from where it lies)."""
+        header = 8 + 24 * len(self.entries)
+        view = memoryview(self.data)
+        entries, bodies, at = [], [], header
+        for digest, offset, size, encrypted in self.entries:
+            if digest in replace:
+                body, flags = replace[digest], len(replace[digest])
+            else:
+                body, flags = view[offset:offset + size], size | (0x80000000 if encrypted else 0)
+            entries.append(digest + struct.pack('<II', at, flags))
+            bodies.append(body)
+            at += len(body)
+        if at > 0xFFFFFFFF:
+            sys.exit('the new pack would be over 4 GB')
+        with open(path, 'wb') as f:
+            f.write(self.data[:8]) # RSDK, the version, the file count
+            for e in entries:
+                f.write(e)
+            for b in bodies:
+                f.write(b)
+        return at
 
     def read(self, path):
         digest = word_swap(hashlib.md5(path.lower().encode()).digest())
@@ -100,8 +136,9 @@ class Pack:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('pack', help='Data.rsdk')
-    ap.add_argument('out', help='output folder (its files go to sdmc:/3ds/Sonic Mania 3DS/Video/)')
+    ap.add_argument('pack_in', metavar='Data.rsdk', help="the game's data pack (yours, from the PC game)")
+    ap.add_argument('out', nargs='?', help='output folder (copy it into sdmc:/3ds/Sonic Mania 3DS/)')
+    ap.add_argument('--pack', metavar='NEW.rsdk', help='also write a copy of the pack with the converted videos inside it')
     ap.add_argument('--size', default='400x200', help='picture size, WxH (default 400x200: 1024x512 scaled to the top screen)')
     ap.add_argument('--bitrate', default='500k', help='video bit rate (default 500k: the intro is ~4.5 MB)')
     ap.add_argument('--quality', type=int, default=None,
@@ -111,17 +148,24 @@ def main():
     ap.add_argument('--keep-original', action='store_true', help='also write the pack\'s videos as they are (*.orig.ogv)')
     args = ap.parse_args()
 
+    if not args.out and not args.pack:
+        ap.error('give an output folder, --pack NEW.rsdk, or both')
+    if args.pack and os.path.abspath(args.pack) == os.path.abspath(args.pack_in):
+        ap.error('--pack must be a new file: put it in place of the original yourself once it is written')
     width, height = (int(v) for v in args.size.lower().split('x'))
-    pack = Pack(args.pack)
-    os.makedirs(args.out, exist_ok=True)
+    pack = Pack(args.pack_in)
+    work = tempfile.TemporaryDirectory() if not args.out else None
+    out = args.out or work.name
+    os.makedirs(out, exist_ok=True)
+    converted = {}
     total_in = total_out = 0
     for name in VIDEOS:
         data = pack.read('Data/Video/' + name)
         if data is None:
             print('%-14s not in the pack, skipped' % name)
             continue
-        src = os.path.join(args.out, name[:-4] + '.orig.ogv')
-        dst = os.path.join(args.out, name)
+        src = os.path.join(out, name[:-4] + '.orig.ogv')
+        dst = os.path.join(out, name)
         with open(src, 'wb') as f:
             f.write(data)
         # One output frame per packet, at the stream's own rate, as the game plays them: libtheora counts packets and
@@ -137,10 +181,18 @@ def main():
         if not args.keep_original:
             os.remove(src)
         size_out = os.path.getsize(dst)
+        with open(dst, 'rb') as f:
+            converted[Pack.digest('Data/Video/' + name)] = f.read()
         total_in += len(data)
         total_out += size_out
         print('%-14s %6.1f MB -> %5.1f MB' % (name, len(data) / 1e6, size_out / 1e6))
-    print('total          %6.1f MB -> %5.1f MB in %s' % (total_in / 1e6, total_out / 1e6, args.out))
+    if args.out:
+        print('total          %6.1f MB -> %5.1f MB in %s' % (total_in / 1e6, total_out / 1e6, args.out))
+    if args.pack:
+        size = pack.write(args.pack, converted)
+        print('%s: %.1f MB (the original %.1f MB), %d videos inside' % (args.pack, size / 1e6, len(pack.data) / 1e6, len(converted)))
+    if work:
+        work.cleanup()
 
 
 if __name__ == '__main__':
