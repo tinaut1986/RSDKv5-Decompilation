@@ -66,16 +66,21 @@ runs, silent. It is Nintendo's, so it is never part of a download.
 
 **Videos** (the intro and the endings): the game's own are 1024x512, too heavy for an Old 3DS, which shows only a few
 frames a second of them (the game says so under the picture: the game is not broken). Convert them once on a PC (about
-a minute; needs Python 3 and ffmpeg), in either of two ways:
+a minute): double-click `tools/convert-videos.bat` on Windows, or run `tools/convert-videos.sh` on Linux and macOS. A
+window opens (in the PC's language, or the one picked in it): choose your `Data.rsdk` (it finds Steam's) and what to
+make, and follow the bar. The launchers check for Python 3 and ffmpeg and offer to install what is missing (with winget
+on Windows, with the system's package manager on Linux and Homebrew on macOS).
+
+It makes either a `Video` folder, to copy into `sdmc:/3ds/Sonic Mania 3DS/` (about 12 MB), or a copy of `Data.rsdk`
+with the converted videos inside it (about 44 MB smaller), to put on the SD card in place of the original. In a
+terminal it works too:
 
 ```text
 python3 tools/convert-videos.py "path/to/Data.rsdk" Video
 python3 tools/convert-videos.py "path/to/Data.rsdk" --pack Data-3ds.rsdk
 ```
 
-The first makes a `Video` folder: copy it into `sdmc:/3ds/Sonic Mania 3DS/` (about 12 MB). The second makes a copy of
-`Data.rsdk` with the converted videos inside it (about 44 MB smaller): copy it to the SD card as `Data.rsdk`, in place of
-the original. OPTIONS > VIDEOS shows how many are converted.
+OPTIONS > VIDEOS shows how many are converted.
 
 **Sonic Mania Plus** (Mighty, Ray, Encore mode) is off by default, as the decompilation's license asks of every build
 given to anyone. When the game data has the Plus content, the first start asks whether to turn it on; do so only if
