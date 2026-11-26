@@ -102,8 +102,13 @@ On the PC (ffmpeg, one thread) quality 4 decodes in 75 % of quality 6's time and
 
 ## Open
 
-- Converting on the console (the owner's question): decoding the pack's intro there takes ~2 min on an Old 3DS and
-  encoding Theora again several times more (an estimate: 10-20 min). Not done.
+- Converting on the console was built (OPTIONS > VIDEOS: a question with the time, a progress screen with CANCEL) and
+  taken out again (2026-11-26, the owner: PC only for now). devkitPro's `3ds-libtheora` has no encoder:
+  `libtheoraenc.a` is a 2.8 KB stub (`encoder_disabled.o`) and `th_encode_alloc` always returns NULL. It would need
+  libtheora built from Xiph's source with the encoder (and the release workflow building it too). Memory is tight as
+  well: at the title screen the heap is 62.5 MB with 52.9 MB in use, and decoding the pack's 1024x512 intro takes
+  4.8 MB of the 9.6 left. OPTIONS > VIDEOS now shows how many are converted (VideoFiles.cpp) and, tapped, says to
+  convert the rest on a PC.
 - Integrating the converted videos in `Data.rsdk` instead of `Video/` (a rebuilt pack, ~44 MB smaller). Not done.
 - Faster decoding: devkitPro's libtheora is built without its ARM assembly.
 - An ending's second clip (the character's) shows a few frames a little late at its start: it is due 14 s into the

@@ -1,5 +1,6 @@
 #include "RSDK/Core/RetroEngine.hpp"
 #include "RSDK/Dev/CTR/BottomUi.hpp"
+#include "RSDK/Dev/CTR/VideoFiles.hpp"
 
 #if RETRO_PLATFORM == RETRO_3DS
 
@@ -204,6 +205,19 @@ static void TextFit(const char *s, float x, float y, float scale, u32 color, flo
 
 static u64 sLastDraw;
 static int sPressed = -1;
+
+// The press ripple: a white disc that grows from where the touch landed until it covers the element (~220 ms), kept
+// to the element's shape (a cut theme's corner too), fading out once released (~180 ms). It stands for the pressed
+// colours on the elements that have it (PressedLook).
+static struct {
+    bool on;
+    int hit;
+    float x, y, w, h; // the element
+    float tx, ty;     // the touch
+    u64 start, released;
+} sRipple;
+
+static bool PressedLook(int hit) { return sPressed == hit && !(sRipple.on && sRipple.hit == hit); }
 
 // Saves the options the bottom screen changed (and the dev tools' switches with them).
 static void SaveAll()
@@ -536,29 +550,54 @@ static void DrawTabBar()
         DrawTabIcon(tabs[i], x + TAB_W / 2.0f, y + TAB_H / 2.0f, on ? Rgb(255, 255, 255) : T().tabIcon, 0.74f);
     }
 
-    // Battery, then the clock, at the right end
-    u8 level = 5, charging = 0;
-    PTMU_GetBatteryLevel(&level);
-    PTMU_GetBatteryChargeState(&charging);
-    const float bx = W - 22, by = 9;
-    C2D_DrawRectSolid(bx, by, 0.72f, 15, 8, T().battery);
-    C2D_DrawRectSolid(bx + 15, by + 2, 0.72f, 2, 4, T().battery);
-    C2D_DrawRectSolid(bx + 1, by + 1, 0.73f, 13, 6, T().bg);
-    const u32 fill = charging ? Rgb(100, 220, 255) : level <= 1 ? Rgb(240, 100, 100) : level == 2 ? Rgb(240, 200, 80) : Rgb(110, 220, 130);
-    C2D_DrawRectSolid(bx + 2, by + 2, 0.74f, 11.0f * (level > 5 ? 5 : level) / 5, 4, fill);
+    // Battery, then the clock, at the right end: the charge in percent inside it (mcu::HWC, as ../NSA), read every 2 s;
+    // without that service, PTM's five levels and no number
+    static u8 level = 5, charging = 0;
+    static int percent = -1;
+    static u64 batteryAt;
+    static bool hwcTried, hwc;
+    if (!batteryAt || svcGetSystemTick() - batteryAt > 2ULL * SYSCLOCK_ARM11) {
+        if (!hwcTried) {
+            hwc      = R_SUCCEEDED(mcuHwcInit());
+            hwcTried = true;
+        }
+        u8 value = 0;
+        percent  = hwc && R_SUCCEEDED(MCUHWC_GetBatteryLevel(&value)) ? (value > 100 ? 100 : value) : -1;
+        PTMU_GetBatteryLevel(&level);
+        PTMU_GetBatteryChargeState(&charging);
+        batteryAt = svcGetSystemTick();
+    }
+    const float bx = W - 30, by = 6, bw = 26, bh = 12;
+    C2D_DrawRectSolid(bx, by, 0.72f, bw, bh, T().battery);
+    C2D_DrawRectSolid(bx + bw, by + 3, 0.72f, 2, 6, T().battery);
+    C2D_DrawRectSolid(bx + 1, by + 1, 0.73f, bw - 2, bh - 2, T().bg);
+    const bool low = percent >= 0 ? percent <= 15 : level <= 1, mid = percent >= 0 ? percent <= 35 : level == 2;
+    u32 fill = charging ? Rgb(100, 220, 255) : low ? Rgb(240, 100, 100) : mid ? Rgb(240, 200, 80) : Rgb(110, 220, 130);
+    const float share = percent >= 0 ? percent / 100.0f : (level > 5 ? 5 : level) / 5.0f;
+    if (percent >= 0)
+        fill = MixC(fill, Rgb(0, 0, 0), 0.4f); // darker, so the white number reads on it
+    C2D_DrawRectSolid(bx + 2, by + 2, 0.74f, (bw - 4) * share, bh - 4, fill);
+    if (percent >= 0) {
+        char pct[8];
+        snprintf(pct, sizeof(pct), "%d", percent);
+        Text(pct, bx + bw / 2.0f, by + 0.5f, 0.36f, Rgb(255, 255, 255), C2D_AlignCenter, 0.75f);
+    }
     char clock[8];
     const time_t now = time(NULL);
     const struct tm *tm = gmtime(&now); // the 3DS clock is local time already
     snprintf(clock, sizeof(clock), "%02d:%02d", tm ? tm->tm_hour : 0, tm ? tm->tm_min : 0);
-    // Wi-Fi: three rising bars on the battery's baseline (as ../zelda-tmc-3ds), lit up to the signal's strength (0-3)
+    // Wi-Fi: three rising bars (as ../zelda-tmc-3ds), lit up to the signal's strength (0-3). The bars, the clock's digits
+    // and the battery share one band (by .. by + bh), so they line up.
     const int wifi  = osGetWifiStrength();
-    const float wx  = bx - 16;
+    const float wx  = bx - 18;
     const u32 faint = MixC(T().battery, T().bg, 0.65f);
     for (int i = 0; i < 3; ++i) {
-        const float h = 3 + i * 2;
-        C2D_DrawRectSolid(wx + i * 4, by + 8 - h, 0.72f, 2, h, i < wifi ? T().battery : faint);
+        const float h = bh * (i + 1) / 3.0f;
+        C2D_DrawRectSolid(wx + i * 5, by + bh - h, 0.72f, 3, h, i < wifi ? T().battery : faint);
     }
-    Text(clock, wx - 5, 6, 0.5f, T().clock, C2D_AlignRight, 0.75f);
+    // The system font's digits start ~0.3 of its scale's line below the text's y and are ~0.79 of it tall at 0.5:
+    // scaled so they are bh tall, moved up by that offset
+    Text(clock, wx - 6, by - 3.8f, 0.63f, T().clock, C2D_AlignRight, 0.75f);
 }
 
 // ---------------------------------------------------------------- GAME tab
@@ -1117,7 +1156,7 @@ static void DrawGameTab()
 
 // ---------------------------------------------------------------- OPTIONS tab
 
-enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_DEPTH, OPT_PLUS, OPT_CAMERA, OPT_EXTRAS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
+enum { OPT_FRAMES, OPT_FPS, OPT_HUD, OPT_THEME, OPT_DEPTH, OPT_PLUS, OPT_CAMERA, OPT_EXTRAS, OPT_VIDEOS, OPT_COUNT }; // the renderer is DEBUG's; the language the game's
 enum { OPT_W = 150, OPT_H = 30, OPT_PITCH = 34 };
 // THEME opens a list over the page (the dropdown); its rows are hits OPT_LIST + i, a touch elsewhere OPT_LIST_OUT.
 enum { OPT_LIST = 100, OPT_LIST_OUT = 99, LIST_ROW_H = 22 };
@@ -1127,6 +1166,91 @@ static void OptRect(int i, float *x, float *y)
 {
     *x = 8 + (i % 2) * 154;
     *y = HEADER_H + 8 + (i / 2) * OPT_PITCH;
+}
+
+// FRAMES OFF: a warning sign at the right end of the FRAMES cell, its own hit (it explains, the rest of the cell
+// changes the option as always)
+enum { OPT_WARN = 98, WARN_W = 24 };
+// Every cell's i (what the option does, in the information box) at its right end: hits OPT_INFO + i
+enum { OPT_INFO = 200, INFO_W = 24 };
+
+static bool FramesWarning() { return !Port::lock30 && !Port::frameSkip; }
+
+static bool InsideWarning(int px, int py)
+{
+    float x, y;
+    OptRect(OPT_FRAMES, &x, &y);
+    return FramesWarning() && px >= x + OPT_W - INFO_W - WARN_W && px < x + OPT_W - INFO_W && py >= y && py < y + OPT_H;
+}
+
+// The option whose i is under (px, py), or -1
+static int InfoUnder(int px, int py)
+{
+    for (int i = 0; i < OPT_COUNT; ++i) {
+        float x, y;
+        OptRect(i, &x, &y);
+        if (px >= x + OPT_W - INFO_W && px < x + OPT_W && py >= y && py < y + OPT_H)
+            return i;
+    }
+    return -1;
+}
+
+// The i in the manner of the cells it sits on (MANIA: the light tone of the cell's top edge, and the hard black shadow
+// the panels cast down and right; the other themes: their cell line colour), white while pressed. A serif i, chunky
+// as the menus' letters: a dot, a stem with a tab at the top and a foot. The pieces do not overlap.
+static void DrawInfoSign(float cx, float cy, int tint, bool pressed, float z)
+{
+    const u32 c      = pressed ? Rgb(255, 255, 255)
+                       : T().cut ? MixC(MixC(CellEdge(tint), CellFill(tint), 0.45f), 0xFFFFFFFF, 0.55f)
+                                 : CellLine(tint);
+    const u32 shadow = C2D_Color32(0, 0, 0, 110);
+    struct Piece {
+        float x, y, w, h;
+    };
+    const Piece p[] = {
+        { cx - 1, cy - 8, 3, 3 },      // dot
+        { cx - 3.5f, cy - 3.5f, 2.5f, 2 }, // tab
+        { cx - 1, cy - 3.5f, 3, 8.5f }, // stem
+        { cx - 4, cy + 5, 9, 2 },        // foot
+    };
+    for (const Piece &q : p) C2D_DrawRectSolid(q.x + 1, q.y + 1, z, q.w, q.h, shadow);
+    for (const Piece &q : p) C2D_DrawRectSolid(q.x, q.y, z + 0.001f, q.w, q.h, c);
+}
+
+// The sign in the game's menus' manner: a flat yellow shape with a dark outline and a hard shadow down and right
+static void DrawWarningSign(float cx, float cy, bool pressed, float z)
+{
+    const float h = 17, w = 19, top = cy - h / 2, bot = cy + h / 2;
+    const u32 shadow = C2D_Color32(0, 0, 0, 150), edge = Rgb(20, 24, 48), fill = pressed ? Rgb(255, 236, 140) : Rgb(255, 200, 0);
+    C2D_DrawTriangle(cx + 2, top + 2, shadow, cx - w / 2 + 2, bot + 2, shadow, cx + w / 2 + 2, bot + 2, shadow, z);
+    C2D_DrawTriangle(cx, top - 1.5f, edge, cx - w / 2 - 2, bot + 1, edge, cx + w / 2 + 2, bot + 1, edge, z + 0.001f);
+    C2D_DrawTriangle(cx, top + 1, fill, cx - w / 2 + 0.5f, bot - 0.5f, fill, cx + w / 2 - 0.5f, bot - 0.5f, fill, z + 0.002f);
+    C2D_DrawRectSolid(cx - 1.25f, top + 5, z + 0.003f, 2.5f, 6, edge);
+    C2D_DrawRectSolid(cx - 1.25f, bot - 4.5f, z + 0.003f, 2.5f, 2.5f, edge);
+}
+
+static void ShowInfo(const char *title, const char *const *lines, int count); // the information box (below)
+
+// OPTIONS > VIDEOS tapped: how many are converted and, while some are not, how to convert them (on a PC)
+static void ExplainVideos()
+{
+    static char status[96], fmt[96];
+    const int n = VideoFiles::Converted(), all = VideoFiles::Count();
+    snprintf(fmt, sizeof(fmt), "%s", Tr("%d OF %d VIDEOS ARE CONVERTED FOR THE 3DS."));
+    snprintf(status, sizeof(status), fmt, n, all);
+    const char *lines[] = { status, Tr("THE OTHERS PLAY AT A FEW FRAMES A SECOND. CONVERT THEM ON A PC WITH TOOLS/CONVERT-VIDEOS.PY AND COPY "
+                                       "ITS VIDEO FOLDER NEXT TO DATA.RSDK (SEE THE README).") };
+    ShowInfo(Tr("VIDEOS"), lines, n < all ? 2 : 1);
+}
+
+// What FRAMES OFF does, in the information box
+static void ExplainFramesOff()
+{
+    char title[64];
+    snprintf(title, sizeof(title), "%s: %s", Tr("FRAMES"), Tr("OFF"));
+    const char *lines[] = { Tr("THE GAME DRAWS EVERY PICTURE: WHERE THE CONSOLE CANNOT KEEP UP, IT RUNS SLOWER INSTEAD OF SKIPPING PICTURES."),
+                            Tr("AUTO (THE DEFAULT) SKIPS A LATE PICTURE SO THE GAME KEEPS ITS SPEED; 30 FPS DRAWS EVERY OTHER ONE.") };
+    ShowInfo(title, lines, 2);
 }
 
 static void OptValue(int i, char *o, unsigned cap, u32 *col)
@@ -1167,6 +1291,12 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
             snprintf(o, cap, "%s", Tr(Port::cameraAhead ? "AHEAD" : "CLASSIC"));
             *col = Port::cameraAhead ? good : dim;
             break;
+        case OPT_VIDEOS: { // converted / all (VideoFiles.cpp)
+            const int n = VideoFiles::Converted(), all = VideoFiles::Count();
+            snprintf(o, cap, "%d/%d", n, all);
+            *col = n == all ? good : warn;
+            break;
+        }
         default: // OPT_PLUS: a change counts from the next start, until then in the warning colour
             snprintf(o, cap, "%s", Tr(Port::plus ? "ON" : "OFF"));
             *col = Port::plus != Port::PlusApplied() ? warn : Port::plus ? good : dim;
@@ -1174,7 +1304,7 @@ static void OptValue(int i, char *o, unsigned cap, u32 *col)
     }
 }
 
-static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "3D DEPTH", "PLUS", "CAMERA", "EXTRAS" };
+static const char *const kOptName[OPT_COUNT] = { "FRAMES", "SHOW FPS", "TOP HUD", "THEME", "3D DEPTH", "PLUS", "CAMERA", "EXTRAS", "VIDEOS" };
 static const char *const kOptHelp[OPT_COUNT] = {
     "AUTO SKIPS A LATE PICTURE TO KEEP THE SPEED, 30 FPS DRAWS EVERY OTHER ONE, OFF DRAWS THEM ALL (THE GAME SLOWS DOWN IF IT CANNOT KEEP UP)",
     "FRAME RATE ON THE TOP SCREEN: L LOGIC, R RENDER (MS)",
@@ -1184,18 +1314,10 @@ static const char *const kOptHelp[OPT_COUNT] = {
     "MIGHTY, RAY AND ENCORE MODE, ONLY IF YOU OWN SONIC MANIA PLUS. IT CHANGES AT THE NEXT START",
     "AHEAD MOVES THE VIEW AHEAD OF THE PLAYER AT HIGH SPEED AND BACK WHEN SLOWING DOWN",
     "A TAB WITH IMMORTAL, AIR JUMP AND A STAGE SELECT",
+    "HOW MANY OF THE INTRO AND ENDING VIDEOS ARE CONVERTED FOR THE 3DS. THEY ARE CONVERTED ON A PC: SEE THE README",
 };
 static int sLastOpt = -1;
 
-// What the option does; FRAMES says what its current mode does.
-static const char *OptHelp(int i)
-{
-    if (i != OPT_FRAMES)
-        return kOptHelp[i];
-    if (Port::lock30)
-        return "DRAWS EVERY OTHER PICTURE; THE GAME STAYS AT FULL SPEED";
-    return Port::frameSkip ? "SKIPS A LATE PICTURE SO THE GAME KEEPS ITS SPEED" : "DRAWS EVERY PICTURE; THE GAME MAY RUN SLOW IN SOME PLACES";
-}
 
 // The dropdown's box: over the THEME cell, moved up when it would run off the screen.
 static void ThemeListRect(float *x, float *y, float *w, float *h)
@@ -1250,6 +1372,15 @@ static void TapOption(int i)
         sLastOpt   = OPT_THEME;
         return;
     }
+    if (i == OPT_WARN) {
+        ExplainFramesOff();
+        return;
+    }
+    if (i >= OPT_INFO && i < OPT_INFO + OPT_COUNT) { // an i: what the option does
+        const char *lines[] = { Tr(kOptHelp[i - OPT_INFO]) };
+        ShowInfo(Tr(kOptName[i - OPT_INFO]), lines, 1);
+        return;
+    }
     switch (i) {
         case OPT_FRAMES: // AUTO -> 30 FPS -> OFF -> AUTO
             if (Port::lock30)
@@ -1269,6 +1400,7 @@ static void TapOption(int i)
                 sPick = 0;
             break;
         case OPT_CAMERA: Port::cameraAhead = !Port::cameraAhead; break;
+        case OPT_VIDEOS: ExplainVideos(); break;
         default: Port::plus = !Port::plus; break; // OPT_PLUS
     }
     sLastOpt = i;
@@ -1280,7 +1412,7 @@ static void DrawOptionsTab()
     for (int i = 0; i < OPT_COUNT; ++i) {
         float x, y;
         OptRect(i, &x, &y);
-        const bool pressed = i == sPressed;
+        const bool pressed = PressedLook(i);
         // MANIA: the colours run along the rows and shift by one each row, so no two neighbours match
         const int tint = i + i / 2;
         Panel(x, y, 0.3f, OPT_W, OPT_H, pressed ? T().pressEdge : CellEdge(tint), pressed ? T().pressFill : CellFill(tint), 1);
@@ -1300,21 +1432,13 @@ static void DrawOptionsTab()
         }
         else
             Text(val, x + 7, y + 15, 0.5f, col, 0, 0.33f);
+        DrawInfoSign(x + OPT_W - INFO_W / 2.0f, y + OPT_H / 2.0f, tint, sPressed == OPT_INFO + i, 0.34f);
+        if (i == OPT_FRAMES && FramesWarning()) // the sign, which opens what OFF means
+            DrawWarningSign(x + OPT_W - INFO_W - WARN_W / 2.0f, y + OPT_H / 2.0f, sPressed == OPT_WARN, 0.34f);
     }
-    // FRAMES OFF: the game slows down where it cannot keep up; said while no option has been touched (an option's help
-    // text goes in the same place)
-    if (!Port::lock30 && !Port::frameSkip && sLastOpt < 0)
-        Text(Tr("FRAMES OFF: THE GAME MAY RUN SLOW IN SOME PLACES"), W / 2.0f, H - 60, 0.4f, Rgb(240, 200, 80), C2D_AlignCenter | C2D_WordWrap,
-             0.33f, W - 24);
-    // What the last option touched does
-    if (sLastOpt >= 0)
-        Text(Tr(OptHelp(sLastOpt)), 12, HEADER_H + 8 + (OPT_COUNT + 1) / 2 * OPT_PITCH + 4, 0.4f, Rgb(240, 200, 80), C2D_WordWrap, 0.33f, W - 24);
-    // The name and version, under the fourth row of options: a help text of three lines reaches down to them, so they
-    // give it the place while it is shown
-    if (sLastOpt < 0) {
-        Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, T().footer, C2D_AlignCenter);
-        Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, T().footer, C2D_AlignCenter);
-    }
+    // What an option does is behind its i (the information box); the name and version under the options
+    Text("SONIC MANIA 3DS", W / 2.0f, H - 30, 0.45f, T().footer, C2D_AlignCenter);
+    Text("V" PORT_VERSION_LABEL, W / 2.0f, H - 17, 0.4f, T().footer, C2D_AlignCenter);
     if (sThemeOpen)
         DrawThemeList();
 }
@@ -1582,9 +1706,65 @@ static bool UpdatesChanged()
 
 static bool UpdatePromptShown() { return Updater_AutoPrompt() != UPDATE_PROMPT_NONE; }
 
+
 // The prompt's box
 enum { PBOX_X = 16, PBOX_Y = HEADER_H + 10, PBOX_W = W - 32, PBOX_H = H - HEADER_H - 20 };
 static const float kPromptBy = PBOX_Y + PBOX_H - 32;
+
+// An information box over the bottom screen while the game goes on above (Ask stops the game and takes the top screen
+// too): a title, a few lines, OK. It takes every touch while it is up; the buttons stay the game's.
+static struct {
+    bool open;
+    char title[64];
+    const char *lines[3];
+    int count;
+} sInfo;
+enum { INFO_OK = 0 };
+
+static void ShowInfo(const char *title, const char *const *lines, int count)
+{
+    snprintf(sInfo.title, sizeof(sInfo.title), "%s", title);
+    sInfo.count = count > 3 ? 3 : count;
+    for (int i = 0; i < sInfo.count; ++i) sInfo.lines[i] = lines[i];
+    sInfo.open = true;
+    sDirty     = true;
+}
+
+static void InfoOkRect(float *x, float *y, float *w, float *h)
+{
+    *w = 120, *h = 24, *x = W / 2.0f - 60, *y = kPromptBy;
+}
+
+static int InfoHit(int px, int py)
+{
+    float x, y, w, h;
+    InfoOkRect(&x, &y, &w, &h);
+    return Inside(px, py, x, y, w, h) ? INFO_OK : -1;
+}
+
+static void DrawInfoBox()
+{
+    if (!sInfo.open)
+        return;
+    const float bx = PBOX_X, by = PBOX_Y, bw = PBOX_W;
+    C2D_DrawRectSolid(0, 0, 0.8f, W, H, C2D_Color32(0, 0, 0, 170));
+    Panel(bx - 2, by - 2, 0.82f, bw + 4, PBOX_H + 4, T().popEdge, T().popFill, 2);
+    Text(sInfo.title, W / 2.0f, by + 10, 0.6f, T().accent, C2D_AlignCenter, 0.95f);
+    // Each line below the one before, as tall as it wraps (as Ask)
+    float ly = by + 38;
+    for (int i = 0; i < sInfo.count; ++i) {
+        Text(sInfo.lines[i], bx + 12, ly, 0.45f, i == sInfo.count - 1 && sInfo.count > 1 ? T().dim : T().text, C2D_WordWrap, 0.95f, bw - 24);
+        C2D_Text t;
+        C2D_TextParse(&t, sTextBuf, sInfo.lines[i]);
+        float tw = 0, th = 0;
+        C2D_TextGetDimensions(&t, 0.45f, 0.45f, &tw, &th);
+        const float rows = (float)(int)(tw / ((bw - 24) * 0.85f)) + 1;
+        ly += rows * th + 8 > 34 ? rows * th + 8 : 34;
+    }
+    float x, y, w, h;
+    InfoOkRect(&x, &y, &w, &h);
+    Button(x, y, w, h, "OK", PressedLook(INFO_OK), T().cellEdge, T().text, 0.9f);
+}
 
 static void DrawUpdatePrompt()
 {
@@ -2089,7 +2269,7 @@ static void DrawStagePicker()
         PickRowRect(i, &x, &y);
         if (y + PICK_ROW < PICK_TOP || y > H)
             continue;
-        const bool pressed = sPressed == 300 + i;
+        const bool pressed = PressedLook(300 + i);
         const bool here    = sPick == 2 && sceneInfo.activeCategory == sPickCat
                           && sceneInfo.listPos == sceneInfo.listCategory[sPickCat].sceneOffsetStart + i;
         Panel(x, y, 0.3f, PICK_W, PICK_ROW - 4, pressed ? T().pressEdge : CellEdge(i), pressed ? T().pressFill : CellFill(i), 1);
@@ -2193,7 +2373,7 @@ static void DrawExtrasTab()
     for (int i = 0; i < EXT_COUNT; ++i) {
         float x, y;
         OptRect(i, &x, &y);
-        const bool pressed = i == sPressed;
+        const bool pressed = PressedLook(i);
         const int tint     = i + i / 2;
         Panel(x, y, 0.3f, OPT_W, OPT_H, pressed ? T().pressEdge : CellEdge(tint), pressed ? T().pressFill : CellFill(tint), 1);
         if (!T().cut)
@@ -2256,6 +2436,82 @@ void BottomUi::DrawStats(unsigned *count, float *ms)
     *ms    = sDrawTicks * (1000.0f / SYSCLOCK_ARM11);
 }
 
+// The element a hit stands for, where the ripple has one (cells, the stage list's rows, the information box's OK)
+static bool RippleRect(int hit, float *x, float *y, float *w, float *h)
+{
+    if (hit < 0 || UpdatePromptShown())
+        return false;
+    *w = OPT_W, *h = OPT_H;
+    if (sInfo.open) {
+        if (hit != INFO_OK)
+            return false;
+        InfoOkRect(x, y, w, h);
+        return true;
+    }
+    if (Port::tab == TAB_OPTIONS && !sThemeOpen) {
+        const int cell = hit == OPT_WARN ? OPT_FRAMES : hit >= OPT_INFO && hit < OPT_INFO + OPT_COUNT ? hit - OPT_INFO : hit;
+        if (cell < 0 || cell >= OPT_COUNT)
+            return false;
+        OptRect(cell, x, y);
+        return true;
+    }
+    if (Port::tab == TAB_EXTRAS && !sPick && hit < EXT_COUNT) {
+        OptRect(hit, x, y);
+        return true;
+    }
+    if (Port::tab == TAB_EXTRAS && sPick && hit >= 300 && hit < 300 + PickCount()) {
+        PickRowRect(hit - 300, x, y);
+        *w = PICK_W, *h = PICK_ROW - 4;
+        return true;
+    }
+    return false;
+}
+
+static void StartRipple(int hit, int tx, int ty)
+{
+    float x, y, w, h;
+    if (!RippleRect(hit, &x, &y, &w, &h))
+        return;
+    sRipple = { true, hit, x, y, w, h, (float)tx, (float)ty, svcGetSystemTick(), 0 };
+}
+
+static void DrawRipple()
+{
+    if (!sRipple.on)
+        return;
+    const u64 now  = svcGetSystemTick();
+    const float t  = (float)(now - sRipple.start) / (SYSCLOCK_ARM11 * 0.22f);
+    const float g  = t >= 1 ? 1 : 1 - (1 - t) * (1 - t) * (1 - t); // fast, then easing in
+    float fade     = 1;
+    if (sRipple.released) {
+        fade = 1 - (float)(now - sRipple.released) / (SYSCLOCK_ARM11 * 0.18f);
+        if (fade <= 0) {
+            sRipple.on = false;
+            return;
+        }
+    }
+    const float x = sRipple.x, y = sRipple.y, w = sRipple.w, h = sRipple.h, tx = sRipple.tx, ty = sRipple.ty;
+    // As far as the farthest corner, so the disc ends up covering the whole element
+    const float fx = tx - x > x + w - tx ? tx - x : x + w - tx, fy = ty - y > y + h - ty ? ty - y : y + h - ty;
+    const float r = sqrtf(fx * fx + fy * fy) * g;
+    const u32 col = C2D_Color32(255, 255, 255, (u8)(95 * fade));
+    const float c = T().cut ? (h * 0.4f < 10 ? h * 0.4f : 10) : 0; // the cut corner (Panel)
+    for (float yy = y; yy < y + h; yy += 1) {
+        const float dy = yy + 0.5f - ty;
+        if (dy > r || dy < -r)
+            continue;
+        const float half = sqrtf(r * r - dy * dy);
+        float x0 = tx - half, x1 = tx + half;
+        const float right = c > 0 && yy < y + c ? x + w - c + (yy - y) : x + w;
+        if (x0 < x)
+            x0 = x;
+        if (x1 > right)
+            x1 = right;
+        if (x1 > x0)
+            C2D_DrawRectSolid(x0, yy, 0.97f, x1 - x0, 1, col);
+    }
+}
+
 static void Draw()
 {
     char val[32];
@@ -2294,6 +2550,8 @@ static void Draw()
         default: DrawGameTab(); break;
     }
     DrawTabBar();
+    DrawInfoBox();
+    DrawRipple();
     DrawAchToast();
     DrawUpdatePrompt();
     DrawDevFtp();
@@ -2760,6 +3018,7 @@ void BottomUi::Touch(int x, int y)
     sTouchX = x;
 }
 
+
 void BottomUi::Update()
 {
     if (!sReady)
@@ -2803,10 +3062,10 @@ void BottomUi::Update()
     }
 #endif
     // ACHIEVEMENTS handles its own touches (a drag scrolls, a release opens), except on the tab bar and under a prompt
-    const bool achTab = Port::tab == TAB_ACH && !UpdatePromptShown() && !((down & KEY_TOUCH) && t.py < HEADER_H);
+    const bool achTab = Port::tab == TAB_ACH && !UpdatePromptShown() && !sInfo.open && !((down & KEY_TOUCH) && t.py < HEADER_H);
     const int achHit  = achTab ? AchInput(held, down, t) : -1;
     // The STAGES list, the same way (its own touches but the tab bar's)
-    const bool pickOpen = Port::tab == TAB_EXTRAS && sPick && !UpdatePromptShown() && !((down & KEY_TOUCH) && t.py < HEADER_H);
+    const bool pickOpen = Port::tab == TAB_EXTRAS && sPick && !UpdatePromptShown() && !sInfo.open && !((down & KEY_TOUCH) && t.py < HEADER_H);
     const int pickHit   = pickOpen ? PickInput(held, down, t) : -1;
     int hit = -1;
     if (held & KEY_TOUCH) {
@@ -2814,6 +3073,8 @@ void BottomUi::Update()
             // The update prompt takes every touch while it is up.
             hit = PromptHit(t.px, t.py);
         }
+        else if (sInfo.open)
+            hit = InfoHit(t.px, t.py); // so does the information box
         else if ((down & KEY_TOUCH) && t.py < HEADER_H) {
             // The tab bar
             int tabs[TAB_MAX];
@@ -2883,6 +3144,10 @@ void BottomUi::Update()
                 if (t.px >= x && t.px < x + OPT_W && t.py >= y && t.py < y + OPT_H)
                     hit = i;
             }
+            if (InsideWarning(t.px, t.py))
+                hit = OPT_WARN;
+            if (InfoUnder(t.px, t.py) >= 0)
+                hit = OPT_INFO + InfoUnder(t.px, t.py);
         }
         else if (Port::tab == TAB_UPDATES)
             hit = UpdatesHit(t.px, t.py, (down & KEY_TOUCH) != 0);
@@ -2904,6 +3169,8 @@ void BottomUi::Update()
     if ((down & KEY_TOUCH) && hit >= 0) {
         if (UpdatePromptShown())
             PromptTap(hit);
+        else if (sInfo.open)
+            sInfo.open = false; // OK
         else if (achTab)
             ; // AchInput acted already
 #if MANIA_DEV_TOOLS
@@ -2923,10 +3190,16 @@ void BottomUi::Update()
         hit = achHit;
     if (pickOpen)
         hit = pickHit;
+    if (hit >= 0 && hit != sPressed && (held & KEY_TOUCH))
+        StartRipple(hit, t.px, t.py);
+    if (sRipple.on && !sRipple.released && (hit != sRipple.hit || !(held & KEY_TOUCH)))
+        sRipple.released = svcGetSystemTick();
     if (hit != sPressed) {
         sPressed = hit;
         sDirty   = true;
     }
+    if (sRipple.on)
+        sDirty = true; // a frame of the animation each pass while it runs
     (void)debugTab;
     const u64 now = svcGetSystemTick();
     // Quicker while something moves (an install, a download, the restart countdown), so the bar moves.

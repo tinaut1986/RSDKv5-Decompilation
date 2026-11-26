@@ -64,6 +64,16 @@ The sound needs your console's DSP firmware (`sdmc:/3ds/dspfirm.cdc`, the file o
 missing or damaged the game says so and offers to extract it from the console itself (EXTRACT); without it the game
 runs, silent. It is Nintendo's, so it is never part of a download.
 
+**Videos** (the intro and the endings): the game's own are 1024x512, too heavy for an Old 3DS, which shows only a few
+frames a second of them. Convert them once for the 3DS, best on a PC (about a minute; needs Python 3 and ffmpeg):
+
+```text
+python3 tools/convert-videos.py "path/to/Data.rsdk" Video
+```
+
+then copy the `Video` folder it makes into `sdmc:/3ds/Sonic Mania 3DS/` (about 12 MB). OPTIONS > VIDEOS shows how many
+are converted.
+
 **Sonic Mania Plus** (Mighty, Ray, Encore mode) is off by default, as the decompilation's license asks of every build
 given to anyone. When the game data has the Plus content, the first start asks whether to turn it on; do so only if
 you own Sonic Mania Plus. It can be changed later in OPTIONS > PLUS (from the next start).

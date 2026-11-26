@@ -578,6 +578,75 @@ static void EndVideoConversions()
     videoQueue.convSlot = -1;
 }
 
+// The end of a video (its last frame's time or a skip): the decoder thread stopped, the numbers to the log,
+// the decoder and the file closed, the engine back to the state it had.
+static void FinishVideo()
+{
+    VideoQueue &q     = videoQueue;
+    const th_info &ti = VideoManager::ti;
+    StopVideoDecoder();
+    EndVideoConversions();
+    DEV_LOG("video %s: ends with the music at %.2f s (the video's start delay %.2f s, its last frame's end %.2f s)", videoStats.name,
+            GetVideoStreamPos(), engine.videoStartDelay, q.streamEnd > q.lastEnd ? q.streamEnd : q.lastEnd);
+
+    const uint32 frames = videoStats.decoded ? videoStats.decoded : 1;
+    const uint32 convs  = VideoFrame::Conversions() ? VideoFrame::Conversions() : 1;
+    DEV_LOG("video %s (%s, %ux%u %.2f fps, %s): %u decoded (+%u repeats, %u dropped undecoded), %u skipped, %u shown, %u dropped, %u late in %u ms (%u passes, %u on "
+            "the clock, %u clock jumps)",
+            videoStats.name, videoStats.loose ? "Video/" : "pack", ti.pic_width, ti.pic_height,
+            ti.fps_denominator ? (double)ti.fps_numerator / ti.fps_denominator : 0.0, videoStats.threaded ? "thread" : "main",
+            videoStats.decoded, videoStats.duplicates, videoStats.undecoded, videoStats.skipped, videoStats.shown, videoStats.dropped, videoStats.late,
+            TicksToUs(svcGetSystemTick() - videoStats.startTick) / 1000, videoStats.passes, videoStats.clockPasses, videoStats.clockSnaps);
+    DEV_LOG("video %s: decode avg %u us max %u us, convert avg %u us (%u by Y2R); shown late by <17/<33/<frame/more ms: "
+            "%u/%u/%u/%u; passes after >25/>50/>100 ms: %u/%u/%u",
+            videoStats.name, TicksToUs(videoStats.decodeTicks) / frames, videoStats.maxDecodeUs,
+            TicksToUs(VideoFrame::ConvertTicks()) / convs, VideoFrame::HardwareConversions(), videoStats.lateBins[0],
+            videoStats.lateBins[1], videoStats.lateBins[2], videoStats.lateBins[3], videoStats.gapBins[0], videoStats.gapBins[1],
+            videoStats.gapBins[2]);
+
+    {
+        char line[0x100];
+        int32 at = snprintf(line, sizeof(line), "video %s: slots and Y2R %u us (Y2R %s), first frame %u ms, %u ahead in %u ms (steps",
+                            videoStats.name, videoStats.prepareUs, VideoFrame::HardwareReady() ? "open" : "closed", videoStats.firstFrameMs,
+                            videoStats.prefilled, videoStats.prefillMs);
+        for (int32 i = 0; i < videoStats.prefillSteps; ++i) at += snprintf(line + at, sizeof(line) - at, " %u", videoStats.prefillStepMs[i]);
+        at += snprintf(line + at, sizeof(line) - at, "; first: queue %u read %u decode %u wait %u convert %u us)", videoStats.prefillPhase[0],
+                       videoStats.prefillPhase[1], videoStats.prefillPhase[2], videoStats.prefillPhase[3], videoStats.prefillPhase[4]);
+        DEV_LOG("%s", line);
+        at = snprintf(line, sizeof(line), "video %s thread (ms after LoadVideo: took, decoded):", videoStats.name);
+        for (int32 i = 0; i < videoStats.traceCount && at < (int32)sizeof(line) - 24; ++i)
+            at += snprintf(line + at, sizeof(line) - at, " %u:%u,%u%s", videoStats.traceAt[i], videoStats.traceMs[i],
+                           videoStats.traceDecoded[i], videoStats.traceResult[i] ? "" : "w");
+        DEV_LOG("%s", line);
+    }
+    for (int32 i = 0; i < videoTroubleCount; i += 3) {
+        char line[0x100];
+        int32 at = snprintf(line, sizeof(line), "video %s behind:", videoStats.name);
+        for (int32 j = i; j < i + 3 && j < videoTroubleCount; ++j) {
+            const VideoTrouble &t = videoTroubles[j];
+            at += snprintf(line + at, sizeof(line) - at, " %.2f-%.2f s (%u skipped, %u late, %u key, decode up to %u ms)", t.from, t.to,
+                           t.skipped, t.late, t.keyframes, t.maxDecodeUs / 1000);
+        }
+        DEV_LOG("%s", line);
+    }
+
+    CloseFile(&VideoManager::file);
+
+    // Flush everything out
+    while (ogg_sync_pageout(&VideoManager::oy, &VideoManager::og) > 0) ogg_stream_pagein(&VideoManager::to, &VideoManager::og);
+
+    ogg_stream_clear(&VideoManager::to);
+    th_decode_free(VideoManager::td);
+    th_comment_clear(&VideoManager::tc);
+    th_info_clear(&VideoManager::ti);
+    ogg_sync_clear(&VideoManager::oy);
+
+    videoSettings.shaderID    = engine.storedShaderID;
+    videoSettings.screenCount = 1;
+    if (ENGINE_VERSION == 5)
+        sceneInfo.state = engine.storedState;
+}
+
 // Unlike the original (which decodes each frame on the main thread once its time has come, so a slow frame makes
 // the next ones late), a thread decodes and converts a few frames ahead (VideoQueue) and the main thread puts each
 // on the screen at its time; a frame the decoder finishes after its time is not converted, so a slow stretch costs
@@ -710,69 +779,8 @@ void RSDK::ProcessVideo()
     if (drained)
         finished = true;
 
-    if (finished) {
-        StopVideoDecoder();
-        EndVideoConversions();
-        DEV_LOG("video %s: ends with the music at %.2f s (the video's start delay %.2f s, its last frame's end %.2f s)", videoStats.name,
-                GetVideoStreamPos(), engine.videoStartDelay, q.streamEnd > q.lastEnd ? q.streamEnd : q.lastEnd);
-
-        const uint32 frames = videoStats.decoded ? videoStats.decoded : 1;
-        const uint32 convs  = VideoFrame::Conversions() ? VideoFrame::Conversions() : 1;
-        DEV_LOG("video %s (%s, %ux%u %.2f fps, %s): %u decoded (+%u repeats, %u dropped undecoded), %u skipped, %u shown, %u dropped, %u late in %u ms (%u passes, %u on "
-                "the clock, %u clock jumps)",
-                videoStats.name, videoStats.loose ? "Video/" : "pack", ti.pic_width, ti.pic_height,
-                ti.fps_denominator ? (double)ti.fps_numerator / ti.fps_denominator : 0.0, videoStats.threaded ? "thread" : "main",
-                videoStats.decoded, videoStats.duplicates, videoStats.undecoded, videoStats.skipped, videoStats.shown, videoStats.dropped, videoStats.late,
-                TicksToUs(svcGetSystemTick() - videoStats.startTick) / 1000, videoStats.passes, videoStats.clockPasses, videoStats.clockSnaps);
-        DEV_LOG("video %s: decode avg %u us max %u us, convert avg %u us (%u by Y2R); shown late by <17/<33/<frame/more ms: "
-                "%u/%u/%u/%u; passes after >25/>50/>100 ms: %u/%u/%u",
-                videoStats.name, TicksToUs(videoStats.decodeTicks) / frames, videoStats.maxDecodeUs,
-                TicksToUs(VideoFrame::ConvertTicks()) / convs, VideoFrame::HardwareConversions(), videoStats.lateBins[0],
-                videoStats.lateBins[1], videoStats.lateBins[2], videoStats.lateBins[3], videoStats.gapBins[0], videoStats.gapBins[1],
-                videoStats.gapBins[2]);
-
-        {
-            char line[0x100];
-            int32 at = snprintf(line, sizeof(line), "video %s: slots and Y2R %u us (Y2R %s), first frame %u ms, %u ahead in %u ms (steps",
-                                videoStats.name, videoStats.prepareUs, VideoFrame::HardwareReady() ? "open" : "closed", videoStats.firstFrameMs,
-                                videoStats.prefilled, videoStats.prefillMs);
-            for (int32 i = 0; i < videoStats.prefillSteps; ++i) at += snprintf(line + at, sizeof(line) - at, " %u", videoStats.prefillStepMs[i]);
-            at += snprintf(line + at, sizeof(line) - at, "; first: queue %u read %u decode %u wait %u convert %u us)", videoStats.prefillPhase[0],
-                           videoStats.prefillPhase[1], videoStats.prefillPhase[2], videoStats.prefillPhase[3], videoStats.prefillPhase[4]);
-            DEV_LOG("%s", line);
-            at = snprintf(line, sizeof(line), "video %s thread (ms after LoadVideo: took, decoded):", videoStats.name);
-            for (int32 i = 0; i < videoStats.traceCount && at < (int32)sizeof(line) - 24; ++i)
-                at += snprintf(line + at, sizeof(line) - at, " %u:%u,%u%s", videoStats.traceAt[i], videoStats.traceMs[i],
-                               videoStats.traceDecoded[i], videoStats.traceResult[i] ? "" : "w");
-            DEV_LOG("%s", line);
-        }
-        for (int32 i = 0; i < videoTroubleCount; i += 3) {
-            char line[0x100];
-            int32 at = snprintf(line, sizeof(line), "video %s behind:", videoStats.name);
-            for (int32 j = i; j < i + 3 && j < videoTroubleCount; ++j) {
-                const VideoTrouble &t = videoTroubles[j];
-                at += snprintf(line + at, sizeof(line) - at, " %.2f-%.2f s (%u skipped, %u late, %u key, decode up to %u ms)", t.from, t.to,
-                               t.skipped, t.late, t.keyframes, t.maxDecodeUs / 1000);
-            }
-            DEV_LOG("%s", line);
-        }
-
-        CloseFile(&VideoManager::file);
-
-        // Flush everything out
-        while (ogg_sync_pageout(&VideoManager::oy, &VideoManager::og) > 0) ogg_stream_pagein(&VideoManager::to, &VideoManager::og);
-
-        ogg_stream_clear(&VideoManager::to);
-        th_decode_free(VideoManager::td);
-        th_comment_clear(&VideoManager::tc);
-        th_info_clear(&VideoManager::ti);
-        ogg_sync_clear(&VideoManager::oy);
-
-        videoSettings.shaderID    = engine.storedShaderID;
-        videoSettings.screenCount = 1;
-        if (ENGINE_VERSION == 5)
-            sceneInfo.state = engine.storedState;
-    }
+    if (finished)
+        FinishVideo();
 }
 #else
 void RSDK::ProcessVideo()

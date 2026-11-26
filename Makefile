@@ -160,6 +160,7 @@ RSDK_SOURCES += \
 	RSDKv5/RSDK/Dev/CTR/DspFirm 		\
 	RSDKv5/RSDK/Dev/CTR/Updater 			\
 	RSDKv5/RSDK/Dev/CTR/UpdateManifest 		\
+	RSDKv5/RSDK/Dev/CTR/VideoFiles 		\
 	RSDKv5/RSDK/Graphics/CTR/C3DPresent 		\
 	RSDKv5/RSDK/Graphics/CTR/GpuFrame 		\
 	RSDKv5/RSDK/Graphics/CTR/GpuRender 		\
