@@ -42,6 +42,8 @@ void SetExtras(bool on);
 void ApplyExtras();
 // EXTRAS > STAGES: load that scene of the scene list (category, index in it). Main thread, at the frame's end.
 void LoadScene(int category, int scene);
+// EXTRAS > STAGES > Videos: the intro, as the title screen plays it (altMusic: IntroTee.ogg, the video 1.8 s in).
+void PlayIntro(bool altMusic);
 
 // Sonic Mania Plus. The decompilation's license wants every build given to anyone to start with it off; an option
 // off by default is allowed. OfferPlus asks once, at boot, when the data has the Plus content; ApplyPlus hands the

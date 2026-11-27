@@ -3,3 +3,7 @@
 
 # I do not like \r\n, \n supremacy
 *.txt text eol=lf
+
+# The video converter's launchers (tools/): cmd wants CRLF, sh wants LF, on any system
+*.bat text eol=crlf
+*.sh text eol=lf

@@ -3,6 +3,7 @@
 
 #define SCREEN_REFRESH (59.94f)
 #include "RSDK/Dev/CTR/BottomUi.hpp"
+#include "RSDK/Graphics/CTR/VideoFrame.hpp"
 
 using namespace RSDK;
 
@@ -88,10 +89,27 @@ void RenderDevice::FlipScreen()
       BottomUi::DrawTopOverlaySoft(screens[0].frameBuffer, screens[0].pitch); // OPTIONS > SHOW FPS
     switch (videoSettings.screenCount) {
       default:
-      case 0:
-        // image/video buffer, break
+      case 0: {
+        // A video or a full-screen image (VideoFrame.cpp); the image fades with dimMax. Through the GPU only when the
+        // picture changed (a video's 24-30 new frames a second, not 60 copies): the screen keeps the last one.
+        static u32 shownVersion = ~0u;
+        static float shownDim   = -1.0f;
+        const u16 *pic = VideoFrame::Picture(videoSettings.dimMax);
+        if (!pic)
+          break;
+        if (DEV_SW_GPUPRESENT && (C3DPresent::Ready() || C3DPresent::Init())) {
+          if (VideoFrame::Version() != shownVersion || videoSettings.dimMax != shownDim) {
+            C3DPresent::Present(pic, VideoFrame::W);
+            shownVersion = VideoFrame::Version();
+            shownDim     = videoSettings.dimMax;
+          }
+        }
+        else
+          TransposeToFramebuffer(pic, VideoFrame::W, dst);
         break;
+      }
       case 1:
+        VideoFrame::Release(); // nothing to do unless a video or an image was just up
         if (drawnByGpu) {
           // already on screen
         }
@@ -138,27 +156,29 @@ void RenderDevice::RefreshWindow()
 
 }
 
+// Videos and full-screen images become the top screen's RGB565 picture (VideoFrame.cpp: Y2R or the CPU), shown by
+// FlipScreen while screenCount is 0.
 void RenderDevice::SetupImageTexture(int32 width, int32 height, uint8* imagePixels)
 {
-  // TODO: implement
-  return;
+  VideoFrame::SetImage(width, height, (const uint32 *)imagePixels);
 }
 
-// TODO: you may have to rewrite parts of the engine elsewhere to hack 
-// 3ds-theoraplayer in, just leave like this for now
-void RenderDevice::SetupVideoTexture_YUV420(int32 width, int32 height, uint8* imagePixels)
+void RenderDevice::SetupVideoTexture_YUV420(int32 width, int32 height, uint8 *yPlane, uint8 *uPlane, uint8 *vPlane, int32 strideY,
+                                            int32 strideU, int32 strideV)
 {
-  return;
+  VideoFrame::SetYUV(width, height, yPlane, uPlane, vPlane, strideY, strideU, strideV, 1, 1);
 }
 
-void RenderDevice::SetupVideoTexture_YUV422(int32 width, int32 height, uint8* imagePixels)
+void RenderDevice::SetupVideoTexture_YUV422(int32 width, int32 height, uint8 *yPlane, uint8 *uPlane, uint8 *vPlane, int32 strideY,
+                                            int32 strideU, int32 strideV)
 {
-  return;
+  VideoFrame::SetYUV(width, height, yPlane, uPlane, vPlane, strideY, strideU, strideV, 1, 0);
 }
 
-void RenderDevice::SetupVideoTexture_YUV424(int32 width, int32 height, uint8* imagePixels)
+void RenderDevice::SetupVideoTexture_YUV444(int32 width, int32 height, uint8 *yPlane, uint8 *uPlane, uint8 *vPlane, int32 strideY,
+                                            int32 strideU, int32 strideV)
 {
-  return;
+  VideoFrame::SetYUV(width, height, yPlane, uPlane, vPlane, strideY, strideU, strideV, 0, 0);
 }
 
 bool RenderDevice::ProcessEvents()

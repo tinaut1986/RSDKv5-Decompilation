@@ -261,6 +261,9 @@ static void StartMixer()
   // set audio callback (simply triggers audioThreadRequest event)
   ndspSetCallback(AudioCallback, NULL);
   sMixerUp = true;
+  // What the other devices set once their output runs: LoadVideo only honours a video's start delay with it (an
+  // ending's second clip starts 14 s into the music; without it the clip began at once, its first seconds skipped)
+  AudioDeviceBase::audioState = 1;
 }
 
 bool32 AudioDevice::Init()
