@@ -66,7 +66,9 @@ runs, silent. It is Nintendo's, so it is never part of a download.
 
 **Videos** (the intro and the endings): the game's own are 1024x512, too heavy for an Old 3DS, which shows only a few
 frames a second of them (the game says so under the picture: the game is not broken). Convert them once on a PC (about
-a minute): double-click `tools/convert-videos.bat` on Windows, or run `tools/convert-videos.sh` on Linux and macOS. A
+a minute) with the converter: `sonic-mania-3ds-video-converter-vX.Y.Z.zip` on each release's page (or the `tools`
+folder of this repository). Unzip it and double-click `convert-videos.bat` on Windows, or run `convert-videos.sh` on
+Linux and macOS. A
 window opens (in the PC's language, or the one picked in it): choose your `Data.rsdk` (it finds Steam's) and what to
 make, and follow the bar. The launchers check for Python 3 and ffmpeg and offer to install what is missing (with winget
 on Windows, with the system's package manager on Linux and Homebrew on macOS).

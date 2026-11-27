@@ -67,6 +67,21 @@ jobs:
           MANIA3DS_VERSION="${{ steps.vars.outputs.version }}" MANIA3DS_CHANNEL=$CH DEV_TOOLS=$TOOLS ./build_3ds.sh --cia
           cp 3ds/out/SonicMania.cia "sonic-mania-3ds-v${{ steps.vars.outputs.version }}.cia"
 
+      # The PC tool that converts the game's videos for the Old 3DS (README, docs/videos.md): its three files in a
+      # folder, the .sh still executable, the .bat with its CRLF (both kept by .gitattributes).
+      - name: Package the video converter
+        run: |
+          python3 - "sonic-mania-3ds-video-converter-v${{ steps.vars.outputs.version }}.zip" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED) as z:
+              for name in ('convert-videos.py', 'convert-videos.bat', 'convert-videos.sh'):
+                  info = zipfile.ZipInfo('sonic-mania-3ds-video-converter/' + name, (2026, 1, 1, 0, 0, 0))
+                  info.compress_type = zipfile.ZIP_DEFLATED
+                  info.external_attr = (0o100755 if name.endswith('.sh') else 0o100644) << 16
+                  z.writestr(info, open('tools/' + name, 'rb').read())
+          PY
+          unzip -l "sonic-mania-3ds-video-converter-v${{ steps.vars.outputs.version }}.zip" || true
+
       - name: Release notes and QR code
         run: |
           TAG="${{ steps.vars.outputs.tag }}"
@@ -101,6 +116,9 @@ jobs:
             echo "## Downloads"
             echo
             echo "- [sonic-mania-3ds-v${V}.cia](${BASE}/sonic-mania-3ds-v${V}.cia) (install with FBI)"
+            echo "- [sonic-mania-3ds-video-converter-v${V}.zip](${BASE}/sonic-mania-3ds-video-converter-v${V}.zip):"
+            echo "  the PC tool that converts the game's videos so they play smoothly on an Old 3DS. Unzip it and"
+            echo "  double-click \`convert-videos.bat\` (Windows) or run \`convert-videos.sh\` (Linux, macOS); see the README."
             echo
             echo "Based on [SaturnSH2x2's 3DS port](https://github.com/SaturnSH2x2/RSDKv5-Decompilation) of the"
             echo "[RSDKv5 decompilation](https://github.com/RSDKModding/RSDKv5-Decompilation)."
@@ -118,7 +136,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sonic-mania-3ds-build
-          path: sonic-mania-3ds-v*.cia
+          path: |
+            sonic-mania-3ds-v*.cia
+            sonic-mania-3ds-video-converter-v*.zip
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
@@ -133,6 +153,7 @@ jobs:
           files: |
             sonic-mania-3ds-v${{ steps.vars.outputs.version }}.cia
             QR-${{ steps.vars.outputs.tag }}.png
+            sonic-mania-3ds-video-converter-v${{ steps.vars.outputs.version }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
